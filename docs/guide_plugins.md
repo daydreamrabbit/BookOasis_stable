@@ -235,6 +235,7 @@ window.addEventListener('message', (event) => {
 - `smart_recommend_widget` (dict 또는 None): "스마트 추천" 화면(최근 읽은 시리즈 기준 추천, §"스마트 추천 화면 확장" 참고) 전용 위젯 매니페스트 (`title`, `order`, `sessions`) - `detail_sidebar_widget`과 완전히 같은 사고방식이지만 화면이 다르다
 - `detail_view` (dict 또는 None): 도서 상세 페이지 본문 전체를 대체하는 커스텀 화면 매니페스트 (`title`, `sessions`) - §"도서 상세 페이지 본문 전체 대체" 참고
 - `update_manifest` (dict 또는 None): 플러그인 내부 업데이트 선언 계약
+- `admin_only` (bool, 기본 `False`): `True`로 선언하면 세션 role이 `admin`이 아닌 모든 사용자에게 이 플러그인의 모든 화면/데이터(대시보드 위젯, 홈 위젯, 카테고리 탭, 사이드바/스마트추천 위젯, 도서·주석 컨텍스트 메뉴 등 모든 contract)가 완전히 숨겨집니다. 셸 명령 실행처럼 위험한 동작을 하는 플러그인에 사용하세요. 설정 → 권한 관리의 `PERM_CATEGORY_` 매트릭스로 개별 허용할 수 없는 fail-closed 규칙이며, 그 매트릭스보다 우선 적용됩니다 — 새 계정이 생겨도 자동으로 차단 상태를 유지합니다.
 
 ### 카테고리 레벨 플러그인 (Category-Level Plugins) 규격
 플러그인이 대시보드 위젯 수준을 넘어 **좌측 사이드바의 1등 시민(First-class Citizen) 카테고리 메뉴**로 등록되어 풀페이지 커스텀 UI를 제공하려면 `category_tab`을 선언합니다.

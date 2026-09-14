@@ -32,7 +32,7 @@ _CORE_WIDGET_DEFS = {
 
 class HomeDashboardService:
     @staticmethod
-    def get_layout(user_id, db_type='general'):
+    def get_layout(user_id, db_type='general', role=None):
         """사용자의 홈 화면 플러그인 배치 모드 여부와, 켜져 있는 경우의 위젯 순서/숨김 상태 및
         아직 추가하지 않은 위젯 카탈로그를 계산해 반환한다.
 
@@ -53,6 +53,8 @@ class HomeDashboardService:
 
         for p in providers:
             if not p.get('enabled'):
+                continue
+            if p.get('admin_only') and role != 'admin':
                 continue
             widget = p.get('home_widget')
             if not isinstance(widget, dict):

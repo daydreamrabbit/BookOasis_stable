@@ -540,21 +540,28 @@
 }
 
 .overlay-controls-panel {
+    /* 헤더 바로 아래 틈 없이 붙여서, 별개로 뜬 컨텍스트 메뉴가 아니라 헤더 자체가
+       아래로 늘어나 펼쳐진 것처럼 보이게 한다 - 위쪽은 헤더와 맞닿는 면이라 각지게
+       두고, 배경/블러도 헤더와 동일하게 맞춰 하나의 이어진 면으로 읽히게 함.
+       발광 테두리(box-shadow 사방)와 zoomIn 팝업 애니메이션은 "어디선가 뜬 팝업"
+       느낌을 줘서 제거 - 아래쪽으로만 살짝 그림자를 주고, 헤더의 slideDown과 같은
+       방향으로 미끄러지듯 펼쳐지는 애니메이션으로 통일. */
     position: relative;
-    background: rgba(var(--app-panel-rgb), 0.92);
-    backdrop-filter: blur(12px);
-    border: 1px solid color-mix(in srgb, var(--app-accent) 25%, transparent);
-    border-radius: 10px;
+    background: rgba(var(--app-panel-rgb), 0.85);
+    backdrop-filter: blur(10px);
+    border: none;
+    border-radius: 0 0 10px 10px;
     padding: 0.8rem 1.2rem;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
     align-self: flex-end;
-    margin-top: 0.3rem;
+    margin-top: 0;
     max-width: min(95vw, 480px);
     box-sizing: border-box;
-    box-shadow: 0 10px 30px color-mix(in srgb, var(--app-accent) 25%, transparent), 0 0 15px color-mix(in srgb, var(--app-accent) 15%, transparent);
-    animation: zoomIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.25);
+    transform-origin: top;
+    animation: panelExpandDown 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* 📌 뷰어 오버레이 탭 헤더 및 콘텐츠 (탭 버튼은 상단 헤더에 상시 노출) */
@@ -982,6 +989,20 @@
 
     to {
         transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* 헤더가 아래로 늘어나 펼쳐지는 것처럼 보이는 오버레이 컨트롤 패널 전용 애니메이션
+   (overlay-controls-panel) - zoomIn(중앙에서 팝업처럼 튀어나옴) 대신 사용 */
+@keyframes panelExpandDown {
+    from {
+        transform: scaleY(0.85);
+        opacity: 0;
+    }
+
+    to {
+        transform: scaleY(1);
         opacity: 1;
     }
 }

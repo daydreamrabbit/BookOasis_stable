@@ -110,6 +110,7 @@ Recommended class attributes:
 - `smart_recommend_widget` (dict or None): manifest for a widget on the "Smart Recommend" screen (recent-series-based recommendations) — same idea as `detail_sidebar_widget`, different screen. Implement `get_smart_recommend_data(self, db_type, context)` (context only carries `series_name`/`library_id`); the item schema is identical to `get_detail_sidebar_data()`.
 - `detail_view` (dict or None): manifest for replacing the entire book detail page body with a custom screen (`title`, `sessions`) - see "Replacing the Entire Book Detail Page Body" below
 - `update_manifest` (dict or None): plugin-owned update declaration contract
+- `admin_only` (bool, default `False`): when `True`, every contract this plugin declares (dashboard widget, home widget, category tab, sidebar/smart-recommend widgets, book/annotation context menu items — everything) is completely hidden from any session whose role isn't `admin`. Use this for plugins that do something dangerous, like executing shell commands. This is a fail-closed rule that cannot be overridden per-user via the `PERM_CATEGORY_` permission matrix in Settings → Permissions — it takes priority over that matrix, and new accounts stay blocked by default.
 
 ### Category-Level Plugins Specification
 To promote a plugin beyond a dashboard widget into a **First-Class Citizen Category Menu in the Left Sidebar** with full-page custom UI:

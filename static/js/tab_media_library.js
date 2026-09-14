@@ -10,7 +10,7 @@ import './header_scroll_behavior.js';
 
 // category.js CRUD 임포트
 import { loadLibraries, triggerAddLibrary, triggerEditLibrary, triggerDeleteLibrary, closeLibraryModal, submitLibraryForm, triggerScanLibrary, triggerScanLibraryCovers, triggerCancelScanLibrary } from './category.js';
-import { applySidebarShowMore } from './category/index.js';
+import { applySidebarShowMore, expandGroupContainingCategory } from './category/index.js';
 
 // scheduler.js 임포트
 import { loadLibrarySchedules, saveLibrarySchedule, runLibraryScanNow } from './scheduler.js';
@@ -510,7 +510,10 @@ export async function selectCategory(id, skipHistory = false) {
   }
   if (activeItem) {
     activeItem.classList.add('active');
-    // 활성 카테고리가 숨겨진 영역에 있는 경우 자동 전개
+    // 활성 카테고리가 숨겨진 영역에 있는 경우 자동 전개 (그룹 폴더로 접혀있던 경우 포함 -
+    // loadLibraries() 렌더 시점엔 currentLibraryId가 아직 갱신 전이라 그룹이 저장된 접힘
+    // 상태 그대로 렌더되므로, 여기서 실제 선택된 카테고리를 기준으로 다시 펼쳐준다)
+    expandGroupContainingCategory(id);
     const sidebarEl = document.getElementById('sidebar-categories');
     if (sidebarEl) applySidebarShowMore(sidebarEl, id);
   }

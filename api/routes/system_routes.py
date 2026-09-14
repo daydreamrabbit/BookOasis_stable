@@ -60,7 +60,7 @@ def index():
     # (services/home_dashboard_service.py 참고 - 두 경로가 같은 함수를 공유해 순서가 어긋나지 않음).
     try:
         from services.home_dashboard_service import HomeDashboardService
-        home_layout = HomeDashboardService.get_layout(session.get('user_id'), 'general')
+        home_layout = HomeDashboardService.get_layout(session.get('user_id'), 'general', role=session.get('role'))
     except Exception as e:
         print(f"[Index] 홈 대시보드 초기 레이아웃 계산 실패, 클래식 레이아웃으로 폴백: {e}")
         home_layout = {'mode': 'classic', 'widgets': [], 'catalog': []}

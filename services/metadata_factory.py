@@ -619,6 +619,7 @@ class MetadataFactory:
                 p_smart_recommend_widget = getattr(target_class, 'smart_recommend_widget', None)
                 p_detail_view = getattr(target_class, 'detail_view', None)
                 p_update_manifest = getattr(target_class, 'update_manifest', None)
+                p_admin_only = getattr(target_class, 'admin_only', False)
 
                 enabled_key = f"PLUGIN_ENABLED_{p_id}"
                 is_enabled = db_settings.get(enabled_key, '1') == '1'
@@ -645,6 +646,7 @@ class MetadataFactory:
                     'smart_recommend_widget': p_smart_recommend_widget,
                     'detail_view': p_detail_view,
                     'update_manifest': p_update_manifest,
+                    'admin_only': bool(p_admin_only),
                 }
 
                 if include_settings_ui:

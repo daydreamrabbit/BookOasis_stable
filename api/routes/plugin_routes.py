@@ -279,6 +279,8 @@ def get_dashboard_widgets_api():
         for p in providers:
             if not p.get('enabled'):
                 continue
+            if p.get('admin_only') and session.get('role') != 'admin':
+                continue
             widget = p.get('dashboard_widget')
             if not isinstance(widget, dict):
                 continue
@@ -312,6 +314,9 @@ def get_dashboard_widget_data_api(plugin_id):
         from services.metadata_factory import MetadataFactory
         provider = MetadataFactory.get_provider_by_id(plugin_id)
 
+        if getattr(provider, 'admin_only', False) and session.get('role') != 'admin':
+            return jsonify({'success': False, 'error': _t('api.admin_required')}), 403
+
         result = provider.get_dashboard_data(db_type, limit=limit)
 
         status_code = 200 if result.get('success') else 400
@@ -334,7 +339,7 @@ def get_home_layout_api():
     try:
         from services.home_dashboard_service import HomeDashboardService
 
-        layout = HomeDashboardService.get_layout(user_id, db_type)
+        layout = HomeDashboardService.get_layout(user_id, db_type, role=session.get('role'))
         return jsonify({'success': True, **layout}), 200
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -368,6 +373,8 @@ def get_detail_sidebar_widgets_api():
         active_widgets = []
         for p in providers:
             if not p.get('enabled'):
+                continue
+            if p.get('admin_only') and session.get('role') != 'admin':
                 continue
             widget = p.get('detail_sidebar_widget')
             if not isinstance(widget, dict):
@@ -424,6 +431,8 @@ def get_smart_recommend_widgets_api():
         active_widgets = []
         for p in providers:
             if not p.get('enabled'):
+                continue
+            if p.get('admin_only') and session.get('role') != 'admin':
                 continue
             widget = p.get('smart_recommend_widget')
             if not isinstance(widget, dict):
@@ -487,6 +496,8 @@ def get_category_plugins_api():
         for p in providers:
             try:
                 if not p.get('enabled'):
+                    continue
+                if p.get('admin_only') and user_role != 'admin':
                     continue
                 cat_tab = p.get('category_tab')
                 if not isinstance(cat_tab, dict):
@@ -581,6 +592,8 @@ def get_book_context_menu_plugin_items_api():
 
         for provider_meta in providers:
             if not provider_meta.get('enabled'):
+                continue
+            if provider_meta.get('admin_only') and session.get('role') != 'admin':
                 continue
 
             provider_id = provider_meta.get('id')
@@ -712,6 +725,8 @@ def get_annotation_context_menu_plugin_items_api():
 
         for provider_meta in providers:
             if not provider_meta.get('enabled'):
+                continue
+            if provider_meta.get('admin_only') and session.get('role') != 'admin':
                 continue
 
             provider_id = provider_meta.get('id')

@@ -149,6 +149,27 @@ function getGroupCollapsedStorageKey(groupId) {
   return `library_group_collapsed_${state.currentLibraryType}_${groupId}`;
 }
 
+// selectCategory()가 사이드바 렌더링 이후(loadLibraries()가 그룹 접힘 상태를 저장된
+// localStorage 값만으로 결정한 뒤) 실제 활성 카테고리를 복원할 때 호출된다. loadLibraries()
+// 렌더 시점엔 아직 state.currentLibraryId가 최종 값으로 갱신되지 않아 containsActive 판정이
+// 항상 false로 나오므로, 활성 카테고리가 이전에 접혀있던 그룹 안에 있으면 그룹 자체는 계속
+// collapsed로 렌더된다 - 항목엔 .active가 붙지만 CSS(.collapsed .sidebar-library-group-items)로
+// 화면엔 안 보이는 버그. 여기서 그 그룹을 강제로 펼쳐 해소한다.
+export function expandGroupContainingCategory(categoryId) {
+  if (!categoryId) return;
+  const activeItem = document.querySelector(`#sidebar-categories [data-category-id="${categoryId}"]`);
+  if (!activeItem) return;
+  const groupContainer = activeItem.closest('.sidebar-library-group');
+  if (!groupContainer || !groupContainer.classList.contains('collapsed')) return;
+  groupContainer.classList.remove('collapsed');
+  const toggle = groupContainer.querySelector('[data-role="sidebar-group-toggle"]');
+  toggle?.setAttribute('aria-expanded', 'true');
+  const groupId = groupContainer.dataset.libraryGroupId;
+  if (groupId) {
+    localStorage.setItem(getGroupCollapsedStorageKey(groupId), 'false');
+  }
+}
+
 /**
  * Plex 스타일 사이드바 "더 보기" 제어
  * - 총 카테고리 항목 수 >= SIDEBAR_MORE_THRESHOLD 일 때 (THRESHOLD-1)번째 항목 이후를 접어서 보여줌

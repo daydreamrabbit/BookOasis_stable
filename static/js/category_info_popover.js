@@ -18,8 +18,12 @@ function getTriggerButtons() {
 
 function getActiveCategoryElement() {
   const targetId = String(state.currentLibraryId || '');
-  return Array.from(document.querySelectorAll('#sidebar-categories .menu-item'))
-    .find((item) => String(item.dataset.id || item.dataset.categoryId || '') === targetId) || null;
+  // data-category-id만 본다 (data-id 폴백 금지) - 그룹 폴더 토글 버튼도 .menu-item이고
+  // data-id에 그룹 ID를 갖고 있어서, 그 ID가 우연히 현재 카테고리 ID와 같으면(서로 다른
+  // 테이블의 독립적인 auto-increment라 언제든 충돌 가능) 그룹 헤더가 잘못 매칭돼
+  // "그룹명+배지숫자"가 카테고리 이름인 것처럼 표시되는 버그가 있었다.
+  return Array.from(document.querySelectorAll('#sidebar-categories .menu-item[data-category-id]'))
+    .find((item) => String(item.dataset.categoryId || '') === targetId) || null;
 }
 
 function ensurePopoverEl() {

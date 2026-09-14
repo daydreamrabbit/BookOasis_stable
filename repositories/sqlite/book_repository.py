@@ -673,3 +673,101 @@ class BookRepository:
         finally:
             conn.close()
 
+    # ─── MCP 서버(tools/mcp_server.py)용 서재 데이터품질 진단 쿼리 ───
+    # 원격 마운트(rclone/gdrive 등) 경로 판정 기준은 static/js/detail/volume_list_view.js의
+    # remoteKeywords 목록과 동일하게 맞춘다 - "offset 캐시 없음" 경고가 로컬 zip/cbz에만
+    # 의미가 있고 원격 스트리밍 파일에는 애초에 해당하지 않기 때문.
+    _REMOTE_PATH_KEYWORDS = ('gdrive', 'rclone', 'vfs', 'google_drive', 'onedrive', 'sharepoint', 'nas_share', 'webdav')
+
+    @staticmethod
+    def find_missing_cover(db_type, library_id=None, limit=50, offset=0):
+        """표지 이미지가 비어있는 도서 목록 및 총 건수 조회"""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        where = "COALESCE(is_deleted, 0) = 0 AND (cover_image IS NULL OR cover_image = '')"
+        params = []
+        if library_id:
+            where += " AND library_id = ?"
+            params.append(library_id)
+
+        cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
+        total = cursor.fetchone()['cnt']
+
+        cursor.execute(
+            f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+            (*params, limit, offset)
+        )
+        items = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return {'total': total, 'items': items}
+
+    @staticmethod
+    def find_missing_genre_and_tags(db_type, library_id=None, limit=50, offset=0):
+        """장르와 태그가 모두 비어있는 도서 목록 및 총 건수 조회"""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        where = ("COALESCE(is_deleted, 0) = 0"
+                 " AND (genre IS NULL OR genre = '') AND (tags IS NULL OR tags = '')")
+        params = []
+        if library_id:
+            where += " AND library_id = ?"
+            params.append(library_id)
+
+        cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
+        total = cursor.fetchone()['cnt']
+
+        cursor.execute(
+            f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+            (*params, limit, offset)
+        )
+        items = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return {'total': total, 'items': items}
+
+    @staticmethod
+    def find_missing_offsets(db_type, library_id=None, limit=50, offset=0):
+        """zip/cbz 도서 중 페이지 오프셋 캐시가 없는(로컬 파일만 해당) 도서 목록 및 총 건수 조회"""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        where = ("COALESCE(is_deleted, 0) = 0"
+                 " AND file_format IN ('zip', 'cbz') AND COALESCE(has_offsets, 0) = 0")
+        params = []
+        for kw in BookRepository._REMOTE_PATH_KEYWORDS:
+            where += " AND file_path NOT LIKE ?"
+            params.append(f"%{kw}%")
+        if library_id:
+            where += " AND library_id = ?"
+            params.append(library_id)
+
+        cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
+        total = cursor.fetchone()['cnt']
+
+        cursor.execute(
+            f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+            (*params, limit, offset)
+        )
+        items = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return {'total': total, 'items': items}
+
+    @staticmethod
+    def find_duplicate_series_across_libraries(db_type):
+        """동일한 시리즈명이 서로 다른(2개 이상) 카테고리에 흩어져 있는 케이스 조회"""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT series_name, COUNT(DISTINCT library_id) AS library_count,
+                   GROUP_CONCAT(DISTINCT library_id) AS library_ids,
+                   COUNT(*) AS book_count
+            FROM books
+            WHERE COALESCE(is_deleted, 0) = 0 AND series_name IS NOT NULL AND series_name != ''
+            GROUP BY series_name
+            HAVING library_count > 1
+            ORDER BY library_count DESC, series_name
+            """
+        )
+        items = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return {'total': len(items), 'items': items}
+
