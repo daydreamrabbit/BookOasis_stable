@@ -94,6 +94,8 @@ export async function saveManualMetadata(seriesName) {
   const summary = document.getElementById('edit-summary-input').value.trim();
   const genre = document.getElementById('edit-genre-input').value.trim();
   const tags = document.getElementById('edit-tags-input').value.trim();
+  const booksLvEl = document.getElementById('edit-books-lv-input');
+  const booksLv = booksLvEl ? booksLvEl.value.trim() : '';
   const fileInput = document.getElementById('cover-upload-file-input');
   const coverFile = fileInput && fileInput.files ? fileInput.files[0] : null;
 
@@ -108,6 +110,7 @@ export async function saveManualMetadata(seriesName) {
   formData.append('link', link);
   formData.append('genre', genre);
   formData.append('tags', tags);
+  formData.append('books_lv', booksLv);
   if (coverFile) {
     formData.append('cover_image', coverFile);
   }

@@ -1,5 +1,6 @@
 import { buildFallbackCoverUrl, getBookCoverSrc, coverAlignToObjectPosition } from '../cover_fallback.js';
 import { stripLeadingBracketTags } from '../series_display.js';
+import { canDownloadFiles } from '../library_type_toggle.js';
 
 export function renderVolumeGrid(orderedBooks, safeSeriesName, dbType = 'general', options = {}) {
   const books = Array.isArray(orderedBooks) ? orderedBooks : [];
@@ -32,7 +33,7 @@ export function renderVolumeGrid(orderedBooks, safeSeriesName, dbType = 'general
     const coverObjectPosition = coverAlignToObjectPosition(book.cover_align);
     const progressPercent = totalPages > 0 ? Math.min(100, Math.round((pagesRead / totalPages) * 100)) : 0;
     const isNotCompleted = !isCompletedValue;
-    const isDownloadable = ['epub', 'pdf', 'txt', 'text'].includes(format);
+    const isDownloadable = ['epub', 'pdf', 'txt', 'text'].includes(format) && canDownloadFiles();
     const completedLabel = i18n.t('detail.badge_completed') || '완독';
 
     volumesHtml += `

@@ -19,6 +19,10 @@
             <button id="btn-sidebar-toggle" class="btn-sidebar-toggle" aria-expanded="false" style="display: none; background: transparent; border: none; color: var(--app-text-primary); font-size: 1.25rem; cursor: pointer; padding: 0.2rem 0.5rem; outline: none;">
                 <i class="fa-solid fa-bars"></i>
             </button>
+            <!-- 모바일용 카테고리 정보 팝오버 트리거 (데스크톱 버전은 global_header.html 참고) -->
+            <button id="btn-category-info-mobile" class="btn-category-info" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="category-info-popover" title="현재 카테고리 정보" style="display: none;">
+                <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
+            </button>
         </div>
         
         <div class="sidebar-collapsible-content" id="sidebar-collapsible-content" style="display: flex; flex-direction: column; justify-content: space-between; flex: 1; width: 100%;">

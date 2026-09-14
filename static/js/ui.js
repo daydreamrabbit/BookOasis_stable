@@ -8,6 +8,7 @@ import { stripLeadingBracketTags, middleTruncateTitle } from './series_display.j
 import { initGridPruning, resetGridPruning, notifyCardsAppended, notifyCardsPrepended } from './grid_pruning.js';
 import './scan_activity_status.js';
 import './account_menu.js';
+import './category_info_popover.js';
 import './book_card_info_popup.js';
 
 // 커버 이미지가 (플레이스홀더 → 실제 src로) 로드 완료되면 .is-loaded를 붙여 CSS로 fade-in한다.

@@ -6,6 +6,7 @@ import {
   triggerEditLibrary,
   triggerDeleteLibrary,
   triggerScanLibrary,
+  triggerScanLibraryGroup,
   triggerScanLibraryCovers,
   triggerCancelScanLibrary
 } from './crud_controller.js';
@@ -28,6 +29,8 @@ function configureCategoryContextMenu(type) {
     const element = document.getElementById(id);
     if (element) element.style.display = (isSystem || isGroup) ? 'none' : 'block';
   });
+  const scanGroupEl = document.getElementById('ctx-scan-group');
+  if (scanGroupEl) scanGroupEl.style.display = isGroup ? 'block' : 'none';
 }
 
 export function setCurrentTargetLibrary(val) {
@@ -111,6 +114,9 @@ export function bindSidebarContextMenu() {
         if (document.getElementById('ctx-cancel-scan-category')) {
           document.getElementById('ctx-cancel-scan-category').style.display = 'none';
         }
+        if (document.getElementById('ctx-scan-group')) {
+          document.getElementById('ctx-scan-group').style.display = 'none';
+        }
       }
 
       showContextMenu(e.clientX, e.clientY);
@@ -176,6 +182,7 @@ export function bindSidebarContextMenu() {
       const action = actionEl.getAttribute('data-action');
       if (action === 'scan') return triggerScanLibrary ? triggerScanLibrary(false) : window.triggerScanLibrary?.(false);
       if (action === 'force-scan') return triggerScanLibrary ? triggerScanLibrary(true) : window.triggerScanLibrary?.(true);
+      if (action === 'scan-group') return triggerScanLibraryGroup ? triggerScanLibraryGroup() : window.triggerScanLibraryGroup?.();
       if (action === 'scan-covers') return triggerScanLibraryCovers ? triggerScanLibraryCovers() : window.triggerScanLibraryCovers?.();
       if (action === 'cancel-scan') return triggerCancelScanLibrary ? triggerCancelScanLibrary() : window.triggerCancelScanLibrary?.();
       if (action === 'add') return triggerAddLibrary ? triggerAddLibrary() : window.triggerAddLibrary?.();

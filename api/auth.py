@@ -169,6 +169,19 @@ def check_adult_permission(db_type):
 
     return True
 
+def check_download_permission():
+    """파일 다운로드(EPUB/PDF/TXT) 허용 여부 판별 - 어드민은 패스, 일반 유저는 세션의 다운로드 접근 권한으로 판별"""
+    if session.get('role') == 'admin':
+        return True
+    return session.get('has_download_access') == 1
+
+def check_book_rating_permission(db_type, book_id):
+    """개별 도서의 콘텐츠 등급(books_lv/성인 장르·태그) 열람 권한 판별 - 어드민은 패스"""
+    if session.get('role') == 'admin':
+        return True
+    from services.content_rating_service import ContentRatingService
+    return ContentRatingService.can_view_book(db_type, book_id, session.get('content_rating_max', 18))
+
 @auth_bp.before_app_request
 def check_authentication():
     # i18n 언어 스캔 API는 세션 예외
@@ -226,6 +239,8 @@ def check_authentication():
                         session['has_adult_access'] = user['has_adult_access']
                         session['has_audiobook_access'] = user.get('has_audiobook_access', 1)
                         session['has_video_access'] = user.get('has_video_access', 1)
+                        session['has_download_access'] = user.get('has_download_access', 1)
+                        session['content_rating_max'] = user.get('content_rating_max', 18)
         
     # 1. 미로그인 시 차단
     if 'user_id' not in session:
@@ -283,6 +298,8 @@ def login():
             session['has_adult_access'] = user['has_adult_access']
             session['has_audiobook_access'] = user.get('has_audiobook_access', 1)
             session['has_video_access'] = user.get('has_video_access', 1)
+            session['has_download_access'] = user.get('has_download_access', 1)
+            session['content_rating_max'] = user.get('content_rating_max', 18)
 
             return jsonify({
                 'success': True,
@@ -290,7 +307,9 @@ def login():
                 'is_default_password': user['is_default_password'],
                 'has_adult_access': user.get('has_adult_access', 0),
                 'has_audiobook_access': user.get('has_audiobook_access', 1),
-                'has_video_access': user.get('has_video_access', 1)
+                'has_video_access': user.get('has_video_access', 1),
+                'has_download_access': user.get('has_download_access', 1),
+                'content_rating_max': user.get('content_rating_max', 18)
             })
         else:
             return jsonify({'success': False, 'error': _t('api.invalid_credentials')}), 401
@@ -363,6 +382,7 @@ def add_user():
     has_adult_access = 1 if data.get('has_adult_access', True) else 0
     has_audiobook_access = 1 if data.get('has_audiobook_access', True) else 0
     has_video_access = 1 if data.get('has_video_access', True) else 0
+    has_download_access = 1 if data.get('has_download_access', True) else 0
 
     length_error = _validate_username_password_lengths(username, password)
     if length_error:
@@ -379,7 +399,7 @@ def add_user():
     try:
         # 동기화를 위해 두 데이터베이스에 모두 사용자 추가
         for db_type in ['general', 'adult', 'audiobook', 'video']:
-            UserRepository.add_user(db_type, username, password_hash, role, has_adult_access, has_audiobook_access, has_video_access)
+            UserRepository.add_user(db_type, username, password_hash, role, has_adult_access, has_audiobook_access, has_video_access, has_download_access)
     except Exception as e:
         if 'UNIQUE' in str(e):
             return jsonify({'success': False, 'error': _t('api.username_exists')}), 409

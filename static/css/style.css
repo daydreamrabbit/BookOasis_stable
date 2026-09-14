@@ -765,8 +765,8 @@ body {
 
 /* 좌측 사이드바 스타일 */
 .library-sidebar {
-    width: 220px;
-    min-width: 220px;
+    width: 240px;
+    min-width: 240px;
     flex-shrink: 0;
     border-right: 1px solid var(--app-border-light);
     display: flex;
@@ -793,6 +793,25 @@ body {
 
 .library-sidebar.collapsed .sidebar-header-wrapper {
     justify-content: center !important;
+}
+
+/* 라이브러리별 도서 권수 뱃지 (Kavita 스타일 pill) - 접힌 아이콘 레일에서는
+   .library-sidebar.collapsed .menu-item > div 규칙이 감싸는 div째로 숨겨준다 */
+.category-count-badge {
+    flex-shrink: 0;
+    background: rgba(var(--app-panel-rgb), 0.6);
+    color: var(--app-text-muted);
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0.2rem 0.42rem;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.menu-item.active .category-count-badge {
+    background: var(--app-accent);
+    color: var(--app-accent-contrast);
 }
 
 .library-sidebar.collapsed .sidebar-title span {
@@ -912,7 +931,7 @@ body {
     padding: 0.4rem 1rem;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     color: var(--app-text-muted);
     transition: all 0.2s ease;
     display: flex;
@@ -1026,7 +1045,7 @@ body {
 }
 
 .sidebar-library-group-items .menu-item {
-    font-size: 0.9rem;
+    font-size: 0.85rem;
 }
 
 /* 사이드바 접힘(아이콘 레일) 상태에서 가상 그룹 아이콘 클릭 시 뜨는 하위 카테고리 팝업
@@ -1149,6 +1168,76 @@ body {
 
 .btn-sidebar-toggle-desktop:hover {
     color: var(--app-accent) !important;
+}
+
+/* 현재 카테고리 정보 팝오버 트리거("...") - 햄버거 옆에 배치, 톤은 사이드바 토글과 통일 */
+.btn-category-info {
+    background: transparent;
+    border: none;
+    color: var(--app-text-muted);
+    font-size: 1.05rem;
+    cursor: pointer;
+    padding: 0.4rem 0.3rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s ease;
+    outline: none;
+    flex-shrink: 0;
+}
+
+.btn-category-info:hover,
+.btn-category-info[aria-expanded="true"] {
+    color: var(--app-accent);
+}
+
+.category-info-popover {
+    position: fixed;
+    z-index: 10020;
+    width: min(300px, calc(100vw - 2rem));
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+    background: var(--app-bg-card);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.48);
+    padding: 0.7rem 0.85rem;
+    color: var(--app-text-primary);
+    font-size: 0.85rem;
+}
+
+.category-info-popover-title {
+    font-weight: 700;
+    font-size: 0.92rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--app-border-light);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.category-info-popover-row {
+    display: flex;
+    gap: 0.6rem;
+    padding: 0.22rem 0;
+    line-height: 1.4;
+}
+
+.category-info-popover-row dt {
+    flex-shrink: 0;
+    width: 4.6rem;
+    color: var(--app-text-muted);
+}
+
+.category-info-popover-row dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.category-info-popover-empty {
+    color: var(--app-text-muted);
+    padding: 0.3rem 0;
 }
 
 /* 킷오스크 모드: /tv 등 외부 브라우징 화면에서 딥링크로 접속 시 사이드바/헤더를 완전히 숨기고 리더/플러그인 화면만 노출 */

@@ -266,6 +266,7 @@ _SCHEMA_SQL = """
         summary TEXT,
         genre TEXT,
         tags TEXT,
+        books_lv TEXT,
         is_favorite INTEGER DEFAULT 0,
         cover_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -565,6 +566,8 @@ _SCHEMA_SQL = """
         has_adult_access INTEGER DEFAULT 1,
         has_audiobook_access INTEGER DEFAULT 1,
         has_video_access INTEGER DEFAULT 1,
+        has_download_access INTEGER DEFAULT 1,
+        content_rating_max INTEGER DEFAULT 18,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -1144,6 +1147,14 @@ def _ensure_mariadb_columns():
         ('media_general', 'users', 'has_video_access', 'INT DEFAULT 1'),
         ('media_adult', 'users', 'has_video_access', 'INT DEFAULT 1'),
         ('media_audiobook', 'users', 'has_video_access', 'INT DEFAULT 1'),
+        ('media_general', 'users', 'has_download_access', 'INT DEFAULT 1'),
+        ('media_adult', 'users', 'has_download_access', 'INT DEFAULT 1'),
+        ('media_audiobook', 'users', 'has_download_access', 'INT DEFAULT 1'),
+        ('media_general', 'users', 'content_rating_max', 'INT DEFAULT 18'),
+        ('media_adult', 'users', 'content_rating_max', 'INT DEFAULT 18'),
+        ('media_audiobook', 'users', 'content_rating_max', 'INT DEFAULT 18'),
+        ('media_general', 'books', 'books_lv', 'VARCHAR(20)'),
+        ('media_adult', 'books', 'books_lv', 'VARCHAR(20)'),
         ('media_general', 'collection_items', 'video_id', 'BIGINT DEFAULT NULL'),
         ('media_adult', 'collection_items', 'video_id', 'BIGINT DEFAULT NULL'),
         ('media_audiobook', 'collection_items', 'video_id', 'BIGINT DEFAULT NULL'),

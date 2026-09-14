@@ -68,6 +68,8 @@ def _normalize_library_id(library_id):
 
 
 def _build_series_entries(db_type, rows):
+    from services.content_rating_service import ContentRatingService
+
     groups = {}
     order = []
 
@@ -115,6 +117,7 @@ def _build_series_entries(db_type, rows):
         author = next((b['author'] for b in books if b['author']), '')
         genre = next((b['genre'] for b in books if b['genre']), '')
         tags = next((b['tags'] for b in books if b['tags']), '')
+        books_lv = next((b.get('books_lv') for b in books if b.get('books_lv')), '')
         series_alias = next((b['series_alias'] for b in books if b.get('series_alias')), '')
         total_tracks = 0
         is_completed = 0
@@ -144,6 +147,8 @@ def _build_series_entries(db_type, rows):
             'library_id': lib_id,
             'genre': genre,
             'tags': tags,
+            'books_lv': books_lv,
+            'content_rating_level': ContentRatingService.compute_effective_level(books_lv, genre, tags) if db_type in ('general', 'adult') else 0,
             'anchor_dir': comp_dir,
         })
 
@@ -582,6 +587,16 @@ class SeriesService:
         else:
             _TOTALS_CACHE[cache_key] = (now, totals)
         return totals
+
+    @staticmethod
+    def get_library_totals_bulk(db_type):
+        """사이드바에 모든 라이브러리의 시리즈 수/도서 권수 뱃지를 한 번에 채우기 위한
+        일괄 조회 - 라이브러리마다 개별 요청을 보내면 사이드바 로드 시 왕복이 카테고리
+        수만큼 쌓여 느려지므로, 리포지토리에서 GROUP BY로 한 번에 가져온다."""
+        try:
+            return SeriesRepository.fetch_library_totals_bulk(db_type)
+        except Exception:
+            return {}
 
     @staticmethod
     def get_all_books_list(db_type, library_id, user_id=None, role=None):

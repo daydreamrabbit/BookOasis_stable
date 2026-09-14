@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS books (
     summary TEXT,
     genre VARCHAR(255),
     tags TEXT,
+    books_lv VARCHAR(20),
     is_favorite INT DEFAULT 0,
     cover_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -429,6 +430,8 @@ CREATE TABLE IF NOT EXISTS users (
     has_adult_access INT DEFAULT 1,
     has_audiobook_access INT DEFAULT 1,
     has_video_access INT DEFAULT 1,
+    has_download_access INT DEFAULT 1,
+    content_rating_max INT DEFAULT 18,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 

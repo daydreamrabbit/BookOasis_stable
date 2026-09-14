@@ -29,6 +29,15 @@ export function canAccessVideoLibrary() {
   return raw === true || raw === 1 || String(raw) === '1';
 }
 
+export function canDownloadFiles() {
+  const user = state.currentUser || window.currentUser || {};
+  const role = String(user.role || '').toLowerCase();
+  if (role === 'admin') return true;
+
+  const raw = user.has_download_access;
+  return raw === true || raw === 1 || String(raw) === '1';
+}
+
 export function canAccessLibraryType(type) {
   if (type === 'adult') return canAccessAdultLibrary();
   if (type === 'audiobook') return canAccessAudiobookLibrary();

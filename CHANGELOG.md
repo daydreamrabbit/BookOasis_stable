@@ -1,6 +1,16 @@
 # CHANGELOG
+## v2.6.4
+- (feature) 사용자 권한 관리에 "파일 다운로드" 허용/차단 스위치 추가 — 성인/오디오북 접근 권한과 동일한 방식으로 사용자별 토글, EPUB/PDF/TXT 다운로드 API와 상세페이지 다운로드 버튼에 모두 적용 | add a per-user "file download" allow/block switch to user permissions (same pattern as adult/audiobook access) — enforced on the EPUB/PDF/TXT download API and hidden from the detail page download button when blocked
+- (feature) 일반 도서관 콘텐츠 등급 제한 기능 추가 — 도서별 등급(`books_lv`: everyone/ma15+/m/r18/adult only/일반/15세/18세, 미지정 시 전체이용가) 및 관리자 설정 성인 장르/태그 키워드로 등급을 판정해, 사용자 권한 관리 &gt; 콘텐츠 등급에서 설정한 계정별 최대 허용 등급을 초과하면 뷰어/다운로드에서 차단 | add content rating restrictions for the general library — per-book rating (`books_lv`, defaulting to "everyone" when unset) plus admin-configured adult genre/tag keywords determine a book's effective rating, which is enforced against each user's max allowed rating (Permissions &gt; Content Rating) at both viewer and download time
+- (feature) 도서 등급을 상세페이지 관리자 편집 폼에서 지정하고, 상세페이지에 등급 배지로 노출 — `/api/media/detail`·`/api/media/list` 응답에 `books_lv`/`content_rating_level` 포함 | add a books_lv editor field to the admin metadata edit form and a rating badge on the detail page — `books_lv`/`content_rating_level` now included in the `/api/media/detail` and `/api/media/list` API responses
+- (feature) 상세페이지 등급 배지 표시를 "내 설정"의 개인 취향 토글로 전환 (기본값: 끔) — 취향이 갈릴 수 있어 원하는 사용자만 켜도록 함 | make the detail-page rating badge an opt-in personal toggle under My Settings (default: off), since visibly flagging a book's rating won't suit every household
+- (chore) `books_lv` 등급 정규화에 ComicInfo.xml/Kavita YAML 표준 AgeRating 어휘(Teen/Mature 17+/PG 등) 매핑 선반영 — 코어 스캐너 파서(comicinfo_xml.py/kavita_yaml.py/series_json.py) 연동은 커뮤니티 협의 후 별도 진행, 매핑만 미리 확장해 둠 | pre-expand `books_lv` normalization to recognize the ComicInfo.xml/Kavita YAML standard AgeRating vocabulary (Teen/Mature 17+/PG etc.) — wiring the core scanner parsers (comicinfo_xml.py/kavita_yaml.py/series_json.py) themselves is deferred pending community discussion; only the mapping is in place now
+
+
+
 ## v2.6.3
 - (feature) "스마트 추천" 화면에 플러그인 섹션을 추가할 수 있는 신규 `smart_recommend_widget` 계약 추가 — `detail_sidebar_widget`과 동일한 방식으로 코어 기본 장르/태그/작가 섹션 앞에 플러그인 섹션이 노출됨 | add a new `smart_recommend_widget` plugin contract for the Smart Recommend screen — works just like `detail_sidebar_widget`, rendering plugin sections ahead of the core genre/tags/author sections
+
 
 ## v2.6.2
 - (feature) 도서 보관함 상단 헤더(검색/세션탭/설정)를 스크롤 중에도 계속 보이도록 상단 고정 — 아래로 스크롤하면 살짝 숨겨 좁은 화면 공간을 확보하고, 위로 스크롤하거나 맨 위 근처로 오면 즉시 다시 노출 | make the library top header (search/session tabs/settings) stick to the top while scrolling — it hides on scroll-down to reclaim screen space and reappears instantly on scroll-up or near the top

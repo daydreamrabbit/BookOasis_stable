@@ -389,6 +389,28 @@ export async function triggerScanLibrary(force = false) {
   }
 }
 
+export async function triggerScanLibraryGroup() {
+  if (!currentTargetLibrary || currentTargetLibrary.type !== 'group') return;
+  const groupId = currentTargetLibrary.id;
+  const name = currentTargetLibrary.name;
+
+  try {
+    const data = await api.triggerAllLibrariesScan(state.currentLibraryType, false, groupId);
+    if (data.success) {
+      if (typeof window.showToast === 'function') {
+        window.showToast(i18n.t('category.scan_group_started', {name: name}), 'success');
+      } else {
+        alert(`${i18n.t('category.scan_group_started', {name: name})} : ${data.message}`);
+      }
+    } else {
+      alert(i18n.t('category.scan_fail', {error: data.error}));
+    }
+  } catch (e) {
+    console.error('그룹 일괄 스캔 요청 중 오류 발생:', e);
+    alert(i18n.t('category.server_error'));
+  }
+}
+
 export async function triggerScanLibraryCovers() {
   if (!currentTargetLibrary || currentTargetLibrary.type === 'system') return;
   const id = currentTargetLibrary.id;

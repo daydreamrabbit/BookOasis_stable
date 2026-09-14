@@ -10,13 +10,15 @@ function getSidebarElements() {
   const content = document.getElementById('sidebar-collapsible-content');
   const btn = document.getElementById('btn-sidebar-toggle');
   const desktopBtn = document.getElementById('btn-sidebar-toggle-desktop');
+  const infoBtnMobile = document.getElementById('btn-category-info-mobile');
+  const infoBtnDesktop = document.getElementById('btn-category-info');
   const brandHome = document.querySelector('[data-role="mobile-brand-home"]');
   const btnIcon = btn ? btn.querySelector('i') : null;
-  return { content, btn, desktopBtn, brandHome, btnIcon };
+  return { content, btn, desktopBtn, infoBtnMobile, infoBtnDesktop, brandHome, btnIcon };
 }
 
 export function syncSidebarResponsiveControls() {
-  const { btn, desktopBtn, brandHome } = getSidebarElements();
+  const { btn, desktopBtn, infoBtnMobile, infoBtnDesktop, brandHome } = getSidebarElements();
   const mobile = isMobileLayout();
 
   if (btn) {
@@ -24,6 +26,12 @@ export function syncSidebarResponsiveControls() {
   }
   if (desktopBtn) {
     desktopBtn.style.setProperty('display', mobile ? 'none' : 'flex', 'important');
+  }
+  if (infoBtnMobile) {
+    infoBtnMobile.style.setProperty('display', mobile ? 'inline-flex' : 'none', 'important');
+  }
+  if (infoBtnDesktop) {
+    infoBtnDesktop.style.setProperty('display', mobile ? 'none' : 'inline-flex', 'important');
   }
   if (brandHome) {
     brandHome.setAttribute('role', 'button');

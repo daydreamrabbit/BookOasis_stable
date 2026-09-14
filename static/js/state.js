@@ -42,6 +42,7 @@ export const state = {
   audioRightDockDimEnabled: false,
   detailVolumeGridView: false,      // 도서 상세 목록 그리드 보기 (기본값: 리스트)
   collapseDetailGenreTags: false,   // 태그/장르 축소 (기본값: 해제)
+  showContentRatingBadge: false,    // 상세페이지 콘텐츠 등급 배지 표시 (기본값: 해제)
   smartRecommendEnabled: true,      // 스마트 추천 기능 사용 여부 (기본값: 사용)
   bookRecommendEnabled: true,       // 도서 상세 사이드바 위젯(플러그인의 detail_sidebar_widget) 사용 여부 (기본값: 사용)
   homeDashboardPluginMode: false,   // 홈 화면을 코어+플러그인 위젯 혼합 배치 모드로 전환 (기본값: 클래식 고정 레이아웃)

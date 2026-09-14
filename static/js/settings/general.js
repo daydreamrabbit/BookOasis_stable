@@ -168,6 +168,9 @@ export function applySettingsToUI(settings) {
   if (settings.COLLAPSE_DETAIL_GENRE_TAGS !== undefined) {
     state.collapseDetailGenreTags = (settings.COLLAPSE_DETAIL_GENRE_TAGS === '1');
   }
+  if (settings.SHOW_CONTENT_RATING_BADGE !== undefined) {
+    state.showContentRatingBadge = (settings.SHOW_CONTENT_RATING_BADGE === '1');
+  }
   if (settings.SMART_RECOMMEND_ENABLED !== undefined) {
     state.smartRecommendEnabled = (settings.SMART_RECOMMEND_ENABLED !== '0');
   }
@@ -293,6 +296,9 @@ export async function loadGeneralSettings() {
       const scanIgnorePatternsEl = document.getElementById('setting-scan-ignore-patterns');
       if (scanIgnorePatternsEl) scanIgnorePatternsEl.value = s.SCAN_IGNORE_PATTERNS !== undefined ? s.SCAN_IGNORE_PATTERNS : "@eaDir/\n#recycle/\n*.tmp\n*.sample.cbz\n.DS_Store\nThumbs.db\ndesktop.ini";
 
+      const adultGenreTagKeywordsEl = document.getElementById('setting-adult-genre-tag-keywords');
+      if (adultGenreTagKeywordsEl) adultGenreTagKeywordsEl.value = s.ADULT_GENRE_TAG_KEYWORDS || '';
+
       const coverStorageRootEl = document.getElementById('setting-cover-storage-root');
       if (coverStorageRootEl) coverStorageRootEl.value = s.COVER_STORAGE_ROOT || '';
 
@@ -393,6 +399,7 @@ export async function submitGeneralSettings(event) {
   const lazyVideoMaxEpisodes = document.getElementById('setting-lazy-scan-video-max-episodes')?.value || '300';
   const lazyVideoProbeWorkers = document.getElementById('setting-lazy-scan-video-probe-workers')?.value || '4';
   const scanIgnorePatterns = document.getElementById('setting-scan-ignore-patterns')?.value || "@eaDir/\n#recycle/\n*.tmp\n*.sample.cbz\n.DS_Store\nThumbs.db\ndesktop.ini";
+  const adultGenreTagKeywords = document.getElementById('setting-adult-genre-tag-keywords')?.value?.trim() || '';
   const recentBooks = document.getElementById('setting-recent-books-limit')?.value || '30';
   const sysMem = document.getElementById('setting-system-mem-limit')?.value || '1536';
   const procRss = document.getElementById('setting-process-rss-limit')?.value || '2048';
@@ -431,6 +438,7 @@ export async function submitGeneralSettings(event) {
       api.updateSystemSetting('LAZY_SCAN_VIDEO_MAX_EPISODES_PER_RUN', lazyVideoMaxEpisodes),
       api.updateSystemSetting('LAZY_SCAN_VIDEO_PROBE_WORKERS', lazyVideoProbeWorkers),
       api.updateSystemSetting('SCAN_IGNORE_PATTERNS', scanIgnorePatterns),
+      api.updateSystemSetting('ADULT_GENRE_TAG_KEYWORDS', adultGenreTagKeywords),
       api.updateSystemSetting('COVER_STORAGE_ROOT', coverStorageRoot),
       api.updateSystemSetting('TIMEZONE', timezone),
       api.updateSystemSetting('RECENT_BOOKS_LIMIT', recentBooks),
@@ -516,6 +524,9 @@ export async function loadMySettings() {
     const collapseDetailGenreTagsEl = document.getElementById('my-setting-collapse-detail-genre-tags');
     if (collapseDetailGenreTagsEl) collapseDetailGenreTagsEl.checked = (s.COLLAPSE_DETAIL_GENRE_TAGS === '1');
 
+    const showContentRatingBadgeEl = document.getElementById('my-setting-show-content-rating-badge');
+    if (showContentRatingBadgeEl) showContentRatingBadgeEl.checked = (s.SHOW_CONTENT_RATING_BADGE === '1');
+
     const showCategoryAllEl = document.getElementById('my-setting-show-sidebar-category-all');
     if (showCategoryAllEl) showCategoryAllEl.checked = (s.SHOW_SIDEBAR_CATEGORY_ALL !== '0');
 
@@ -554,6 +565,7 @@ export async function submitMySettings(event) {
   const audioRightDockDimEnabled = document.getElementById('my-setting-audio-right-dock-dim')?.checked ? '1' : '0';
   const detailVolumeGridView = document.getElementById('my-setting-detail-volume-grid-view')?.checked ? '1' : '0';
   const collapseDetailGenreTags = document.getElementById('my-setting-collapse-detail-genre-tags')?.checked ? '1' : '0';
+  const showContentRatingBadge = document.getElementById('my-setting-show-content-rating-badge')?.checked ? '1' : '0';
   const showSidebarCategoryAll = document.getElementById('my-setting-show-sidebar-category-all')?.checked ? '1' : '0';
   const hideCompleted = document.getElementById('my-setting-hide-completed-in-history')?.checked ? '1' : '0';
   const tagFilterScopeAll = document.getElementById('my-setting-tag-filter-scope-all')?.checked ? '1' : '0';
@@ -578,6 +590,7 @@ export async function submitMySettings(event) {
       api.updateUserSetting('AUDIO_RIGHT_DOCK_DIM_ENABLED', audioRightDockDimEnabled),
       api.updateUserSetting('DETAIL_VOLUME_GRID_VIEW', detailVolumeGridView),
       api.updateUserSetting('COLLAPSE_DETAIL_GENRE_TAGS', collapseDetailGenreTags),
+      api.updateUserSetting('SHOW_CONTENT_RATING_BADGE', showContentRatingBadge),
       api.updateUserSetting('SHOW_SIDEBAR_CATEGORY_ALL', showSidebarCategoryAll),
       api.updateUserSetting('HIDE_COMPLETED_IN_HISTORY', hideCompleted),
       api.updateUserSetting('TAG_FILTER_SEARCH_SCOPE_ALL', tagFilterScopeAll),
@@ -602,6 +615,7 @@ export async function submitMySettings(event) {
         AUDIO_RIGHT_DOCK_DIM_ENABLED: audioRightDockDimEnabled,
         DETAIL_VOLUME_GRID_VIEW: detailVolumeGridView,
         COLLAPSE_DETAIL_GENRE_TAGS: collapseDetailGenreTags,
+        SHOW_CONTENT_RATING_BADGE: showContentRatingBadge,
         SHOW_SIDEBAR_CATEGORY_ALL: showSidebarCategoryAll,
         HIDE_COMPLETED_IN_HISTORY: hideCompleted,
         TAG_FILTER_SEARCH_SCOPE_ALL: tagFilterScopeAll,

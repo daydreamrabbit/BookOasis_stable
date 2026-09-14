@@ -189,7 +189,7 @@ class SeriesRepository:
                        b.cover_image, b.cover_updated_at, COALESCE(b.cover_align, 'center') AS cover_align,
                        0 AS is_favorite,
                        b.created_at,
-                       b.genre, b.tags, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                       b.genre, b.tags, b.books_lv, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
                        rep.series_book_count AS series_book_count
                 FROM books b
                 INNER JOIN (
@@ -247,6 +247,58 @@ class SeriesRepository:
                     time.sleep(wait_sec)
                     continue
                 raise e
+
+    @staticmethod
+    def fetch_library_totals_bulk(db_type):
+        """사이드바에 표시할 라이브러리별 시리즈 수/도서 권수를 한 번의 쿼리로 일괄 조회한다
+        (검색/필터/권한 조건 없이 항목별 카운트만 필요 - 접근 가능 라이브러리 필터링은
+        호출측(CategoryService.get_libraries)이 이미 처리한 목록에 병합하는 방식으로 적용됨)."""
+        if db_type == 'audiobook':
+            sql = """
+                SELECT library_id,
+                       COUNT(*) AS series_count,
+                       COALESCE(SUM(total_tracks), 0) AS book_count
+                FROM audiobooks
+                WHERE COALESCE(is_deleted, 0) = 0
+                GROUP BY library_id
+            """
+        elif db_type == 'video':
+            sql = """
+                SELECT library_id,
+                       COUNT(*) AS series_count,
+                       COALESCE(SUM(total_episodes), 0) AS book_count
+                FROM videos
+                WHERE COALESCE(is_deleted, 0) = 0
+                GROUP BY library_id
+            """
+        else:
+            sql = """
+                SELECT library_id, COUNT(*) AS series_count, COALESCE(SUM(cnt), 0) AS book_count
+                FROM (
+                    SELECT b.library_id AS library_id,
+                           COALESCE(NULLIF(b.series_name, ''), b.title) AS series_key,
+                           COUNT(*) AS cnt
+                    FROM books b
+                    WHERE (b.is_deleted = 0 OR b.is_deleted IS NULL)
+                    GROUP BY b.library_id, series_key
+                ) t
+                GROUP BY library_id
+            """
+
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            return {
+                int(row['library_id']): {
+                    'series_count': int(row['series_count'] or 0),
+                    'book_count': int(row['book_count'] or 0),
+                }
+                for row in rows if row['library_id'] is not None
+            }
+        finally:
+            conn.close()
 
     @staticmethod
     def fetch_grouping_totals(db_type, library_id, search_query='', favorite_only=False, genre_filters=None, tag_filters=None, user_id=None, role=None):

@@ -8,6 +8,11 @@
         <i class="fa-solid fa-bars"></i>
     </button>
 
+    <!-- 현재 선택된 카테고리 정보(ID/경로/시리즈·도서 수) 팝오버 트리거: 마우스 오버 또는 클릭 -->
+    <button id="btn-category-info" class="btn-category-info" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="category-info-popover" title="현재 카테고리 정보">
+        <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
+    </button>
+
     <!-- 페이지 타이틀/건수: 사이드바 active 항목과 중복돼 화면에는 숨기지만, 다른 뷰(그리드/컬렉션/스마트추천/검색결과)에서
          JS가 검색결과 건수·컬렉션명 등을 이 위치에 계속 채워 넣으므로 DOM 자체는 유지 -->
     <h2 class="library-title" style="display: none;">

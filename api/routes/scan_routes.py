@@ -177,20 +177,30 @@ def trigger_library_cover_scan(library_id):
 @scan_bp.route('/api/media/libraries/scan-all', methods=['POST'])
 @admin_required
 def trigger_all_libraries_scan():
-    """모든 라이브러리 카테고리를 순차적으로 대기열(큐)에 적재하여 전체 스캔 실행"""
+    """모든 라이브러리 카테고리를 순차적으로 대기열(큐)에 적재하여 전체 스캔 실행
+    (group_id가 주어지면 해당 가상 그룹에 속한 카테고리만 대상으로 좁힌다 - 사이드바
+    그룹 컨텍스트 메뉴의 "하위 카테고리 일괄 스캔")"""
     db_type = request.form.get('type', 'general')
     force_val = request.form.get('force', 'false').lower()
     force = force_val in ('true', '1')
+    group_id_raw = request.form.get('group_id', '').strip()
     try:
         from repositories.category_repository import CategoryRepository
         rows = CategoryRepository.get_all_libraries(db_type)
-        
+
+        if group_id_raw:
+            try:
+                group_id = int(group_id_raw)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'error': _t('api.err_library_not_found')}), 400
+            rows = [r for r in rows if r.get('group_id') == group_id]
+
         if not rows:
             return jsonify({'success': False, 'error': _t('api.err_no_libraries')}), 404
-        
+
         db_path = get_db_path_for_scan(db_type)
         from services.scanner_queue import scanner_queue
-        
+
         enqueued_count = 0
         skipped_count = 0
         for r in rows:

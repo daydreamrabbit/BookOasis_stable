@@ -15,6 +15,8 @@
             <button type="button" class="permission-session-tab" data-permission-session="adult" style="padding:0.55rem 0.9rem; border-radius:999px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03); color: var(--app-text-muted); font-weight:700; cursor:pointer;">성인 서재</button>
             <button type="button" class="permission-session-tab" data-permission-session="audiobook" style="padding:0.55rem 0.9rem; border-radius:999px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03); color: var(--app-text-muted); font-weight:700; cursor:pointer;">오디오북 카테고리</button>
             <button type="button" class="permission-session-tab" data-permission-session="video" style="padding:0.55rem 0.9rem; border-radius:999px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03); color: var(--app-text-muted); font-weight:700; cursor:pointer;">영상 강좌 카테고리</button>
+            <button type="button" class="permission-session-tab" data-permission-session="download" style="padding:0.55rem 0.9rem; border-radius:999px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03); color: var(--app-text-muted); font-weight:700; cursor:pointer;">파일 다운로드</button>
+            <button type="button" class="permission-session-tab" data-permission-session="content_rating" style="padding:0.55rem 0.9rem; border-radius:999px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03); color: var(--app-text-muted); font-weight:700; cursor:pointer;">콘텐츠 등급</button>
         </div>
 
         <div id="permission-session-general" class="permission-session-panel" style="display:block;">
@@ -65,6 +67,37 @@
                         <tr style="background: rgba(var(--app-panel-rgb), 0.4); border-bottom: 1px solid rgba(var(--app-panel-border-rgb), 0.08); color: var(--app-text-muted);" id="permissions-video-table-header"></tr>
                     </thead>
                     <tbody id="permissions-video-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="permission-session-download" class="permission-session-panel" style="display:none;">
+            <div class="settings-table-wrapper" style="background: rgba(var(--app-panel-rgb), 0.25); border: 1px solid rgba(var(--app-panel-border-rgb), 0.05); border-radius: 8px; overflow-x: auto; backdrop-filter: blur(10px);">
+                <table class="settings-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem; min-width: 600px;">
+                    <thead>
+                        <tr style="background: rgba(var(--app-panel-rgb), 0.4); border-bottom: 1px solid rgba(var(--app-panel-border-rgb), 0.08); color: var(--app-text-muted);">
+                            <th style="padding:1rem; width:40%;">사용자</th>
+                            <th style="padding:1rem; width:20%; text-align:center;">역할</th>
+                            <th style="padding:1rem; width:40%; text-align:center;">파일 다운로드 허용</th>
+                        </tr>
+                    </thead>
+                    <tbody id="permissions-download-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="permission-session-content_rating" class="permission-session-panel" style="display:none;">
+            <p style="font-size: 0.8rem; color: var(--app-text-muted); margin: 0 0 0.8rem 0;">일반 도서관 내 도서에 등급(books_lv)이 지정되어 있거나, 장르/태그가 "일반 설정 &gt; 성인 장르/태그 키워드"와 일치하면 아래 사용자별 최대 허용 등급에 따라 열람이 제한됩니다.</p>
+            <div class="settings-table-wrapper" style="background: rgba(var(--app-panel-rgb), 0.25); border: 1px solid rgba(var(--app-panel-border-rgb), 0.05); border-radius: 8px; overflow-x: auto; backdrop-filter: blur(10px);">
+                <table class="settings-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem; min-width: 600px;">
+                    <thead>
+                        <tr style="background: rgba(var(--app-panel-rgb), 0.4); border-bottom: 1px solid rgba(var(--app-panel-border-rgb), 0.08); color: var(--app-text-muted);">
+                            <th style="padding:1rem; width:40%;">사용자</th>
+                            <th style="padding:1rem; width:20%; text-align:center;">역할</th>
+                            <th style="padding:1rem; width:40%; text-align:center;">최대 허용 등급</th>
+                        </tr>
+                    </thead>
+                    <tbody id="permissions-content-rating-table-body"></tbody>
                 </table>
             </div>
         </div>

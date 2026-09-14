@@ -162,6 +162,15 @@
 
                                     <!-- HDD 적극 웜업 설정 -->
                                     {% call checkbox_row('setting-hdd-aggressive-warmup', 'HDD_AGGRESSIVE_WARMUP', i18n_key='settings.hdd_aggressive_warmup_label', extra_class='settings-checkbox-row--divider', input_class='settings-checkbox-input--blue') %}HDD 환경시 체크 (적극 웜업){% endcall %}
+
+                                    <!-- 성인 장르/태그 키워드 (콘텐츠 등급 판정용) -->
+                                    <div class="library-form-group" style="margin-top: 1rem;">
+                                        <label for="setting-adult-genre-tag-keywords" style="font-weight: 700; color: var(--app-text-primary); font-size: 0.9rem; margin-bottom: 0.4rem; display: block;">
+                                            <i class="fa-solid fa-user-shield" style="color: #ef4444; margin-right: 0.3rem;"></i> <span data-i18n="settings.adult_genre_tag_keywords_label">성인 장르/태그 키워드 (콘텐츠 등급)</span>
+                                        </label>
+                                        <textarea id="setting-adult-genre-tag-keywords" name="ADULT_GENRE_TAG_KEYWORDS" rows="2" style="width: 100%; max-width: 480px; background: rgba(var(--app-panel-rgb), 0.6); border: 1px solid rgba(var(--app-panel-border-rgb), 0.1); color: var(--app-text-primary); padding: 0.6rem 0.8rem; border-radius: 6px; outline: none; font-family: monospace; font-size: 0.85rem; line-height: 1.4; resize: vertical;" placeholder="성인, 19금, BL, R18"></textarea>
+                                        <p style="font-size: 0.78rem; color: var(--app-text-muted); margin: 0.4rem 0 0 0; line-height: 1.5;" data-i18n="settings.adult_genre_tag_keywords_desc">일반 도서 DB에서 <strong>장르 또는 태그에 포함되면 성인 등급(18세)으로 취급</strong>할 키워드를 <strong>콤마(,)로 구분</strong>해 입력하세요. 권한 관리 &gt; 콘텐츠 등급에서 사용자별 최대 열람 등급을 설정할 수 있습니다.</p>
+                                    </div>
                                 </div>
                             </div>
 

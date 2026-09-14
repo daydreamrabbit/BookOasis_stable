@@ -94,6 +94,20 @@ def get_permissions():
                     'title': '영상 강좌',
                     'subtitle': '영상 강좌 카테고리 권한',
                     'kind': 'matrix'
+                },
+                {
+                    'id': 'download',
+                    'title': '파일 다운로드',
+                    'subtitle': 'EPUB/PDF/TXT 파일 다운로드 허용 권한',
+                    'kind': 'switch',
+                    'field': 'has_download_access'
+                },
+                {
+                    'id': 'content_rating',
+                    'title': '콘텐츠 등급',
+                    'subtitle': '일반 도서관 내 등급(books_lv)/성인 장르·태그 콘텐츠 열람 허용 범위',
+                    'kind': 'rating_select',
+                    'field': 'content_rating_max'
                 }
             ],
             'matrices': {
@@ -154,6 +168,54 @@ def update_adult_permission():
         for db_type in ['general', 'adult', 'audiobook']:
             UserRepository.update_adult_access(db_type, user_id, has_adult_access)
         return jsonify({'success': True, 'message': '성인 도서 접근 권한이 변경되었습니다.'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@permission_bp.route('/api/admin/permissions/update-download', methods=['POST'])
+@admin_required
+def update_download_permission():
+    """사용자별 파일 다운로드 접근 권한 토글 업데이트"""
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    has_download_access = 1 if data.get('has_download_access') else 0
+
+    if not user_id:
+        return jsonify({'success': False, 'error': 'user_id는 필수 항목입니다.'}), 400
+
+    try:
+        # 3개 DB 모두 사용자 다운로드 권한 동기화 업데이트
+        for db_type in ['general', 'adult', 'audiobook']:
+            UserRepository.update_download_access(db_type, user_id, has_download_access)
+        return jsonify({'success': True, 'message': '파일 다운로드 접근 권한이 변경되었습니다.'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@permission_bp.route('/api/admin/permissions/update-content-rating', methods=['POST'])
+@admin_required
+def update_content_rating_permission():
+    """사용자별 콘텐츠 등급(최대 허용 books_lv 등급) 업데이트"""
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    content_rating_max = data.get('content_rating_max')
+
+    if not user_id:
+        return jsonify({'success': False, 'error': 'user_id는 필수 항목입니다.'}), 400
+
+    try:
+        content_rating_max = int(content_rating_max)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'content_rating_max 값이 올바르지 않습니다.'}), 400
+
+    if content_rating_max not in (0, 15, 18):
+        return jsonify({'success': False, 'error': 'content_rating_max는 0, 15, 18 중 하나여야 합니다.'}), 400
+
+    try:
+        # 3개 DB 모두 사용자 콘텐츠 등급 동기화 업데이트
+        for db_type in ['general', 'adult', 'audiobook']:
+            UserRepository.update_content_rating_max(db_type, user_id, content_rating_max)
+        return jsonify({'success': True, 'message': '콘텐츠 등급 권한이 변경되었습니다.'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

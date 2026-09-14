@@ -60,6 +60,23 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
     ? `<a href="${meta.link}" target="_blank" class="ridi-link-btn">${i18n.t('detail.ridi_link')}</a>`
     : '';
 
+  const ratingLevel = Number(meta.content_rating_level);
+  let ratingBadgeHtml = '';
+  if (state.showContentRatingBadge === true && Number.isFinite(ratingLevel)) {
+    const ratingColorMap = {
+      0: { bg: 'rgba(148, 163, 184, 0.15)', fg: '#94a3b8', border: 'rgba(148, 163, 184, 0.3)' },
+      15: { bg: 'rgba(234, 179, 8, 0.15)', fg: '#eab308', border: 'rgba(234, 179, 8, 0.3)' },
+      18: { bg: 'rgba(239, 68, 68, 0.15)', fg: '#ef4444', border: 'rgba(239, 68, 68, 0.3)' },
+    };
+    const colors = ratingColorMap[ratingLevel] || ratingColorMap[18];
+    const ratingLabel = meta.content_rating_label || (ratingLevel === 0 ? '전체이용가' : ratingLevel === 15 ? '15세이상' : '18세이상(성인)');
+    ratingBadgeHtml = `
+      <span class="badge" data-role="detail-rating-badge" title="열람 등급" style="background: ${colors.bg}; color: ${colors.fg}; border: 1px solid ${colors.border}; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; font-weight: 700;">
+        <i class="fa-solid fa-shield-halved" style="font-size: 0.7rem; margin-right: 0.3rem;"></i>${ratingLabel}
+      </span>
+    `;
+  }
+
   const genresArr = (meta.genre || '')
     .split(',')
     .map((genre) => normalizeMetadataToken(genre))
@@ -399,6 +416,7 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
           <span class="meta-item"><i class="fa-solid fa-book-open"></i> ${volumeCountLabel}</span>
         </div>
         <div class="detail-meta-tags" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; margin-bottom: 0.8rem;">
+          ${ratingBadgeHtml ? `<div class="detail-rating-row">${ratingBadgeHtml}</div>` : ''}
           ${genreRowHtml}
           ${tagRowHtml}
         </div>
@@ -459,6 +477,20 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_tags')}</label>
             <input type="text" id="edit-tags-input" class="edit-meta-input" value="${meta.tags || ''}">
+          </div>
+          <div class="edit-meta-row-item">
+            <label>${i18n.t('detail.label_books_lv')}</label>
+            <select id="edit-books-lv-input" class="edit-meta-input">
+              <option value="" ${!meta.books_lv ? 'selected' : ''}>${i18n.t('detail.books_lv_unset')}</option>
+              <option value="everyone" ${meta.books_lv === 'everyone' ? 'selected' : ''}>everyone</option>
+              <option value="일반" ${meta.books_lv === '일반' ? 'selected' : ''}>일반</option>
+              <option value="ma15+" ${meta.books_lv === 'ma15+' ? 'selected' : ''}>ma15+</option>
+              <option value="m" ${meta.books_lv === 'm' ? 'selected' : ''}>m</option>
+              <option value="15세" ${meta.books_lv === '15세' ? 'selected' : ''}>15세</option>
+              <option value="r18" ${meta.books_lv === 'r18' ? 'selected' : ''}>r18</option>
+              <option value="adult only" ${meta.books_lv === 'adult only' ? 'selected' : ''}>adult only</option>
+              <option value="18세" ${meta.books_lv === '18세' ? 'selected' : ''}>18세</option>
+            </select>
           </div>
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_summary')}</label>

@@ -106,6 +106,16 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
+const _compactCountFormatter = (typeof Intl !== 'undefined' && Intl.NumberFormat)
+  ? new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 0 })
+  : null;
+
+function formatCompactCount(n) {
+  const value = Number(n) || 0;
+  if (_compactCountFormatter) return _compactCountFormatter.format(value);
+  return value.toLocaleString();
+}
+
 function renderLibraryItem(lib, isPinned) {
   const isActive = String(state.currentLibraryId) === String(lib.id) ? 'active' : '';
   const draggableAttr = !isPinned ? 'draggable="true"' : '';
@@ -120,7 +130,11 @@ function renderLibraryItem(lib, isPinned) {
   const groupId = lib.group_id == null ? '' : String(lib.group_id);
   const safeGdriveCopyRemote = escapeHtml(lib.gdrive_copy_remote || '');
   const safeGdriveViewMirrorPath = escapeHtml(lib.gdrive_view_local_mirror_path || '');
-  return `<li class="menu-item ${isActive}" data-type="custom" data-role="sidebar-category-dynamic" data-id="${lib.id}" data-category-id="${lib.id}" data-name="${safeName}" data-path="${safePath}" data-remote="${lib.is_remote || 0}" data-rclone-url="${safeRclone}" data-icon="${safeIcon}" data-color="${safeColor}" data-hide-cover="${hideCover}" data-hide-title="${hideTitle}" data-cover-aspect-ratio="${coverAspectRatio}" data-group-id="${groupId}" data-gdrive-copy-remote="${safeGdriveCopyRemote}" data-gdrive-view-local-mirror-path="${safeGdriveViewMirrorPath}" ${draggableAttr} style="display: flex; align-items: center; justify-content: space-between;"><span style="display: inline-flex; align-items: center; gap: 0.6rem;"><i class="fa-solid ${safeIcon}" style="color: ${safeColor};"></i> ${safeName}</span><i class="fa-solid fa-circle-notch fa-spin category-scan-spinner" style="display:none; color:var(--app-accent-hover); font-size:0.75rem; margin-left:auto;" title="스캔 진행 중"></i></li>`;
+  const bookCount = Number(lib.book_count || 0);
+  const countBadgeHtml = bookCount > 0
+    ? `<span class="category-count-badge" title="${bookCount.toLocaleString()}">${formatCompactCount(bookCount)}</span>`
+    : '';
+  return `<li class="menu-item ${isActive}" data-type="custom" data-role="sidebar-category-dynamic" data-id="${lib.id}" data-category-id="${lib.id}" data-name="${safeName}" data-path="${safePath}" data-remote="${lib.is_remote || 0}" data-rclone-url="${safeRclone}" data-icon="${safeIcon}" data-color="${safeColor}" data-hide-cover="${hideCover}" data-hide-title="${hideTitle}" data-cover-aspect-ratio="${coverAspectRatio}" data-group-id="${groupId}" data-gdrive-copy-remote="${safeGdriveCopyRemote}" data-gdrive-view-local-mirror-path="${safeGdriveViewMirrorPath}" ${draggableAttr} style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;"><span style="display: inline-flex; align-items: center; gap: 0.6rem; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"><i class="fa-solid ${safeIcon}" style="color: ${safeColor}; flex-shrink: 0;"></i><span class="sidebar-bare-label" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</span></span><div style="display: inline-flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">${countBadgeHtml}<i class="fa-solid fa-circle-notch fa-spin category-scan-spinner" style="display:none; color:var(--app-accent-hover); font-size:0.75rem;" title="스캔 진행 중"></i></div></li>`;
 }
 
 function renderPluginItem(cp) {

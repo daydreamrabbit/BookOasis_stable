@@ -10,7 +10,7 @@ from pathlib import Path
 from flask import Blueprint, request, Response, jsonify, send_file, session
 from services.reading_progress_service import ReadingProgressService
 from services.stream_service import StreamService
-from api.auth import login_required, check_adult_permission, admin_required
+from api.auth import login_required, check_adult_permission, check_book_rating_permission, admin_required
 from utils.safe_file_response import stream_file_safely
 from utils.i18n import _t
 import database
@@ -162,6 +162,9 @@ def stream_comic_page():
     except (ValueError, TypeError):
         return jsonify({'error': _t('api.err_book_id_required')}), 400
 
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
+
     file_path, file_format = StreamService.get_book_file_info(db_type, book_id, user_id=user_id, role=role)
     if not file_path:
         return jsonify({'error': _t('api.err_book_not_found')}), 404
@@ -189,6 +192,9 @@ def get_txt_content():
     if not book_id:
         return jsonify({'error': _t('api.err_book_id_required')}), 400
 
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
+
     file_path = StreamService.get_file_path(db_type, book_id, user_id=user_id, role=role)
     if not file_path:
         return jsonify({'error': _t('api.err_book_not_found')}), 404
@@ -211,6 +217,9 @@ def get_epub_content():
     book_id = request.args.get('book_id')
     if not book_id:
         return jsonify({'error': _t('api.err_book_id_required')}), 400
+
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
 
     file_path = StreamService.get_file_path(db_type, book_id, user_id=user_id, role=role)
     if not file_path:
@@ -235,6 +244,9 @@ def get_epub_meta_api():
     if not book_id:
         return jsonify({'error': _t('api.err_book_id_required')}), 400
 
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
+
     file_path = StreamService.get_file_path(db_type, book_id, user_id=user_id, role=role)
     if not file_path:
         return jsonify({'error': _t('api.err_book_not_found')}), 404
@@ -258,6 +270,9 @@ def get_epub_chapter_api():
     chapter_idx = request.args.get('chapter_idx', 0)
     if not book_id:
         return jsonify({'error': _t('api.err_book_id_required')}), 400
+
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
 
     file_path = StreamService.get_file_path(db_type, book_id, user_id=user_id, role=role)
     if not file_path:
@@ -297,6 +312,9 @@ def get_epub_chapters_batch_api():
     if len(indices) > MAX_BATCH_SIZE:
         indices = indices[:MAX_BATCH_SIZE]
 
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
+
     file_path = StreamService.get_file_path(db_type, book_id, user_id=user_id, role=role)
     if not file_path:
         return jsonify({'error': _t('api.err_book_not_found')}), 404
@@ -320,6 +338,9 @@ def get_epub_image():
     resource_path = request.args.get('path')
     if not book_id or not resource_path:
         return jsonify({'error': 'book_id and path are required'}), 400
+
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
 
     file_path = StreamService.get_file_path(db_type, book_id, user_id=user_id, role=role)
     if not file_path:
@@ -345,6 +366,9 @@ def get_pdf_range():
     book_id = request.args.get('book_id')
     if not book_id:
         return jsonify({'error': _t('api.err_book_id_required')}), 400
+
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
 
     file_path = StreamService.get_file_path(db_type, book_id, user_id=user_id, role=role)
     if not file_path:

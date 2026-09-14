@@ -11,7 +11,7 @@ class UserRepository:
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access FROM users WHERE username = ?", 
+            "SELECT id, username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max FROM users WHERE username = ?",
             (username,)
         )
         row = cursor.fetchone()
@@ -40,7 +40,7 @@ class UserRepository:
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access FROM users WHERE id = ?", 
+            "SELECT id, username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max FROM users WHERE id = ?",
             (user_id,)
         )
         row = cursor.fetchone()
@@ -53,7 +53,7 @@ class UserRepository:
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, username, role, is_default_password, has_adult_access, has_audiobook_access, created_at FROM users ORDER BY id ASC"
+            "SELECT id, username, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max, created_at FROM users ORDER BY id ASC"
         )
         rows = cursor.fetchall()
         conn.close()
@@ -70,14 +70,14 @@ class UserRepository:
         return int(row['cnt']) if row else 0
 
     @staticmethod
-    def add_user(db_type, username, password_hash, role, has_adult_access, has_audiobook_access=1, has_video_access=1):
+    def add_user(db_type, username, password_hash, role, has_adult_access, has_audiobook_access=1, has_video_access=1, has_download_access=1):
         """신규 사용자 등록 및 카테고리 권한 기본 매핑 시딩"""
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO users (username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access, has_video_access) VALUES (?, ?, ?, 1, ?, ?, ?)",
-                (username, password_hash, role, has_adult_access, has_audiobook_access, has_video_access)
+                "INSERT INTO users (username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access, has_video_access, has_download_access) VALUES (?, ?, ?, 1, ?, ?, ?, ?)",
+                (username, password_hash, role, has_adult_access, has_audiobook_access, has_video_access, has_download_access)
             )
             user_id = cursor.lastrowid
             
@@ -200,6 +200,36 @@ class UserRepository:
         cursor = conn.cursor()
         try:
             cursor.execute("UPDATE users SET has_audiobook_access = ? WHERE id = ?", (has_audiobook_access, user_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_download_access(db_type, user_id, has_download_access):
+        """사용자별 파일 다운로드 접근 권한 갱신"""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE users SET has_download_access = ? WHERE id = ?", (has_download_access, user_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_content_rating_max(db_type, user_id, content_rating_max):
+        """사용자별 콘텐츠 등급 최대 허용치(0/15/18) 갱신"""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE users SET content_rating_max = ? WHERE id = ?", (content_rating_max, user_id))
             conn.commit()
             return True
         except Exception as e:

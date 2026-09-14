@@ -49,7 +49,9 @@ export async function loadPermissionsMatrix() {
   const audiobookBody = document.getElementById('permissions-audiobook-table-body');
   const videoHeaderRow = document.getElementById('permissions-video-table-header');
   const videoBody = document.getElementById('permissions-video-table-body');
-  if (!generalHeaderRow || !generalBody || !adultBody || !audiobookHeaderRow || !audiobookBody || !videoHeaderRow || !videoBody) return;
+  const downloadBody = document.getElementById('permissions-download-table-body');
+  const contentRatingBody = document.getElementById('permissions-content-rating-table-body');
+  if (!generalHeaderRow || !generalBody || !adultBody || !audiobookHeaderRow || !audiobookBody || !videoHeaderRow || !videoBody || !downloadBody || !contentRatingBody) return;
 
   const tLoading = window.i18n ? window.i18n.t('common.loading') : '불러오는 중...';
   const tError = window.i18n ? window.i18n.t('common.error') : '오류';
@@ -61,6 +63,8 @@ export async function loadPermissionsMatrix() {
   adultBody.innerHTML = '';
   audiobookBody.innerHTML = '';
   videoBody.innerHTML = '';
+  downloadBody.innerHTML = '';
+  contentRatingBody.innerHTML = '';
 
   try {
     const res = await fetch('/api/admin/permissions');
@@ -88,6 +92,8 @@ export async function loadPermissionsMatrix() {
     audiobookBody.innerHTML = renderMatrixBody(users, audiobookMatrix.categories, audiobookMatrix.permissions, 'audiobook');
     videoBody.innerHTML = renderMatrixBody(users, videoMatrix.categories, videoMatrix.permissions, 'video');
     adultBody.innerHTML = renderAdultBody(users);
+    downloadBody.innerHTML = renderDownloadBody(users);
+    contentRatingBody.innerHTML = renderContentRatingBody(users);
 
     bindPermissionEvents();
     switchPermissionSessionTab(activePermissionSession);
@@ -181,6 +187,47 @@ function renderAdultBody(users) {
   }).join('');
 }
 
+function renderDownloadBody(users) {
+  return users.map(user => {
+    const isChecked = user.has_download_access === 1 ? 'checked' : '';
+    const isDisabled = user.username === 'admin' ? 'disabled' : '';
+    return `
+      <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+        <td style="padding:0.9rem 1rem; color: var(--app-text-primary); font-weight:700;">${user.username}</td>
+        <td style="padding:0.9rem 1rem; text-align:center; color: var(--app-text-muted);">${user.role}</td>
+        <td style="padding:0.9rem 1rem; text-align:center;">
+          <label style="display:inline-flex; align-items:center; gap:0.5rem; color:var(--app-accent-hover); font-weight:700;">
+            <input type="checkbox" class="permission-chk-download" data-user-id="${user.id}" ${isChecked} ${isDisabled}
+                   style="cursor:pointer; width:1.2rem; height:1.2rem; accent-color:var(--app-accent);">
+            <span>파일 다운로드 허용</span>
+          </label>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderContentRatingBody(users) {
+  return users.map(user => {
+    const isDisabled = user.username === 'admin' ? 'disabled' : '';
+    const currentLevel = user.content_rating_max !== undefined && user.content_rating_max !== null ? user.content_rating_max : 18;
+    return `
+      <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+        <td style="padding:0.9rem 1rem; color: var(--app-text-primary); font-weight:700;">${user.username}</td>
+        <td style="padding:0.9rem 1rem; text-align:center; color: var(--app-text-muted);">${user.role}</td>
+        <td style="padding:0.9rem 1rem; text-align:center;">
+          <select class="permission-select-content-rating" data-user-id="${user.id}" ${isDisabled}
+                  style="cursor:pointer; padding:0.4rem 0.7rem; border-radius:6px; border:1px solid rgba(255,255,255,0.15); background: rgba(var(--app-panel-rgb), 0.6); color: var(--app-text-primary); font-weight:700;">
+            <option value="0" ${currentLevel === 0 ? 'selected' : ''}>전체이용가</option>
+            <option value="15" ${currentLevel === 15 ? 'selected' : ''}>15세이상</option>
+            <option value="18" ${currentLevel === 18 ? 'selected' : ''}>18세이상(성인)</option>
+          </select>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
 export function switchPermissionSessionTab(sessionId) {
   activePermissionSession = sessionId || 'general';
 
@@ -216,6 +263,55 @@ function bindPermissionEvents() {
       } catch (err) {
         alert('네트워크 오류가 발생했습니다.');
         e.target.checked = !hasAdultAccess;
+      }
+    });
+  });
+
+  document.querySelectorAll('.permission-chk-download').forEach(chk => {
+    chk.addEventListener('change', async (e) => {
+      const userId = e.target.getAttribute('data-user-id');
+      const hasDownloadAccess = e.target.checked;
+
+      try {
+        const res = await fetch('/api/admin/permissions/update-download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: parseInt(userId), has_download_access: hasDownloadAccess })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert('변경에 실패했습니다: ' + data.error);
+          e.target.checked = !hasDownloadAccess;
+        }
+      } catch (err) {
+        alert('네트워크 오류가 발생했습니다.');
+        e.target.checked = !hasDownloadAccess;
+      }
+    });
+  });
+
+  document.querySelectorAll('.permission-select-content-rating').forEach(sel => {
+    sel.addEventListener('change', async (e) => {
+      const userId = e.target.getAttribute('data-user-id');
+      const newLevel = e.target.value;
+      const prevLevel = e.target.dataset.prevValue !== undefined ? e.target.dataset.prevValue : newLevel;
+
+      try {
+        const res = await fetch('/api/admin/permissions/update-content-rating', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: parseInt(userId), content_rating_max: parseInt(newLevel) })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert('변경에 실패했습니다: ' + data.error);
+          e.target.value = prevLevel;
+        } else {
+          e.target.dataset.prevValue = newLevel;
+        }
+      } catch (err) {
+        alert('네트워크 오류가 발생했습니다.');
+        e.target.value = prevLevel;
       }
     });
   });

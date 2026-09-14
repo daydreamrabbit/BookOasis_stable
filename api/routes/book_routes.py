@@ -7,7 +7,7 @@ from services.book_service import BookService
 from services.book_detail_service import BookDetailService
 from services.metadata_service import MetadataService
 from services.book_info_service import BookInfoService
-from api.auth import login_required, check_adult_permission, admin_required
+from api.auth import login_required, check_adult_permission, check_download_permission, check_book_rating_permission, admin_required
 from utils.i18n import _t
 
 book_routes_bp = Blueprint('media_book_routes', __name__)
@@ -26,10 +26,15 @@ def edit_media_detail():
     link        = request.form.get('link', '').strip()
     genre       = request.form.get('genre', '').strip()
     tags        = request.form.get('tags', '').strip()
+    books_lv    = request.form.get('books_lv', '').strip()
     cover_file  = request.files.get('cover_image')
 
     if not series_name:
         return jsonify({'success': False, 'error': _t('api.err_series_name_required')}), 400
+
+    from services.content_rating_service import ALLOWED_BOOKS_LV_VALUES
+    if books_lv and books_lv not in ALLOWED_BOOKS_LV_VALUES:
+        return jsonify({'success': False, 'error': _t('api.err_invalid_books_lv')}), 400
 
     try:
         success, message = BookDetailService.update_media_detail(
@@ -43,7 +48,8 @@ def edit_media_detail():
             genre=genre,
             tags=tags,
             cover_file=cover_file,
-            series_alias=series_alias
+            series_alias=series_alias,
+            books_lv=books_lv or None
         )
         if success:
             try:
@@ -294,6 +300,10 @@ def download_book(book_id):
     db_type = request.args.get('type', 'general')
     if not check_adult_permission(db_type):
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
+    if not check_download_permission():
+        return jsonify({'success': False, 'error': _t('api.err_no_download_access')}), 403
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
 
     ALLOWED_FORMATS = ('epub', 'pdf', 'txt')
 

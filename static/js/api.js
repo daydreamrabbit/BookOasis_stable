@@ -329,10 +329,13 @@ export async function triggerLibraryScan(type, libraryId, force = false) {
   return res.json();
 }
 
-export async function triggerAllLibrariesScan(type, force = false) {
+export async function triggerAllLibrariesScan(type, force = false, groupId = null) {
   const formData = new FormData();
   formData.append('type', type);
   formData.append('force', force ? 'true' : 'false');
+  if (groupId !== null && groupId !== undefined && groupId !== '') {
+    formData.append('group_id', groupId);
+  }
   const res = await fetch(`/api/media/libraries/scan-all`, {
     method: 'POST',
     body: formData

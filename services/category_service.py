@@ -131,11 +131,16 @@ class CategoryService:
             rows = CategoryRepository.get_libraries_by_user_permissions(db_type, user_id)
         else:
             rows = CategoryRepository.get_all_libraries(db_type)
-            
+
+        from services.series_service import SeriesService
+        totals_by_library = SeriesService.get_library_totals_bulk(db_type)
+
         return [{
-            'id': r['id'], 
-            'name': r['name'], 
+            'id': r['id'],
+            'name': r['name'],
             'physical_path': r['physical_path'],
+            'series_count': totals_by_library.get(int(r['id']), {}).get('series_count', 0),
+            'book_count': totals_by_library.get(int(r['id']), {}).get('book_count', 0),
             'is_remote': r['is_remote'] or 0,
             'vfs_refresh_before_scan': r['vfs_refresh_before_scan'] or 0,
             'rclone_rc_url': r['rclone_rc_url'] or '',

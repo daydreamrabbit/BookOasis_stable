@@ -217,6 +217,9 @@
       "summary": "재능 없는 E급 헌터 성진우의 기적 같은 레벨업 대서사시.",
       "genre": "판타지, 액션",
       "tags": "헌터물, 성장물",
+      "books_lv": "",
+      "content_rating_level": 0,
+      "content_rating_label": "전체이용가",
       "cover_image": "/covers/1/cover_l1.jpg?t=1710203948"
     },
     "books": [
@@ -255,6 +258,7 @@
   | `link` | string | 선택 | 외부 링크 |
   | `genre` | string | 선택 | 장르(쉼표 구분) |
   | `tags` | string | 선택 | 태그(쉼표 구분) |
+  | `books_lv` | string | 선택 | 도서 등급 (`everyone`/`ma15+`/`m`/`r18`/`adult only`/`일반`/`15세`/`18세` 중 하나, 미지정 시 전체이용가) |
   | `cover_image` | file | 선택 | 표지 이미지 파일 |
 
 ### `[POST/PATCH]` `/api/media/series/alias`
@@ -934,6 +938,32 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
 ### `[POST]` `/api/admin/permissions/update-adult`
 * **설명**: 특정 사용자 계정의 성인 서재 접근 허용 여부를 글로벌 변경합니다.
 * **권한**: `@admin_required`
+
+---
+
+### `[POST]` `/api/admin/permissions/update-download`
+* **설명**: 특정 사용자 계정의 파일 다운로드(EPUB/PDF/TXT) 허용 여부를 글로벌 변경합니다.
+* **권한**: `@admin_required`
+* **요청 파라미터**:
+  ```json
+  {
+    "user_id": 2,
+    "has_download_access": false
+  }
+  ```
+
+---
+
+### `[POST]` `/api/admin/permissions/update-content-rating`
+* **설명**: 특정 사용자 계정의 콘텐츠 등급 최대 허용치(0=전체이용가/15=15세이상/18=18세이상)를 글로벌 변경합니다. 일반 도서관 내 도서의 `books_lv` 컬럼 또는 성인 장르/태그 키워드 매칭으로 판정된 등급이 이 값을 초과하면 열람(뷰어/다운로드)이 차단됩니다.
+* **권한**: `@admin_required`
+* **요청 파라미터**:
+  ```json
+  {
+    "user_id": 2,
+    "content_rating_max": 15
+  }
+  ```
 
 ---
 

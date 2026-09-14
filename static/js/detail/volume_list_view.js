@@ -1,6 +1,7 @@
 import { buildFallbackCoverUrl, getBookCoverSrc, buildTextCoverDataUri, coverAlignToObjectPosition } from '../cover_fallback.js';
 import { state } from '../state.js';
 import { stripLeadingBracketTags } from '../series_display.js';
+import { canDownloadFiles } from '../library_type_toggle.js';
 
 export function renderVolumeList(orderedBooks, safeSeriesName, actualLibraryId, dbType = 'general', options = {}) {
   const books = Array.isArray(orderedBooks) ? orderedBooks : [];
@@ -88,7 +89,7 @@ export function renderVolumeList(orderedBooks, safeSeriesName, actualLibraryId, 
       </div>
     ` : '';
 
-    const isDownloadable = ['epub', 'pdf', 'txt', 'text'].includes(format);
+    const isDownloadable = ['epub', 'pdf', 'txt', 'text'].includes(format) && canDownloadFiles();
     const readBtnHtml = isDownloadable
       ? `<div class="btn-read-row">
            <button class="btn-read" data-role="detail-continue" data-continue-action="reader" data-book-id="${book.id}" data-file-format="${(book.file_format || '').replace(/"/g, '&quot;')}" data-book-title="${(rawDisplayTitle || '').replace(/"/g, '&quot;')}" data-pages-read="${book.pages_read}" data-total-pages="${book.total_pages}">${readBtnText}</button>
