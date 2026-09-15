@@ -25,6 +25,14 @@ class BaseMetadataProvider(ABC):
     #     'layout': 'grid',  # 'full'(기본, 1열 전체 차지) | 'grid'(카드처럼 다른 grid 위젯과 한 행에 나란히 배치)
     #     'size': 2,  # 'grid'일 때만 의미 있음. 1(기본)/2/3 - auto-fill 컬럼 기준 몇 칸을 이어 붙일지
     # }
+    # 커스텀 CSS/이미지가 필요하면 플러그인 디렉토리에 dashboard.html/dashboard.css(선택:
+    # dashboard.js)를 두면 된다(category_tab의 index.html/style.css/script.js와 동일한
+    # 서빙 방식 - MetadataFactory._load_plugin_ui_bundle(..., target='dashboard')). 프론트가
+    # 위젯마다 Shadow DOM을 만들어 그 안에서만 렌더링하므로 다른 위젯이나 앱 전역 CSS와
+    # 서로 오염되지 않는다. 단, get_dashboard_data()가 반환한 값을 dashboard.html/js 안에
+    # 끼워 넣을 때 이스케이프는 플러그인 책임이다(category_tab 뷰와 동일한 신뢰 모델).
+    # 이 파일들이 없으면 기존처럼 get_dashboard_data()의 items를 안전한 화이트리스트
+    # 렌더러로만 표시한다(하위 호환, 마이그레이션 불필요).
     home_widget = None
     # 도서 상세 페이지 사이드바에 위젯을 마운트하려면 선언 (선택).
     # Example:
@@ -46,6 +54,16 @@ class BaseMetadataProvider(ABC):
     # Example:
     # detail_view = {"title": "AniList 스타일 상세", "sessions": "all"}
     detail_view = None
+    # 도서 상세 페이지 헤더의 정적 점수 별(.detail-score, 검색 메타데이터에서 온 읽기 전용
+    # 외부 평점)을 클릭 가능한 커뮤니티 별점으로 대체하려면 선언 (선택). detail_sidebar_widget과
+    # 달리 여러 플러그인이 동시에 활성화될 수 없는 "단일 슬롯 교체" 계약이다 — 활성화된
+    # provider가 여럿이면 order가 가장 작은 것 하나만 쓰인다. sessions에 'general'만 두면
+    # (성인/오디오북/영상 강좌에 노출하면 안 되는 기능이라) _resolve_plugin_sessions()가
+    # 자동으로 그 외 세션에서 배제해준다. get_rating_widget_data(db_type, context)와
+    # submit_rating(db_type, context, rating)을 구현해야 한다.
+    # Example:
+    # rating_widget = {"title": "커뮤니티 별점", "order": 10, "sessions": "general"}
+    rating_widget = None
     # Optional self-update contract declared by each plugin.
     # Example:
     # {
@@ -149,6 +167,32 @@ class BaseMetadataProvider(ABC):
                    item_type='metric'으로 도서와 무관한 자유 형식 카드 표시).
         """
         return {'success': False, 'error': 'detail sidebar widget not implemented'}
+
+    def get_rating_widget_data(self, db_type, context):
+        """도서 상세 페이지 헤더 별점 위젯 데이터 계약 (rating_widget을 쓰는 플러그인에서 override).
+
+        Args:
+            db_type (str): 'general' (성인/오디오북/영상 강좌는 이 계약 자체가 노출되지 않는다)
+            context (dict): series_name, library_id, book_id, author, isbn
+
+        Returns:
+            dict: {'success': True, 'average': float, 'count': int, 'my_rating': int|None}
+        """
+        return {'success': False, 'error': 'rating widget not implemented'}
+
+    def submit_rating(self, db_type, context, rating):
+        """도서 상세 페이지 헤더 별점 제출 계약 (rating_widget을 쓰는 플러그인에서 override).
+
+        Args:
+            db_type (str): 'general'
+            context (dict): get_rating_widget_data와 동일
+            rating (int): 1~5
+
+        Returns:
+            dict: {'success': True, 'average': float, 'count': int, 'my_rating': int} 또는
+                  {'success': False, 'error': str}
+        """
+        return {'success': False, 'error': 'rating widget not implemented'}
 
     def on_scan_new_books_detected(self, db_type, payload):
         """스캐너 신규도서 감지 후크 (선택 구현)."""

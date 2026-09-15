@@ -296,6 +296,11 @@ class BookDetailService:
             'genre'    : _val(meta_row, 'genre',      ''),
             'tags'     : _val(meta_row, 'tags',       ''),
             'books_lv' : _val(meta_row, 'books_lv',   ''),
+            'publication_status': _val(meta_row, 'publication_status', ''),
+            'cover_artist': _val(meta_row, 'cover_artist', ''),
+            'teams'    : _val(meta_row, 'teams',      ''),
+            'locations': _val(meta_row, 'locations',  ''),
+            'characters': _val(meta_row, 'characters', ''),
             'metadata_locked': meta_row.get('metadata_locked', 0) if meta_row else (1 if any(b.get('metadata_locked', 0) == 1 for b in books_rows) else 0),
             'cover_image': get_cover_image_with_t(final_cover, latest_updated),
             'banner_image': get_cover_image_with_t(final_banner, banner_updated) if final_banner else ''
@@ -305,6 +310,10 @@ class BookDetailService:
         effective_level = ContentRatingService.compute_effective_level(meta['books_lv'], meta['genre'], meta['tags'])
         meta['content_rating_level'] = effective_level
         meta['content_rating_label'] = {0: '전체이용가', 15: '15세이상', 18: '18세이상(성인)'}.get(effective_level, '18세이상(성인)')
+
+        # publication_status(연재상태)는 원본 코드(0/1/2)로 저장되며(tools/scanner/metadata/kavita_yaml.py
+        # 참고), 값이 없거나 인식되지 않는 코드(3 이상 등 향후 소스 추가분)는 "알 수 없음"으로 표시한다.
+        meta['publication_status_label'] = {'0': '연재', '1': '휴재', '2': '완결'}.get(meta['publication_status'], '알 수 없음')
 
         books_list = []
         for b in books_rows:
@@ -353,7 +362,7 @@ class BookDetailService:
         return meta, books_list
 
     @staticmethod
-    def update_media_detail(db_type, series_name, author, isbn, publisher, summary, link, genre='', tags='', cover_file=None, series_alias=None, books_lv=None):
+    def update_media_detail(db_type, series_name, author, isbn, publisher, summary, link, genre='', tags='', cover_file=None, series_alias=None, books_lv=None, publication_status=None):
         import hashlib
 
         if db_type == 'audiobook':
@@ -409,7 +418,7 @@ class BookDetailService:
                 print(f"[BookDetailService] 시리즈 대표 표지 수동 업로드 완료: {dest_path} -> {cover_image_url}")
             
             # 3. 시리즈 메타 정보 일괄 업데이트
-            BookRepository.update_media_detail(db_type, series_name, author, isbn, publisher, summary, link, genre, tags, series_alias=series_alias, cover_image_url=cover_image_url, books_lv=books_lv)
+            BookRepository.update_media_detail(db_type, series_name, author, isbn, publisher, summary, link, genre, tags, series_alias=series_alias, cover_image_url=cover_image_url, books_lv=books_lv, publication_status=publication_status)
             
             # 4. In-Memory 표지 캐시 및 Redis 캐시 무효화
             invalidate_series_cover_cache(db_type=db_type, lib_id=library_id, series_name=series_name)

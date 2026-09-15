@@ -10,6 +10,25 @@ function normalizeMetadataToken(token) {
     .trim();
 }
 
+// author/publisher/summary/genre/tags/link/series_alias 등은 사용자/플러그인/MCP 쓰기 도구가
+// 자유 텍스트로 채울 수 있는 필드라, 텍스트 노드/속성값으로 꽂기 전에 항상 이스케이프해야 한다
+// (과거 이 파일은 이 필드들을 이스케이프 없이 innerHTML에 직접 삽입해 저장형 XSS가 가능했다).
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// href로 쓰기 전에 http(s)/상대경로만 허용 - javascript: 등 위험한 프로토콜 차단
+function safeHref(url) {
+  const trimmed = String(url || '').trim();
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/')) return trimmed;
+  return '';
+}
+
 export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId, displayTitle = '') {
   let visibleTitle = stripLeadingBracketTags(String(displayTitle || '').trim() || safeSeriesName);
 
@@ -56,8 +75,9 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
   const clampedScore = Math.max(0, Math.min(100, normalizedScore));
   const starCount = Math.max(0, Math.min(5, Math.round(clampedScore / 20)));
   const stars = '★'.repeat(starCount) + '☆'.repeat(5 - starCount);
-  const linkHtml = meta.link
-    ? `<a href="${meta.link}" target="_blank" class="ridi-link-btn">${i18n.t('detail.ridi_link')}</a>`
+  const safeLinkUrl = safeHref(meta.link);
+  const linkHtml = safeLinkUrl
+    ? `<a href="${escapeHtml(safeLinkUrl)}" target="_blank" rel="noopener noreferrer" class="ridi-link-btn">${i18n.t('detail.ridi_link')}</a>`
     : '';
 
   const ratingLevel = Number(meta.content_rating_level);
@@ -76,6 +96,23 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
       </span>
     `;
   }
+
+  // 연재상태 배지 - 등급 배지와 달리 민감 정보가 아니므로(개인 취향 토글 없이) 항상 노출.
+  // tools/scanner/metadata/kavita_yaml.py가 채워 넣는 books.publication_status(원본 코드)를
+  // services/book_detail_service.py가 라벨로 변환해 내려준다. 값이 없거나(아직 재스캔 전)
+  // 인식 못 하는 코드면 "알 수 없음"으로 표시된다.
+  const publicationStatusColorMap = {
+    '연재': { bg: 'rgba(59, 130, 246, 0.15)', fg: '#60a5fa', border: 'rgba(59, 130, 246, 0.3)' },
+    '휴재': { bg: 'rgba(234, 179, 8, 0.15)', fg: '#eab308', border: 'rgba(234, 179, 8, 0.3)' },
+    '완결': { bg: 'rgba(34, 197, 94, 0.15)', fg: '#4ade80', border: 'rgba(34, 197, 94, 0.3)' },
+  };
+  const publicationStatusLabel = meta.publication_status_label || '알 수 없음';
+  const publicationStatusColors = publicationStatusColorMap[publicationStatusLabel] || { bg: 'rgba(148, 163, 184, 0.15)', fg: '#94a3b8', border: 'rgba(148, 163, 184, 0.3)' };
+  const publicationStatusBadgeHtml = `
+    <span class="badge" data-role="detail-publication-status-badge" title="연재 상태" style="background: ${publicationStatusColors.bg}; color: ${publicationStatusColors.fg}; border: 1px solid ${publicationStatusColors.border}; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; font-weight: 700;">
+      <i class="fa-solid fa-bookmark" style="font-size: 0.7rem; margin-right: 0.3rem;"></i>${escapeHtml(publicationStatusLabel)}
+    </span>
+  `;
 
   const genresArr = (meta.genre || '')
     .split(',')
@@ -97,14 +134,14 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
     const hiddenGenres = shouldCollapse ? genresArr.slice(1) : [];
 
     const visibleItemsHtml = visibleGenres.map((genre) => `
-      <span class="badge" data-role="detail-genre-filter" data-genre="${genre.replace(/"/g, '&quot;')}" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center;">
-        <i class="fa-solid fa-tag" style="font-size: 0.7rem; margin-right: 0.2rem;"></i>${genre}
+      <span class="badge" data-role="detail-genre-filter" data-genre="${escapeHtml(genre)}" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center;">
+        <i class="fa-solid fa-tag" style="font-size: 0.7rem; margin-right: 0.2rem;"></i>${escapeHtml(genre)}
       </span>
     `).join('');
 
     const hiddenItemsHtml = hiddenGenres.map((genre) => `
-      <span class="badge" data-role="detail-genre-filter" data-genre="${genre.replace(/"/g, '&quot;')}" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center;">
-        <i class="fa-solid fa-tag" style="font-size: 0.7rem; margin-right: 0.2rem;"></i>${genre}
+      <span class="badge" data-role="detail-genre-filter" data-genre="${escapeHtml(genre)}" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center;">
+        <i class="fa-solid fa-tag" style="font-size: 0.7rem; margin-right: 0.2rem;"></i>${escapeHtml(genre)}
       </span>
     `).join('');
 
@@ -130,14 +167,14 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
     const hiddenTags = shouldCollapse ? tagsArr.slice(1) : [];
 
     const visibleItemsHtml = visibleTags.map((tag) => `
-      <span class="badge" data-role="detail-tag-filter" data-tag="${tag.replace(/"/g, '&quot;')}" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center;">
-        <i class="fa-solid fa-hashtag" style="font-size: 0.7rem; margin-right: 0.2rem;"></i>${tag}
+      <span class="badge" data-role="detail-tag-filter" data-tag="${escapeHtml(tag)}" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center;">
+        <i class="fa-solid fa-hashtag" style="font-size: 0.7rem; margin-right: 0.2rem;"></i>${escapeHtml(tag)}
       </span>
     `).join('');
 
     const hiddenItemsHtml = hiddenTags.map((tag) => `
-      <span class="badge" data-role="detail-tag-filter" data-tag="${tag.replace(/"/g, '&quot;')}" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center;">
-        <i class="fa-solid fa-hashtag" style="font-size: 0.7rem; margin-right: 0.2rem;"></i>${tag}
+      <span class="badge" data-role="detail-tag-filter" data-tag="${escapeHtml(tag)}" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center;">
+        <i class="fa-solid fa-hashtag" style="font-size: 0.7rem; margin-right: 0.2rem;"></i>${escapeHtml(tag)}
       </span>
     `).join('');
 
@@ -328,9 +365,10 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
   }
 
   const isLocked = Number(meta && meta.metadata_locked) === 1 || (books && books.some((book) => Number(book.metadata_locked) === 1));
-  const summaryText = meta.summary || i18n.t('detail.no_description');
-  const summaryLineBreaks = (String(summaryText).match(/\n/g) || []).length;
-  const shouldShowSummaryToggle = String(summaryText).length > 260 || summaryLineBreaks >= 5;
+  const summaryTextRaw = meta.summary || i18n.t('detail.no_description');
+  const summaryText = escapeHtml(summaryTextRaw);
+  const summaryLineBreaks = (String(summaryTextRaw).match(/\n/g) || []).length;
+  const shouldShowSummaryToggle = String(summaryTextRaw).length > 260 || summaryLineBreaks >= 5;
   const summaryToggleLabelMore = i18n.t('detail.summary_more') || '더보기';
   const summaryToggleLabelLess = i18n.t('detail.summary_less') || '접기';
   const isAudiobookContext = state.currentLibraryType === 'audiobook';
@@ -350,8 +388,8 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
     <button class="ridi-link-btn" data-role="detail-mark-series-complete" data-series-name="${safeSeriesName.replace(/"/g, '&quot;')}" data-library-id="${actualLibraryId}" style="margin: 0; background: #16a34a; border-color: #22c55e; display: inline-flex; align-items: center; gap: 0.3rem;"><i class="fa-solid fa-circle-check"></i> ${markSeriesCompletedLabel}</button>
   `;
   const identifierLabel = 'ISBN(WEB_ID)';
-  const identifierValue = (isAudiobookContext || isVideoContext) ? (meta.web_id || '-') : (meta.isbn || '-');
-  const identifierEditValue = (isAudiobookContext || isVideoContext) ? (meta.web_id || '') : (meta.isbn || '');
+  const identifierValue = escapeHtml((isAudiobookContext || isVideoContext) ? (meta.web_id || '-') : (meta.isbn || '-'));
+  const identifierEditValue = escapeHtml((isAudiobookContext || isVideoContext) ? (meta.web_id || '') : (meta.isbn || ''));
   const detailLockedBadgeHtml = isLocked ? `
     <div class="book-card-locked-badge" title="메타데이터 잠김 (수동 편집됨)">
       <i class="fa-solid fa-lock"></i>
@@ -401,27 +439,27 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
       <!-- 뷰어 모드 (일반 노출) -->
       <div id="detail-header-meta-view" class="detail-header-meta">
         <h3 class="book-detail-title" style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
-          ${meta.series_alias || visibleTitle}
-          ${meta.series_alias ? `<span style="font-size: 0.85rem; color: var(--app-text-muted); font-weight: normal;">(${visibleTitle})</span>` : ''}
+          ${escapeHtml(meta.series_alias || visibleTitle)}
+          ${meta.series_alias ? `<span style="font-size: 0.85rem; color: var(--app-text-muted); font-weight: normal;">(${escapeHtml(visibleTitle)})</span>` : ''}
           ${audiobookCompletedBadgeHtml}
           ${seriesFavBtnHtml}
           ${editToggleBtnHtml}
           ${unlockBtnHtml}
         </h3>
         <div class="detail-meta">
-          <span class="badge">${meta.series_alias || visibleTitle}</span>
-          <span class="meta-item"><i class="fa-solid fa-pen-nib"></i> ${meta.author || '-'}</span>
+          <span class="badge">${escapeHtml(meta.series_alias || visibleTitle)}</span>
+          <span class="meta-item"><i class="fa-solid fa-pen-nib"></i> ${escapeHtml(meta.author || '-')}</span>
           <span class="meta-item"><i class="fa-solid fa-barcode"></i> ${identifierLabel}: ${identifierValue}</span>
-          <span class="meta-item"><i class="fa-solid fa-building"></i> ${meta.publisher || '-'}</span>
+          <span class="meta-item"><i class="fa-solid fa-building"></i> ${escapeHtml(meta.publisher || '-')}</span>
           <span class="meta-item"><i class="fa-solid fa-book-open"></i> ${volumeCountLabel}</span>
         </div>
         <div class="detail-meta-tags" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; margin-bottom: 0.8rem;">
-          ${ratingBadgeHtml ? `<div class="detail-rating-row">${ratingBadgeHtml}</div>` : ''}
+          ${ratingBadgeHtml || publicationStatusBadgeHtml ? `<div class="detail-rating-row" style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">${ratingBadgeHtml}${publicationStatusBadgeHtml}</div>` : ''}
           ${genreRowHtml}
           ${tagRowHtml}
         </div>
         ${missingPageBannerHtml}
-        <div class="detail-score">${stars}</div>
+        <div class="detail-score" id="detail-score-root" data-static-stars="${stars}">${stars}</div>
       </div>
 
       <!-- 요약/설명 + 액션 버튼: 커버 폭에 갇히지 않도록 전체 너비 별도 줄로 배치(커버 아래 빈 공간 재활용) -->
@@ -452,11 +490,11 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
         <div class="edit-meta-form-group">
           <div class="edit-meta-row-item">
             <label>시리즈 별칭 (Alias)</label>
-            <input type="text" id="edit-series-alias-input" class="edit-meta-input" value="${meta.series_alias || ''}" placeholder="기본 폴더명 대신 표시할 제목">
+            <input type="text" id="edit-series-alias-input" class="edit-meta-input" value="${escapeHtml(meta.series_alias || '')}" placeholder="기본 폴더명 대신 표시할 제목">
           </div>
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_author')}</label>
-            <input type="text" id="edit-author-input" class="edit-meta-input" value="${meta.author === '-' ? '' : meta.author}">
+            <input type="text" id="edit-author-input" class="edit-meta-input" value="${escapeHtml(meta.author === '-' ? '' : meta.author)}">
           </div>
           <div class="edit-meta-row-item">
             <label>${identifierLabel}</label>
@@ -464,19 +502,19 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
           </div>
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_publisher')}</label>
-            <input type="text" id="edit-publisher-input" class="edit-meta-input" value="${meta.publisher === '-' ? '' : meta.publisher}">
+            <input type="text" id="edit-publisher-input" class="edit-meta-input" value="${escapeHtml(meta.publisher === '-' ? '' : meta.publisher)}">
           </div>
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_ridi_link')}</label>
-            <input type="text" id="edit-link-input" class="edit-meta-input" value="${meta.link || ''}">
+            <input type="text" id="edit-link-input" class="edit-meta-input" value="${escapeHtml(meta.link || '')}">
           </div>
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_genre')}</label>
-            <input type="text" id="edit-genre-input" class="edit-meta-input" value="${meta.genre || ''}">
+            <input type="text" id="edit-genre-input" class="edit-meta-input" value="${escapeHtml(meta.genre || '')}">
           </div>
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_tags')}</label>
-            <input type="text" id="edit-tags-input" class="edit-meta-input" value="${meta.tags || ''}">
+            <input type="text" id="edit-tags-input" class="edit-meta-input" value="${escapeHtml(meta.tags || '')}">
           </div>
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_books_lv')}</label>
@@ -494,7 +532,7 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
           </div>
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_summary')}</label>
-            <textarea id="edit-summary-input" class="edit-meta-textarea">${meta.summary === i18n.t('detail.no_description') || meta.summary === '등록된 설명이 없습니다.' ? '' : meta.summary}</textarea>
+            <textarea id="edit-summary-input" class="edit-meta-textarea">${escapeHtml(meta.summary === i18n.t('detail.no_description') || meta.summary === '등록된 설명이 없습니다.' ? '' : meta.summary)}</textarea>
           </div>
         </div>
         <div class="edit-meta-buttons-row">

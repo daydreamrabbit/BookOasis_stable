@@ -323,11 +323,13 @@ class MetadataFactory:
     @classmethod
     def _load_plugin_ui_bundle(cls, provider_name, target='view'):
         """
-        플러그인 UI 번들 서빙 (target='view' | 'settings' | 'detail')
+        플러그인 UI 번들 서빙 (target='view' | 'settings' | 'detail' | 'dashboard')
         - target='view': index.html, style.css, script.js (카테고리 메인 뷰포트용)
         - target='settings': settings.html, settings.css, settings.js (환경설정 탭 커스텀 폼용)
         - target='detail': detail/index.html, detail/style.css, detail/script.js (도서 상세페이지
           본문 대체용 - category_tab의 view 번들과 파일명이 겹치지 않도록 detail/ 서브디렉토리 사용)
+        - target='dashboard': dashboard.html, dashboard.css, dashboard.js (home_widget 커스텀
+          CSS/이미지용, 선택 - 없으면 프론트가 기존 items 화이트리스트 렌더러로 폴백한다)
         """
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         plugin_dir = os.path.join(base_dir, 'plugins', 'metadata', provider_name)
@@ -346,6 +348,12 @@ class MetadataFactory:
                 'html': 'detail/index.html',
                 'css': 'detail/style.css',
                 'js': 'detail/script.js',
+            }
+        elif target == 'dashboard':
+            file_map = {
+                'html': 'dashboard.html',
+                'css': 'dashboard.css',
+                'js': 'dashboard.js',
             }
         else:
             file_map = {

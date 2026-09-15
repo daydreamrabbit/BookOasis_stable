@@ -100,10 +100,15 @@ def hard_delete_books_transaction(db_type, book_ids, target_covers, placeholder)
             return []
         confirmed_placeholders = ','.join([placeholder] * len(confirmed_ids))
 
+        # tools/scanner/sync_detector.py의 자동 7일 하드삭제와 반드시 같은 목록을 유지할 것
+        # (스키마에 FK/CASCADE가 없어 두 삭제 경로가 각자 목록을 들고 있다).
         cursor.execute(f"DELETE FROM user_progress WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
         cursor.execute(f"DELETE FROM user_reading_log WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
         cursor.execute(f"DELETE FROM user_favorites WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
         cursor.execute(f"DELETE FROM book_offsets WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
+        cursor.execute(f"DELETE FROM book_annotations WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
+        cursor.execute(f"DELETE FROM epub_bookmarks WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
+        cursor.execute(f"DELETE FROM collection_items WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
         cursor.execute(f"DELETE FROM books WHERE id IN ({confirmed_placeholders})", confirmed_ids)
 
         # 커버 참조 카운트를 건별 SELECT 반복 대신 단일 GROUP BY 조회로 일괄 확인 (트랜잭션 점유 시간 단축)

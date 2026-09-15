@@ -113,10 +113,19 @@ def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_fi
             placeholders = ','.join([ph] * len(old_ids))
             params = tuple(old_ids) if _is_mariadb_mode() else old_ids
             
-            # 연관 데이터 삭제
+            # 연관 데이터 삭제 - repositories/trash_repository_shared.py의 수동 "휴지통 비우기"와
+            # 반드시 같은 목록을 유지할 것(스키마에 FK/CASCADE가 없어 두 삭제 경로가 각자
+            # 목록을 들고 있다 - 예전엔 이 자동 경로에 user_favorites/book_annotations/
+            # epub_bookmarks/collection_items가 빠져 있어서, 파일이 7일 이상 사라졌다가
+            # 다시 나타나 새 id로 재등록될 때 옛 id를 참조하던 즐겨찾기/하이라이트/북마크/
+            # 컬렉션 항목이 영구 고아 레코드로 남았다).
             cursor.execute(f"DELETE FROM user_progress WHERE book_id IN ({placeholders})", params)
             cursor.execute(f"DELETE FROM user_reading_log WHERE book_id IN ({placeholders})", params)
             cursor.execute(f"DELETE FROM book_offsets WHERE book_id IN ({placeholders})", params)
+            cursor.execute(f"DELETE FROM user_favorites WHERE book_id IN ({placeholders})", params)
+            cursor.execute(f"DELETE FROM book_annotations WHERE book_id IN ({placeholders})", params)
+            cursor.execute(f"DELETE FROM epub_bookmarks WHERE book_id IN ({placeholders})", params)
+            cursor.execute(f"DELETE FROM collection_items WHERE book_id IN ({placeholders})", params)
             cursor.execute(f"DELETE FROM books WHERE id IN ({placeholders})", params)
             
             # 커버 이미지 물리 파일 소거

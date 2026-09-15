@@ -5,6 +5,7 @@ import { initReportsTab, loadReportList, loadReportDetail } from './settings/rep
 import { loadUsersList } from './settings/users.js';
 import { loadPermissionsMatrix } from './settings/permissions.js';
 import { loadQueueStatus } from './settings/queue.js';
+import { loadMcpPendingChanges } from './settings/mcp_pending.js';
 import { loadExternalDomainsSettings } from './settings/external_domains.js';
 
 export {
@@ -22,7 +23,8 @@ export {
   loadPermissionsMatrix,
   loadViewerSettings,
   submitViewerSettings,
-  loadExternalDomainsSettings
+  loadExternalDomainsSettings,
+  loadMcpPendingChanges
 };
 
 function initSettingsTabDelegation() {
@@ -72,7 +74,7 @@ function setAboutVersionLoadError(dashEl, latestEl, stateEl, messageKey, fallbac
 // 'external-domains'는 의도적으로 이 목록에 없음 — 전역 화이트리스트를 일반 사용자도
 // 조회는 할 수 있어야 하므로 탭 자체는 열어두고, 추가/삭제 UI만 관리자 전용으로 숨긴다
 // (external_domains.js의 applyNonAdminExternalDomainsMode 참고).
-export const ADMIN_ONLY_SETTINGS_TABS = ['schedule', 'general', 'plugins', 'reports', 'trash', 'users', 'permissions'];
+export const ADMIN_ONLY_SETTINGS_TABS = ['schedule', 'general', 'plugins', 'reports', 'trash', 'users', 'permissions', 'mcp-pending'];
 
 // 관리자가 아니면 관리자 전용 탭 버튼 자체를 화면에서 숨긴다 (비활성화 표시가 아니라 노출 차단).
 export function applySettingsTabAccessControl() {
@@ -142,6 +144,8 @@ export function switchSettingsTab(tabId) {
     loadUsersList();
   } else if (tabId === 'permissions') {
     loadPermissionsMatrix();
+  } else if (tabId === 'mcp-pending') {
+    loadMcpPendingChanges();
   } else if (tabId === 'trash') {
     if (window.loadTrashList) {
       window.loadTrashList();

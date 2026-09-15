@@ -118,6 +118,7 @@ def _build_series_entries(db_type, rows):
         genre = next((b['genre'] for b in books if b['genre']), '')
         tags = next((b['tags'] for b in books if b['tags']), '')
         books_lv = next((b.get('books_lv') for b in books if b.get('books_lv')), '')
+        publication_status = next((b.get('publication_status') for b in books if b.get('publication_status')), '')
         series_alias = next((b['series_alias'] for b in books if b.get('series_alias')), '')
         total_tracks = 0
         is_completed = 0
@@ -149,6 +150,8 @@ def _build_series_entries(db_type, rows):
             'tags': tags,
             'books_lv': books_lv,
             'content_rating_level': ContentRatingService.compute_effective_level(books_lv, genre, tags) if db_type in ('general', 'adult') else 0,
+            'publication_status': publication_status,
+            'publication_status_label': {'0': '연재', '1': '휴재', '2': '완결'}.get(publication_status, '알 수 없음'),
             'anchor_dir': comp_dir,
         })
 

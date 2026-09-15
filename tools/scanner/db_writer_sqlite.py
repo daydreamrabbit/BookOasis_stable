@@ -131,6 +131,12 @@ def bulk_update_books(cursor, update_data_list, force=False):
                 release_date = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), release_date) ELSE release_date END,
                 genre        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), genre) ELSE genre END,
                 tags         = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), tags) ELSE tags END,
+                books_lv     = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), books_lv) ELSE books_lv END,
+                publication_status = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), publication_status) ELSE publication_status END,
+                cover_artist = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), cover_artist) ELSE cover_artist END,
+                teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), teams) ELSE teams END,
+                locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), locations) ELSE locations END,
+                characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), characters) ELSE characters END,
                 file_mtime   = ?,
                 file_size    = ?
             WHERE file_path = ?
@@ -139,7 +145,7 @@ def bulk_update_books(cursor, update_data_list, force=False):
         ])
     else:
         cursor.executemany("""
-            UPDATE books SET 
+            UPDATE books SET
                 is_deleted   = 0,
                 library_id   = CASE WHEN ? IS NOT NULL AND ? > 0 THEN ? ELSE library_id END,
                 series_name  = CASE WHEN ? IS NOT NULL AND ? != '' THEN ? ELSE series_name END,
@@ -156,6 +162,12 @@ def bulk_update_books(cursor, update_data_list, force=False):
                 release_date = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), release_date) ELSE release_date END,
                 genre        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), genre) ELSE genre END,
                 tags         = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), tags) ELSE tags END,
+                books_lv     = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), books_lv) ELSE books_lv END,
+                publication_status = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), publication_status) ELSE publication_status END,
+                cover_artist = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), cover_artist) ELSE cover_artist END,
+                teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), teams) ELSE teams END,
+                locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), locations) ELSE locations END,
+                characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), characters) ELSE characters END,
                 file_mtime   = ?,
                 file_size    = ?
             WHERE file_path = ?
@@ -167,9 +179,9 @@ def bulk_insert_books(cursor, insert_data_list):
     """Bulk insert or upsert new books when file_path conflicts in SQLite"""
     if not insert_data_list: return
     cursor.executemany("""
-        INSERT INTO books 
-        (library_id, title, series_name, author, isbn, file_path, file_format, total_pages, cover_image, banner_image, publisher, link, score, summary, release_date, genre, tags, file_mtime, file_size, is_deleted) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        INSERT INTO books
+        (library_id, title, series_name, author, isbn, file_path, file_format, total_pages, cover_image, banner_image, publisher, link, score, summary, release_date, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, file_mtime, file_size, is_deleted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(file_path) DO UPDATE SET
             library_id   = EXCLUDED.library_id,
             is_deleted   = 0,

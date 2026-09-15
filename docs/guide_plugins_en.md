@@ -22,7 +22,8 @@ This document describes the current plugin standard for BookOasis metadata/dashb
 | 1.0.7 | `search`, `apply` | `on_scan_new_books_detected`, `dispatch_webhook`, `update_manifest` | Standard event webhooks (`book.new/read/finish`) recommended |
 | 1.0.8 | `search`, `apply` | `detail_sidebar_widget`, `get_detail_sidebar_data` | Added book detail page sidebar widget contract ("More by this author", etc.) |
 | 1.0.9 | `search`, `apply` | `home_widget` | Added the actual home-dashboard widget contract, shown only when a user turns on "home dashboard plugin layout mode" (§5-1) |
-| 1.1.0+ (current) | `search`, `apply` | `detail_view` | Added a contract for replacing the entire book detail page body with a custom screen (single slot per session) |
+| 1.1.0 | `search`, `apply` | `detail_view` | Added a contract for replacing the entire book detail page body with a custom screen (single slot per session) |
+| 1.1.1+ (current) | `search`, `apply` | `dashboard.html`/`dashboard.css`/`dashboard.js` | `home_widget` can now use full custom CSS/images - rendered in a per-widget Shadow DOM for isolation (§5-1) |
 
 Compatibility rules:
 
@@ -413,6 +414,38 @@ def get_dashboard_data(self, db_type, limit=10):
     # reuses the same method as dashboard_widget - no new method required
     return {'success': True, 'items': []}
 ```
+
+### Custom CSS/images (`dashboard.html` / `dashboard.css` / `dashboard.js`)
+
+The `items` returned by `get_dashboard_data()` are rendered by default through a safe whitelist
+renderer (`sanitizePluginHtml()`) that only allows text and a handful of inline tags — not enough
+to style a widget nicely or add images. If you need full CSS or images, place `dashboard.html`
+(optionally `dashboard.css`, `dashboard.js`) in your plugin directory — the same serving mechanism
+as category_tab's `index.html`/`style.css`/`script.js`.
+
+```
+sample_plugins/metadata/<plugin_id>/
+  dashboard.html   # widget markup
+  dashboard.css    # widget-scoped styles (full CSS, image backgrounds, etc. all allowed)
+  dashboard.js     # (optional) executed as function(pluginId, shadowRoot, items) { ... }
+```
+
+The frontend mounts a **Shadow DOM** per widget and renders this markup/CSS only inside it:
+
+- This widget's CSS never leaks into other widgets or the app's global stylesheet (`style.css`, etc.).
+- Conversely, the app's global CSS never leaks in either — you must style everything from scratch.
+- If `dashboard.js` is present, it runs as `new Function('pluginId', 'shadowRoot', 'items', <dashboard.js content>)`,
+  so it can only touch DOM inside the shadow root (same pattern as category_tab's `script.js`
+  receiving `container`, except it receives the shadow root instead, for isolation).
+
+**Caution:** the `dashboard.html`/`dashboard.js` code itself is fully trusted, exactly like a
+category_tab view (it's plugin code an admin chose to install). However, escaping any dynamic
+value returned by `get_dashboard_data()` (external API text, file names, etc.) before interpolating
+it into this markup is the plugin's own responsibility — Shadow DOM isolates style/DOM, it does not
+protect against an XSS bug the plugin itself introduces.
+
+If these files are absent, the existing `items` + whitelist-renderer path works unchanged (fully
+backward compatible — existing plugins need no changes).
 
 ### Layout (`layout`)
 

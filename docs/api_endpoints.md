@@ -985,6 +985,47 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
 
 ---
 
+## 🤖 9.5 MCP 승인 대기 큐 API (`mcp_pending_changes`)
+
+MCP 서버(`tools/mcp_server.py`)의 Tier B 쓰기 도구(`propose_bulk_book_metadata_update`, `propose_bulk_set_favorite`)가 만든 "제안"을 관리자가 검토·승인/거부하는 API입니다. 자세한 설계는 `docs/guide_mcp_server.md`의 "쓰기 툴 (Tier B)" 절을 참고하세요.
+
+### `[GET]` `/api/admin/mcp-pending-changes`
+* **설명**: 대기 중인(또는 지정한 상태의) MCP 변경 제안 목록을 조회합니다.
+* **권한**: `@admin_required`
+* **쿼리 파라미터**: `status` (선택, `pending`/`approved`/`rejected`. 생략 시 전체)
+* **응답 예시 (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "changes": [
+      {
+        "id": 5, "tool_name": "bulk_update_book_metadata", "db_type": "general",
+        "target": "3개 시리즈", "status": "pending", "created_at": "2026-09-15 10:00:00",
+        "payload": {"series_names": ["..."], "library_id": "all", "fields": {"genre": "..."}},
+        "preview": {"시리즈명": {"genre": {"before": "구값", "after": "새값"}}}
+      }
+    ]
+  }
+  ```
+
+---
+
+### `[POST]` `/api/admin/mcp-pending-changes/<int:change_id>/approve`
+* **설명**: 제안을 승인해 실제로 서재 DB에 반영합니다. `MCP_WRITE_ENABLED` 설정과 무관하게 항상 동작합니다(이미 인증된 관리자 웹 세션의 액션이므로).
+* **권한**: `@admin_required`
+* **응답 예시 (200 OK)**: `{"success": true, "change_id": 5, "results": {"시리즈명": {"success": true, "changed": {...}}}}`
+* **오류**: 이미 처리된(`approved`/`rejected`) 제안이거나 존재하지 않는 id면 400.
+
+---
+
+### `[POST]` `/api/admin/mcp-pending-changes/<int:change_id>/reject`
+* **설명**: 제안을 거부합니다. DB에는 아무 것도 반영되지 않습니다.
+* **권한**: `@admin_required`
+* **요청 파라미터**: `{"note": "거부 사유 (선택)"}`
+* **응답 예시 (200 OK)**: `{"success": true, "change_id": 5}`
+
+---
+
 ## ⚡ 10. 스캐너 & 비동기 작업 큐 API (`scan` / `system`)
 
 ### `[GET]` `/api/system/status`

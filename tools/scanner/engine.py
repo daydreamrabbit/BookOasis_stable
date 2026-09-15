@@ -71,6 +71,12 @@ _METADATA_FIELD_MAX_LEN = {
     'publisher': 255,
     'release_date': 100,
     'genre': 255,
+    'books_lv': 20,
+    'publication_status': 10,
+    'cover_artist': 500,
+    'teams': 255,
+    'locations': 255,
+    'characters': 255,
 }
 
 
@@ -352,6 +358,12 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     _clamp_text(meta.get('release_date', ''), _METADATA_FIELD_MAX_LEN['release_date']),
                     _clamp_text(meta.get('genre', ''), _METADATA_FIELD_MAX_LEN['genre']),
                     meta.get('tags',''),
+                    _clamp_text(meta.get('books_lv', ''), _METADATA_FIELD_MAX_LEN['books_lv']),
+                    _clamp_text(meta.get('publication_status', ''), _METADATA_FIELD_MAX_LEN['publication_status']),
+                    _clamp_text(meta.get('cover_artist', ''), _METADATA_FIELD_MAX_LEN['cover_artist']),
+                    _clamp_text(meta.get('teams', ''), _METADATA_FIELD_MAX_LEN['teams']),
+                    _clamp_text(meta.get('locations', ''), _METADATA_FIELD_MAX_LEN['locations']),
+                    _clamp_text(meta.get('characters', ''), _METADATA_FIELD_MAX_LEN['characters']),
                     d.get('file_mtime', 0.0), d.get('file_size', 0),
                     canonical_path(d['full_path'])
                 ))
@@ -381,6 +393,12 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     _clamp_text(meta.get('release_date', ''), _METADATA_FIELD_MAX_LEN['release_date']),
                     _clamp_text(meta.get('genre', ''), _METADATA_FIELD_MAX_LEN['genre']),
                     meta.get('tags',''),
+                    _clamp_text(meta.get('books_lv', ''), _METADATA_FIELD_MAX_LEN['books_lv']),
+                    _clamp_text(meta.get('publication_status', ''), _METADATA_FIELD_MAX_LEN['publication_status']),
+                    _clamp_text(meta.get('cover_artist', ''), _METADATA_FIELD_MAX_LEN['cover_artist']),
+                    _clamp_text(meta.get('teams', ''), _METADATA_FIELD_MAX_LEN['teams']),
+                    _clamp_text(meta.get('locations', ''), _METADATA_FIELD_MAX_LEN['locations']),
+                    _clamp_text(meta.get('characters', ''), _METADATA_FIELD_MAX_LEN['characters']),
                     d.get('file_mtime', 0.0), d.get('file_size', 0)
                 ))
             bulk_insert_books(cur, insert_data)

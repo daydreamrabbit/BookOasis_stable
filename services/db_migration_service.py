@@ -267,6 +267,11 @@ _SCHEMA_SQL = """
         genre TEXT,
         tags TEXT,
         books_lv TEXT,
+        publication_status TEXT,
+        cover_artist TEXT,
+        teams TEXT,
+        locations TEXT,
+        characters TEXT,
         is_favorite INTEGER DEFAULT 0,
         cover_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -518,6 +523,20 @@ _SCHEMA_SQL = """
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS mcp_pending_changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tool_name TEXT NOT NULL,
+        db_type TEXT NOT NULL DEFAULT 'general',
+        target TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        preview TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        decided_at DATETIME DEFAULT NULL,
+        decided_by INTEGER DEFAULT NULL,
+        decision_note TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS scanner_progress (
         library_id TEXT,
         folder_path TEXT PRIMARY KEY
@@ -624,6 +643,7 @@ _SCHEMA_SQL = """
     """
 
 _INDEXES_SQL = """
+    CREATE INDEX IF NOT EXISTS idx_mcp_pending_changes_status ON mcp_pending_changes(status);
     CREATE INDEX IF NOT EXISTS idx_audiobook_tracks_audiobook_id ON audiobook_tracks(audiobook_id);
     CREATE INDEX IF NOT EXISTS idx_audiobook_track_progress_lookup ON audiobook_track_progress(audiobook_id, user_id, track_id);
     CREATE INDEX IF NOT EXISTS idx_audiobooks_library_id ON audiobooks(library_id);
@@ -1155,6 +1175,16 @@ def _ensure_mariadb_columns():
         ('media_audiobook', 'users', 'content_rating_max', 'INT DEFAULT 18'),
         ('media_general', 'books', 'books_lv', 'VARCHAR(20)'),
         ('media_adult', 'books', 'books_lv', 'VARCHAR(20)'),
+        ('media_general', 'books', 'publication_status', 'VARCHAR(10)'),
+        ('media_adult', 'books', 'publication_status', 'VARCHAR(10)'),
+        ('media_general', 'books', 'cover_artist', 'VARCHAR(500)'),
+        ('media_adult', 'books', 'cover_artist', 'VARCHAR(500)'),
+        ('media_general', 'books', 'teams', 'VARCHAR(255)'),
+        ('media_adult', 'books', 'teams', 'VARCHAR(255)'),
+        ('media_general', 'books', 'locations', 'VARCHAR(255)'),
+        ('media_adult', 'books', 'locations', 'VARCHAR(255)'),
+        ('media_general', 'books', 'characters', 'VARCHAR(255)'),
+        ('media_adult', 'books', 'characters', 'VARCHAR(255)'),
         ('media_general', 'collection_items', 'video_id', 'BIGINT DEFAULT NULL'),
         ('media_adult', 'collection_items', 'video_id', 'BIGINT DEFAULT NULL'),
         ('media_audiobook', 'collection_items', 'video_id', 'BIGINT DEFAULT NULL'),

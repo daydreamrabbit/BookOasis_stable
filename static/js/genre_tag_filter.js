@@ -22,6 +22,17 @@ function normalizeMetadataToken(token) {
         .trim();
 }
 
+// genre/tags 값은 DB의 books.genre/books.tags(사용자/플러그인/MCP 쓰기 도구가 채울 수 있는
+// 자유 텍스트)에서 온다 - innerHTML로 꽂기 전에 반드시 이스케이프해야 한다.
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 export async function initFloatingFilter() {
     const modal = document.getElementById('floating-filter-modal');
     const header = document.getElementById('filter-modal-header');
@@ -317,7 +328,7 @@ function createSelectedChipElement(type, value) {
     const chip = document.createElement('div');
     chip.className = 'filter-chip-selected';
     chip.title = `[${type === 'genres' ? '장르' : '태그'}] ${value}`;
-    chip.innerHTML = `<span>[${type === 'genres' ? '장르' : '태그'}] ${value}</span> <i class="fa-solid fa-xmark" style="font-size: 0.7rem;"></i>`;
+    chip.innerHTML = `<span>[${type === 'genres' ? '장르' : '태그'}] ${escapeHtml(value)}</span> <i class="fa-solid fa-xmark" style="font-size: 0.7rem;"></i>`;
     chip.addEventListener('click', () => {
         if (type === 'genres') {
             selectedGenres.delete(value);
@@ -444,14 +455,14 @@ export function updateActiveFilterBar() {
     let html = '';
     selectedGenres.forEach(genre => {
         html += `<span class="active-filter-item">
-            <i class="fa-solid fa-list-ul"></i> ${genre}
-            <span class="filter-remove-btn" data-role="active-filter-remove" data-filter-type="genre" data-filter-value="${String(genre).replace(/"/g, '&quot;')}"><i class="fa-solid fa-xmark"></i></span>
+            <i class="fa-solid fa-list-ul"></i> ${escapeHtml(genre)}
+            <span class="filter-remove-btn" data-role="active-filter-remove" data-filter-type="genre" data-filter-value="${escapeHtml(genre)}"><i class="fa-solid fa-xmark"></i></span>
         </span>`;
     });
     selectedTags.forEach(tag => {
         html += `<span class="active-filter-item">
-            <i class="fa-solid fa-tag"></i> ${tag}
-            <span class="filter-remove-btn" data-role="active-filter-remove" data-filter-type="tag" data-filter-value="${String(tag).replace(/"/g, '&quot;')}"><i class="fa-solid fa-xmark"></i></span>
+            <i class="fa-solid fa-tag"></i> ${escapeHtml(tag)}
+            <span class="filter-remove-btn" data-role="active-filter-remove" data-filter-type="tag" data-filter-value="${escapeHtml(tag)}"><i class="fa-solid fa-xmark"></i></span>
         </span>`;
     });
 

@@ -568,6 +568,12 @@ def check_vaapi_support():
     가능한지 단계별로 점검한다 (ffmpeg 빌드 지원 여부 -> 인코더 존재 여부 ->
     /dev/dri 디바이스 패스스루 여부 -> vainfo로 드라이버 실동작 확인)."""
     device_path = request.args.get('device', '/dev/dri/renderD128')
+    # device는 os.path.exists()와 vainfo --device 인자로 그대로 흘러간다 - 셸을 거치지
+    # 않아(subprocess 리스트 인자) 명령 인젝션은 불가능하지만, 검증 없이는 임의 경로의
+    # 존재 여부를 캐내는 경로 프로빙 오라클로 악용될 수 있다. VAAPI 디바이스 노드
+    # 형태(/dev/dri/renderD128, /dev/dri/card0 등)만 허용한다.
+    if not re.match(r'^/dev/dri/[A-Za-z0-9_.-]+$', device_path):
+        return jsonify({'success': False, 'error': 'device 경로는 /dev/dri/ 아래의 디바이스 노드 이름만 허용됩니다 (예: /dev/dri/renderD128).'}), 400
 
     result = {
         'ffmpeg_found': False,

@@ -2,6 +2,8 @@
 
 이 문서는 `tools/scanner/metadata/` 계열의 로컬 메타데이터 파서 모듈을 작성하거나 수정할 때 따라야 하는 규칙을 정리합니다. 외부 검색 플러그인([guide_plugins.md](./guide_plugins.md))과는 목적이 다르며, 스캐너가 파일 시스템에서 직접 읽는 로컬 파서에만 적용됩니다.
 
+> 2026-09-15 보완: `comicinfo_xml.py`에 `cover_artist`/`teams`/`locations`/`characters` 4개 컬럼과 `AgeRating → books_lv` 연결을 추가했습니다(50만 권 규모 실사용 통계 기준 상위 5개 필드만 채택 - Writer/CoverArtist(Penciller)는 각각 약 50%/40%, Teams/Locations/Characters는 3~5% 수준). `Translator`/`Notes`/`PageCount`/`LanguageISO`/`GTIN` 등은 사용량이 미미해 이번 스코프에서 제외했습니다.
+
 ---
 
 ## 1. 기본 원칙
@@ -38,6 +40,20 @@
 - 텍스트 메타: `author`, `publisher`, `summary`, `link`, `score`, `release_date`, `genre`, `tags`
 - 표지 관련: `cover_b64_map`, `cover_image_url`
 - 상태값: `is_webtoon`, `has_yaml`
+- ComicInfo.xml 전용 추가 필드: `cover_artist`, `teams`, `locations`, `characters`, `books_lv`(AgeRating 원문)
+
+#### ComicInfo.xml 전용 필드 매핑
+
+| XML 태그 | 스캐너 반환 키 | 비고 |
+| --- | --- | --- |
+| `Writer` | `author` | 기존 호환 키. `Penciller`/`Artist`를 폴백으로 섞지 않는다 - 그림 작가가 글 작가로 잘못 표기되는 문제가 있었음(2026-09-15 수정) |
+| `CoverArtist` / `Penciller` | `cover_artist` | 존재하는 쪽을 우선 사용 - 명시적 `CoverArtist`가 있으면 그 값을, 없으면 `Penciller`를 표지 작가로 취급 |
+| `Teams` | `teams` | 캐릭터 팀 소속(예: 어벤져스). 쉼표 구분 텍스트, 정규화(중복 제거)해서 저장 |
+| `Locations` | `locations` | 등장 배경/장소. 쉼표 구분 텍스트 |
+| `Characters` | `characters` | 등장 캐릭터. 쉼표 구분 텍스트 |
+| `AgeRating` | `books_lv` | 원문 그대로 저장 - `services/content_rating_service.py`의 `_BOOKS_LV_LEVEL_MAP`이 ComicInfo 표준 어휘(M/MA15+/R18+/Teen 등)를 이미 대소문자 무시하고 인식하므로 별도 매핑 테이블 불필요 |
+
+이미 스캔된 도서에 이 필드들을 채우려면 **강제 재스캔**이 필요합니다 - 일반 스캔은 DB에 메타데이터가 이미 있는 CBZ 파일의 ComicInfo.xml을 다시 열지 않는 최적화 경로(`tools/scanner/tasks.py`의 offset-only fast path)를 타기 때문입니다. 신규 추가되는 CBZ는 자동으로 반영됩니다.
 
 ### 3) 예외 처리
 - 파일이 없거나 읽을 수 없으면 예외를 바깥으로 던지기보다 빈 메타를 반환합니다.
@@ -231,6 +247,8 @@ def parse_komga_yaml(folder_path, files=None, is_remote=False):
 2. `load_all_parsers()` 에서 자동 로드가 가능해야 합니다.
 3. `merge_local_metadata()` 와의 반환 키가 충돌하지 않아야 합니다.
 4. 테스트용으로는 최소한 로컬 폴더 1개, 원격 폴더 1개 시나리오를 확인해야 합니다.
+5. (ComicInfo.xml) `Penciller`만 있는 경우/`CoverArtist`만 있는 경우/둘 다 있는 경우 각각 `cover_artist` 우선순위를 검증합니다(존재하는 쪽 우선, 둘 다 있으면 명시적 `CoverArtist` 우선).
+6. (ComicInfo.xml) `cover_artist`/`teams`/`locations`/`characters`가 `author`나 `genre`/`tags`에 잘못 섞이지 않는지 확인합니다.
 
 ---
 

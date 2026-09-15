@@ -7,11 +7,13 @@ books_lv 컬럼(국내외 등급 표기 혼재: everyone/ma15+/m/r18/adult only/
 정규화하고, 관리자가 설정한 "성인 장르/태그 키워드" 목록과 책의 genre/tags 텍스트를
 대조해 실질 등급을 산출한다.
 
-ComicInfo.xml AgeRating 표준값도 인식하도록 매핑을 넓혀뒀다 - 향후 core 스캐너 파서
-(comicinfo_xml.py/kavita_yaml.py/series_json.py)가 AgeRating을 books_lv로 채워 넣도록
-연결될 때(커뮤니티 협의 진행 중, 아직 파서 자체는 미연결) 별도 수정 없이 바로 동작하게
-하기 위함. 이 어휘 매핑이 없으면 "Teen"/"PG" 같은 미인식 값이 안전 기본값(18)으로
-떨어져 전체이용가 도서까지 성인 취급되는 역효과가 난다.
+ComicInfo.xml AgeRating 표준값도 인식하도록 매핑을 넓혀뒀다 - core 스캐너 파서가
+AgeRating을 books_lv로 채워 넣을 때 별도 수정 없이 바로 동작하게 하기 위함(2026-09-15,
+tools/scanner/metadata/kavita_yaml.py가 최초로 연결됨 - 이 값은 Kavita YAML의 "Age
+Rating" 숫자 코드를 자체 매핑 테이블로 이 어휘로 변환해서 채운다. comicinfo_xml.py/
+series_json.py는 아직 미연결, 커뮤니티 협의 진행 중). 이 어휘 매핑이 없으면 "Teen"/
+"PG" 같은 미인식 값이 안전 기본값(18)으로 떨어져 전체이용가 도서까지 성인 취급되는
+역효과가 난다.
 """
 from services.settings_service import SettingsService
 
@@ -37,6 +39,7 @@ _BOOKS_LV_LEVEL_MAP = {
     'kids to adults': LEVEL_EVERYONE,
     'pg': LEVEL_EVERYONE,
     'teen': LEVEL_15,
+    'mature 15+': LEVEL_15,
     'mature 17+': LEVEL_18,
     'adults only 18+': LEVEL_18,
     'r18+': LEVEL_18,

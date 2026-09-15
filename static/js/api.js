@@ -72,6 +72,38 @@ export async function fetchDetailSidebarWidgets(type, seriesName, libraryId) {
   return res.json();
 }
 
+// 상세 페이지 헤더의 정적 점수 별을 대체할 커뮤니티 별점 위젯 조회 (활성 provider 없으면
+// success:false로 응답 - 프론트는 이 경우 기존 정적 별을 그대로 둔다)
+export async function fetchRatingWidget(type, context) {
+  const params = new URLSearchParams({
+    type,
+    series_name: context.seriesName || '',
+    library_id: context.libraryId || '',
+    book_id: context.bookId || '',
+    author: context.author || '',
+    isbn: context.isbn || '',
+  });
+  const res = await fetch(`/api/media/rating-widget?${params.toString()}&_=${Date.now()}`, {cache: 'no-store'});
+  return res.json();
+}
+
+export async function submitRating(type, context, rating) {
+  const res = await fetch('/api/media/rating-widget/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type,
+      series_name: context.seriesName || '',
+      library_id: context.libraryId || '',
+      book_id: context.bookId || '',
+      author: context.author || '',
+      isbn: context.isbn || '',
+      rating,
+    }),
+  });
+  return res.json();
+}
+
 export async function fetchMediaDetail(type, libraryId, series, representativeBookId = null) {
   let url = `/api/media/detail?type=${type}&library_id=${libraryId}&series=${encodeURIComponent(series)}`;
   if (representativeBookId) {

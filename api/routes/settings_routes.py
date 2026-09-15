@@ -281,3 +281,43 @@ def get_cover_storage_migrate_status():
         return jsonify({'success': True, 'status': get_migration_status()})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@settings_bp.route('/api/admin/mcp-pending-changes', methods=['GET'])
+@admin_required
+def get_mcp_pending_changes():
+    """MCP Tier B(대량/파괴적 작업) 제안 목록 조회 (관리자 전용). status 쿼리파라미터로
+    필터 가능(pending/approved/rejected), 생략 시 전체."""
+    try:
+        from services.mcp_proposal_service import McpProposalService
+        status = request.args.get('status') or None
+        return jsonify({'success': True, 'changes': McpProposalService.list_pending(status=status)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@settings_bp.route('/api/admin/mcp-pending-changes/<int:change_id>/approve', methods=['POST'])
+@admin_required
+def approve_mcp_pending_change(change_id):
+    """MCP Tier B 제안을 승인해 실제로 DB에 반영한다 (관리자 전용). MCP_WRITE_ENABLED
+    설정과 무관하게 항상 동작한다 - 이건 관리자가 인증된 웹 세션에서 직접 누르는 액션."""
+    try:
+        from services.mcp_proposal_service import McpProposalService
+        result = McpProposalService.approve(change_id, session.get('user_id'))
+        return jsonify(result)
+    except ValueError as ve:
+        return jsonify({'success': False, 'error': str(ve)}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@settings_bp.route('/api/admin/mcp-pending-changes/<int:change_id>/reject', methods=['POST'])
+@admin_required
+def reject_mcp_pending_change(change_id):
+    """MCP Tier B 제안을 거부한다 (관리자 전용) - DB에는 아무 것도 쓰지 않는다."""
+    try:
+        from services.mcp_proposal_service import McpProposalService
+        data = request.get_json(silent=True) or {}
+        result = McpProposalService.reject(change_id, session.get('user_id'), note=data.get('note'))
+        return jsonify(result)
+    except ValueError as ve:
+        return jsonify({'success': False, 'error': str(ve)}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500

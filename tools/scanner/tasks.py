@@ -241,7 +241,8 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
     meta_has_data = bool(
         merged_meta['author'] or merged_meta['publisher'] or
         merged_meta['summary'] or merged_meta['release_date'] or
-        merged_meta['cover_b64_map']
+        merged_meta['cover_b64_map'] or
+        merged_meta.get('books_lv') or merged_meta.get('publication_status')
     )
 
     is_series_folder = bool(merged_meta.get('has_yaml') and merged_meta.get('is_webtoon'))
@@ -319,12 +320,25 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                 # Skip remote paths due to high I/O cost -> delegated to Lazy Scanner
                 if not is_remote and file_format in ('cbz', 'zip') and (
                     not merged_meta['author'] or not merged_meta['summary'] or not merged_meta.get('genre') or not merged_meta.get('tags')
+                    or not merged_meta.get('cover_artist') or not merged_meta.get('teams')
+                    or not merged_meta.get('locations') or not merged_meta.get('characters')
+                    or not merged_meta.get('books_lv')
                 ):
                     try:
                         comicinfo = parse_comicinfo_from_cbz(full_path)
                         if comicinfo['author'] and not merged_meta['author']:
                             merged_meta['author'] = comicinfo['author']
                             print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml author fallback: {comicinfo['author']}")
+                        if comicinfo.get('cover_artist') and not merged_meta.get('cover_artist'):
+                            merged_meta['cover_artist'] = comicinfo['cover_artist']
+                        if comicinfo.get('teams') and not merged_meta.get('teams'):
+                            merged_meta['teams'] = comicinfo['teams']
+                        if comicinfo.get('locations') and not merged_meta.get('locations'):
+                            merged_meta['locations'] = comicinfo['locations']
+                        if comicinfo.get('characters') and not merged_meta.get('characters'):
+                            merged_meta['characters'] = comicinfo['characters']
+                        if comicinfo.get('books_lv') and not merged_meta.get('books_lv'):
+                            merged_meta['books_lv'] = comicinfo['books_lv']
                         if comicinfo['publisher'] and not merged_meta['publisher']:
                             merged_meta['publisher'] = comicinfo['publisher']
                         if comicinfo['summary'] and not merged_meta['summary']:

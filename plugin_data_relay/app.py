@@ -2,10 +2,11 @@ import os
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from database import (
     init_db, get_db_connection, validate_identifier, validate_field_type,
-    InvalidIdentifierError, MAX_FIELDS_PER_PLUGIN, data_table_name,
+    InvalidIdentifierError, MAX_FIELDS_PER_PLUGIN, NUMERIC_FIELD_TYPES, data_table_name,
     get_plugin_fields, register_plugin, verify_plugin_secret,
     get_plugin_status, set_plugin_status,
     register_developer, verify_developer_secret,
+    get_daily_write_limit, count_writes_last_24h, find_record_by_unique_key, compute_aggregate,
     PLUGIN_STATUS_APPROVED, PLUGIN_STATUS_REJECTED,
 )
 
@@ -85,6 +86,7 @@ def admin_panel():
             "fields": fields,
             "user_count": user_count,
             "record_count": record_count,
+            "daily_write_limit": p["daily_write_limit"],
         })
 
     conn.close()
@@ -192,6 +194,7 @@ def plugin_schema_register():
     developer_secret = (data.get("developer_secret") or "").strip()
     plugin_id = (data.get("plugin_id") or "").strip()
     raw_fields = data.get("fields") or []
+    daily_write_limit = data.get("daily_write_limit")
 
     if not developer_id or not developer_secret:
         return jsonify({"success": False, "message": "developer_id 및 developer_secret이 필요합니다. 먼저 /regi_user에서 개발자 계정을 등록하세요."}), 400
@@ -214,7 +217,7 @@ def plugin_schema_register():
             validate_field_type(field_type)
             fields.append({"name": name, "type": field_type})
 
-        plugin_secret = register_plugin(cursor, plugin_id, fields, developer_id)
+        plugin_secret = register_plugin(cursor, plugin_id, fields, developer_id, daily_write_limit=daily_write_limit)
         conn.commit()
     except InvalidIdentifierError as e:
         conn.close()
@@ -261,6 +264,7 @@ def add_record(plugin_id):
     user_id = data.get("user_id", "").strip()
     secret_token = data.get("secret_token", "").strip()
     values = data.get("values") or {}
+    unique_by = data.get("unique_by") or []
 
     if not user_id or not secret_token:
         return jsonify({"success": False, "message": "인증 정보가 필요합니다."}), 400
@@ -283,24 +287,46 @@ def add_record(plugin_id):
         conn.close()
         return jsonify({"success": False, "message": f"등록되지 않은 필드입니다: {sorted(unknown)}"}), 400
 
-    columns = ["user_id"] + list(values.keys())
-    placeholders = ["?"] * len(columns)
-    params = [user_id] + [values[k] for k in values.keys()]
+    if not isinstance(unique_by, list) or any(f not in allowed_fields for f in unique_by):
+        conn.close()
+        return jsonify({"success": False, "message": "unique_by는 등록된 필드명 리스트여야 합니다."}), 400
 
-    quoted_columns = ", ".join(f'"{c}"' if c != "user_id" else c for c in columns)
     table_name = data_table_name(plugin_id)
-    cursor.execute(
-        f'INSERT INTO "{table_name}" ({quoted_columns}) VALUES ({", ".join(placeholders)})',
-        params,
-    )
-    record_id = cursor.lastrowid
+
+    # 사용자당 일일 쓰기 상한 - upsert로 인한 UPDATE도 동일하게 "쓰기 시도"로 취급해 카운트한다
+    # (구분해서 UPDATE만 봐주면 매번 같은 값을 재제출하는 방식으로 우회 가능해지기 때문).
+    daily_limit = get_daily_write_limit(cursor, plugin_id)
+    if daily_limit is not None:
+        recent_count = count_writes_last_24h(cursor, table_name, user_id)
+        if recent_count >= daily_limit:
+            conn.close()
+            return jsonify({"success": False, "message": f"일일 쓰기 한도({daily_limit}건)를 초과했습니다. 24시간 후 다시 시도하세요."}), 429
+
+    existing_id = find_record_by_unique_key(cursor, table_name, user_id, unique_by, values) if unique_by else None
+
+    if existing_id is not None:
+        set_clause = ", ".join(f'"{k}" = ?' for k in values.keys())
+        params = list(values.values()) + [existing_id]
+        cursor.execute(f'UPDATE "{table_name}" SET {set_clause} WHERE id = ?', params)
+        record_id = existing_id
+    else:
+        columns = ["user_id"] + list(values.keys())
+        placeholders = ["?"] * len(columns)
+        params = [user_id] + [values[k] for k in values.keys()]
+        quoted_columns = ", ".join(f'"{c}"' if c != "user_id" else c for c in columns)
+        cursor.execute(
+            f'INSERT INTO "{table_name}" ({quoted_columns}) VALUES ({", ".join(placeholders)})',
+            params,
+        )
+        record_id = cursor.lastrowid
+
     conn.commit()
 
     cursor.execute(f'SELECT * FROM "{table_name}" WHERE id = ?', (record_id,))
     new_record = dict(cursor.fetchone())
     conn.close()
 
-    return jsonify({"success": True, "record": new_record})
+    return jsonify({"success": True, "record": new_record, "updated": existing_id is not None})
 
 
 @app.route("/api/<plugin_id>/records", methods=["GET"])
@@ -310,6 +336,8 @@ def list_records(plugin_id):
     order_by = request.args.get("order_by", "").strip()
     order_dir = request.args.get("order_dir", "desc").strip().lower()
     limit = request.args.get("limit", "50").strip()
+    filter_field = request.args.get("filter_field", "").strip()
+    filter_value = request.args.get("filter_value", None)
 
     if not user_id or not secret_token:
         return jsonify({"success": False, "message": "인증 정보가 필요합니다."}), 400
@@ -333,6 +361,10 @@ def list_records(plugin_id):
         conn.close()
         return jsonify({"success": False, "message": f"정렬할 수 없는 필드입니다: {order_by}"}), 400
 
+    if filter_field and filter_field not in allowed_fields and filter_field not in ("user_id",):
+        conn.close()
+        return jsonify({"success": False, "message": f"필터링할 수 없는 필드입니다: {filter_field}"}), 400
+
     if order_dir not in ("asc", "desc"):
         order_dir = "desc"
 
@@ -343,11 +375,61 @@ def list_records(plugin_id):
 
     table_name = data_table_name(plugin_id)
     order_clause = f'ORDER BY "{order_by}" {order_dir.upper()}' if order_by else "ORDER BY id DESC"
-    cursor.execute(f'SELECT * FROM "{table_name}" {order_clause} LIMIT ?', (limit,))
+    where_clause = ""
+    params = []
+    if filter_field:
+        where_clause = f' WHERE "{filter_field}" = ?'
+        params.append(filter_value)
+    params.append(limit)
+    cursor.execute(f'SELECT * FROM "{table_name}"{where_clause} {order_clause} LIMIT ?', params)
     records = [dict(row) for row in cursor.fetchall()]
 
     conn.close()
     return jsonify({"success": True, "records": records})
+
+
+@app.route("/api/<plugin_id>/records/aggregate", methods=["GET"])
+def aggregate_records(plugin_id):
+    """agg_field(INTEGER/REAL)의 COUNT/AVG/MIN/MAX를 서버에서 직접 계산해 반환한다.
+    list_records()와 달리 200건 LIMIT과 무관하게 테이블 전체(또는 filter 조건에 맞는 행)를
+    대상으로 집계하므로, "이 book_key의 평균 별점" 같은 조회에 이 엔드포인트를 쓴다."""
+    user_id = request.args.get("user_id", "").strip()
+    secret_token = request.args.get("secret_token", "").strip()
+    agg_field = request.args.get("agg_field", "").strip()
+    filter_field = request.args.get("filter_field", "").strip()
+    filter_value = request.args.get("filter_value", None)
+
+    if not user_id or not secret_token:
+        return jsonify({"success": False, "message": "인증 정보가 필요합니다."}), 400
+    if not agg_field:
+        return jsonify({"success": False, "message": "agg_field가 필요합니다."}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    usable_error = check_plugin_usable(cursor, plugin_id)
+    if usable_error:
+        conn.close()
+        return usable_error
+
+    if not authenticate_end_user(cursor, plugin_id, user_id, secret_token):
+        conn.close()
+        return jsonify({"success": False, "message": "인증 실패"}), 401
+
+    field_types = {f["field_name"]: f["field_type"] for f in get_plugin_fields(cursor, plugin_id)}
+    if agg_field not in field_types or field_types[agg_field] not in NUMERIC_FIELD_TYPES:
+        conn.close()
+        return jsonify({"success": False, "message": f"agg_field는 INTEGER/REAL 필드만 가능합니다: {agg_field}"}), 400
+
+    if filter_field and filter_field not in field_types and filter_field != "user_id":
+        conn.close()
+        return jsonify({"success": False, "message": f"필터링할 수 없는 필드입니다: {filter_field}"}), 400
+
+    table_name = data_table_name(plugin_id)
+    result = compute_aggregate(cursor, table_name, agg_field, filter_field=filter_field or None, filter_value=filter_value)
+
+    conn.close()
+    return jsonify({"success": True, **result})
 
 
 @app.route("/api/<plugin_id>/records/<int:record_id>", methods=["DELETE"])

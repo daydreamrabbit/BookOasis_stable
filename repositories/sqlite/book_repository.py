@@ -440,7 +440,7 @@ class BookRepository:
         if library_id and library_id not in ('all', 'history', 'favorite', 'home'):
             # 요약 설명이 채워진 것을 먼저 매칭
             query1 = f"""
-                SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
+                SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
                 FROM books
                 WHERE series_name = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}
                   AND (summary IS NOT NULL AND summary != '')
@@ -450,7 +450,7 @@ class BookRepository:
             row = cursor.fetchone()
             if not row:
                 query2 = f"""
-                    SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
+                    SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
                     FROM books WHERE series_name = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}
                     LIMIT 1
                 """
@@ -458,7 +458,7 @@ class BookRepository:
                 row = cursor.fetchone()
         else:
             query1 = f"""
-                SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
+                SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
                 FROM books
                 WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}
                   AND (summary IS NOT NULL AND summary != '')
@@ -468,7 +468,7 @@ class BookRepository:
             row = cursor.fetchone()
             if not row:
                 query2 = f"""
-                    SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
+                    SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
                     FROM books WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}
                     LIMIT 1
                 """
@@ -528,7 +528,7 @@ class BookRepository:
         return row['latest_updated'] if row else None
 
     @staticmethod
-    def update_media_detail(db_type, series_name, author, isbn, publisher, summary, link, genre, tags, series_alias=None, cover_image_url=None, books_lv=None):
+    def update_media_detail(db_type, series_name, author, isbn, publisher, summary, link, genre, tags, series_alias=None, cover_image_url=None, books_lv=None, publication_status=None):
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
@@ -543,12 +543,13 @@ class BookRepository:
                         genre = ?,
                         tags = ?,
                         books_lv = ?,
+                        publication_status = COALESCE(?, publication_status),
                         series_alias = ?,
                         cover_image = ?,
                         metadata_locked = 1,
                         cover_updated_at = CURRENT_TIMESTAMP
                     WHERE series_name = ?
-                """, (author, isbn, publisher, summary, link, genre, tags, books_lv, series_alias, cover_image_url, series_name))
+                """, (author, isbn, publisher, summary, link, genre, tags, books_lv, publication_status, series_alias, cover_image_url, series_name))
             else:
                 cursor.execute("""
                     UPDATE books
@@ -560,11 +561,12 @@ class BookRepository:
                         genre = ?,
                         tags = ?,
                         books_lv = ?,
+                        publication_status = COALESCE(?, publication_status),
                         series_alias = ?,
                         metadata_locked = 1,
                         cover_updated_at = CURRENT_TIMESTAMP
                     WHERE series_name = ?
-                """, (author, isbn, publisher, summary, link, genre, tags, books_lv, series_alias, series_name))
+                """, (author, isbn, publisher, summary, link, genre, tags, books_lv, publication_status, series_alias, series_name))
             conn.commit()
             return cursor.rowcount > 0
         except Exception as e:

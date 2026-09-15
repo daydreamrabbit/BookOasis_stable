@@ -189,7 +189,7 @@ class SeriesRepository:
                        b.cover_image, b.cover_updated_at, COALESCE(b.cover_align, 'center') AS cover_align,
                        0 AS is_favorite,
                        b.created_at,
-                       b.genre, b.tags, b.books_lv, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                       b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
                        rep.series_book_count AS series_book_count
                 FROM books b
                 INNER JOIN (

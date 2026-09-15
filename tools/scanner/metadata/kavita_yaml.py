@@ -102,6 +102,39 @@ KNOWN_KAVITA_KEYS = {
     'search', 'person publisher', 'person writers', 'web links', 'writer', 'banner'
 }
 
+# Kavita 내부 DB의 AgeRating enum(정수 코드)을 이 앱의 books_lv 어휘(문자열)로 변환.
+# kavita.yaml의 "Age Rating" 필드는 사람이 읽는 텍스트("Teen" 등)가 아니라 이 숫자
+# 코드를 그대로 문자열화해서 내보낸다(예: '3') - ComicInfo.xml의 AgeRating과는 다른
+# 형식이라 별도 매핑이 필요하다. 코드 값은 Kavita 소스(API/Entities/Enums/AgeRating.cs)
+# 기준(2026-09 확인): NotApplicable=-1, Unknown=0, RatingPending=1, EarlyChildhood=2,
+# Everyone=3, G=4, Everyone10Plus=5, PG=6, KidsToAdults=7, Teen=8, Mature15Plus=9,
+# Mature17Plus=10, Mature=11, R18Plus=12, AdultsOnly=13, X18Plus=14.
+# services/content_rating_service.py의 _BOOKS_LV_LEVEL_MAP이 이미 인식하는 어휘로
+# 매핑한다(대소문자 무시). -1/0/1(NotApplicable/Unknown/RatingPending)은 의도적으로
+# 매핑하지 않고 'Unknown' 문자열을 그대로 저장 - 그 서비스가 "등급을 실제로 알 수
+# 없는 값"을 안전 기본값(18세)으로 처리하도록 설계돼 있어, 빈 문자열(전체이용가로
+# 오인됨)을 저장하면 안 된다.
+KAVITA_AGE_RATING_MAP = {
+    2: 'Early Childhood',
+    3: 'Everyone',
+    4: 'G',
+    5: 'Everyone 10+',
+    6: 'PG',
+    7: 'Kids to Adults',
+    8: 'Teen',
+    9: 'Mature 15+',
+    10: 'Mature 17+',
+    11: 'Mature 17+',  # Kavita의 범용 "Mature" 등급 - 17+와 동급으로 취급(보수적 매핑)
+    12: 'R18+',
+    13: 'Adults Only 18+',
+    14: 'X18+',
+}
+
+# Kavita PublicationStatus enum(정수 코드) - 원본 코드를 그대로 books.publication_status에
+# 저장한다(표시용 라벨 변환은 조회 시점에 services/book_detail_service.py에서 수행 -
+# content_rating_label과 동일한 인라인 매핑 관례). 0=연재(Ongoing), 1=휴재(Hiatus),
+# 2=완결(Completed). 그 외 값이나 미지정은 "알 수 없음"으로 표시한다.
+
 
 def _normalize_misaligned_sequence_siblings(content):
     """`search:` 같은 시퀀스의 첫 항목만 `- Key: Value`로 대시가 붙고, 같은 항목에
@@ -189,6 +222,8 @@ def parse_kavita_yaml(folder_path, files=None, is_remote=False):
         'link': '',
         'genre': '',
         'tags': '',
+        'books_lv': '',
+        'publication_status': '',
         'cover_b64_map': {},
         'banner_b64': None,
         'has_yaml': False,
@@ -330,6 +365,29 @@ def parse_kavita_yaml(folder_path, files=None, is_remote=False):
                 return ''
             return str(val).strip()
 
+        def _parse_age_rating(val):
+            """Kavita AgeRating 정수 코드(문자열로 내려옴, 예: '3')를 books_lv 어휘로
+            변환. 파싱 실패(빈 값/숫자 아님)나 인식 못 하는 코드는 'Unknown'을 반환해
+            content_rating_service.py가 안전 기본값(18세)으로 처리하게 한다."""
+            if val is None or str(val).strip() == '':
+                return ''
+            try:
+                code = int(str(val).strip())
+            except (TypeError, ValueError):
+                return 'Unknown'
+            return KAVITA_AGE_RATING_MAP.get(code, 'Unknown')
+
+        def _parse_publication_status(val):
+            """Kavita PublicationStatus 정수 코드를 원본 그대로 반환(표시 변환은 조회
+            시점에 수행). 빈 값/숫자 아님은 빈 문자열로 남겨 '알 수 없음' 처리되게 한다."""
+            if val is None or str(val).strip() == '':
+                return ''
+            try:
+                int(str(val).strip())
+            except (TypeError, ValueError):
+                return ''
+            return str(val).strip()
+
         if isinstance(data, dict):
             sources = [data.get('meta', {}), data]
             for src in sources:
@@ -344,6 +402,8 @@ def parse_kavita_yaml(folder_path, files=None, is_remote=False):
                 meta['link'] = meta['link'] or src.get('Web Links') or src.get('link') or ''
                 meta['tags'] = meta['tags'] or _parse_list_or_str(src.get('Tags') or src.get('tags') or src.get('tag'))
                 meta['genre'] = meta['genre'] or _parse_list_or_str(src.get('Genres') or src.get('genre'))
+                meta['books_lv'] = meta['books_lv'] or _parse_age_rating(src.get('Age Rating') or src.get('age rating'))
+                meta['publication_status'] = meta['publication_status'] or _parse_publication_status(src.get('Publication Status') or src.get('publication status'))
                 # 배너 이미지(Base64) - 공유 드라이브 도서관리 담당자와 합의된 필드.
                 # cover처럼 파일별 매핑(files.<name>.cover)이 아니라 시리즈/폴더 전체에
                 # 대표 하나만 있으면 되는 개념이라 top-level 단일 값으로 취급한다.

@@ -2983,6 +2983,34 @@ body {
     color: #eab308;
     font-size: 1.1rem;
     letter-spacing: 2px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.detail-score-interactive {
+    letter-spacing: 2px;
+}
+
+.detail-score-interactive .detail-score-star {
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+.detail-score-interactive .detail-score-star:hover {
+    transform: scale(1.15);
+}
+
+.detail-score-interactive[data-disabled="1"] .detail-score-star {
+    cursor: default;
+    opacity: 0.7;
+}
+
+.detail-score-summary {
+    font-size: 0.78rem;
+    color: var(--app-text-muted);
+    letter-spacing: normal;
 }
 
 .book-summary-text {

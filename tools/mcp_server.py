@@ -135,5 +135,96 @@ def read_logs(log_name: str = "media_server.log", lines: int = 200, search: str 
     return _quiet(_run)
 
 
+@mcp.tool()
+def call_api(path: str, query_params: dict = None, max_response_chars: int = 20000) -> dict:
+    """BookOasis의 기존 GET REST API를 그대로 호출합니다 (사용 가능한 경로 목록은
+    docs/api_endpoints.md 참고). 예: path="/api/media/list", query_params={"type": "general",
+    "library_id": "all", "limit": 5}. 진단 툴이 커버하지 못하는 기존 기능(상세정보, 장르/태그
+    목록, 스캔 상태, 플러그인 목록 등)을 새 코드 없이 그대로 재사용할 때 쓰세요.
+    GET만 가능합니다 - 이 툴 자체가 다른 HTTP 메서드를 호출할 방법을 제공하지 않습니다.
+    내부적으로 관리자 세션으로 인증되어 호출되므로 성인 서재/admin_only 플러그인 데이터도
+    조회됩니다."""
+    def _run():
+        from services.mcp_admin_tools_service import McpAdminToolsService
+        return McpAdminToolsService.call_api(path, query_params=query_params, max_response_chars=max_response_chars)
+    return _quiet(_run)
+
+
+@mcp.tool()
+def update_book_metadata(series_name: str, db_type: str = "general", library_id: str = "all",
+                          author: str = None, publisher: str = None, summary: str = None,
+                          link: str = None, genre: str = None, tags: str = None,
+                          isbn: str = None, series_alias: str = None, books_lv: str = None,
+                          publication_status: str = None) -> dict:
+    """[쓰기 도구] 시리즈의 장르/태그/작가 등 메타데이터를 부분 수정합니다. 지정하지 않은
+    필드는 현재 값이 그대로 유지됩니다(부분 업데이트). 관리자가 설정 > 일반 설정에서
+    "MCP 쓰기 도구 허용"을 켜야만 동작하며, 꺼져 있으면 에러를 반환합니다.
+    이 도구는 기존 REST API가 쓰는 것과 동일한 검증된 서비스 메서드만 호출하고, 코어나
+    플러그인 소스 코드/파일은 절대 건드리지 않습니다. 변경 전/후 값은 응답의
+    changed_fields와 logs/mcp_write_audit.log에 함께 기록됩니다. 실행 전 search_books로
+    대상 시리즈명이 정확한지 먼저 확인하세요."""
+    def _run():
+        from services.mcp_admin_tools_service import McpAdminToolsService
+        fields = {
+            'author': author, 'publisher': publisher, 'summary': summary, 'link': link,
+            'genre': genre, 'tags': tags, 'isbn': isbn, 'series_alias': series_alias, 'books_lv': books_lv,
+            'publication_status': publication_status,
+        }
+        fields = {k: v for k, v in fields.items() if v is not None}
+        return McpAdminToolsService.update_book_metadata(db_type, series_name, library_id=library_id, **fields)
+    return _quiet(_run)
+
+
+@mcp.tool()
+def bulk_set_favorite(book_ids: list, is_favorite: bool, db_type: str = "general", user_id: int = 1) -> dict:
+    """[쓰기 도구] 도서 id 목록에 대해 즐겨찾기를 일괄 등록/해제합니다. 한 번에 최대 500건까지
+    처리 가능합니다(그 이상의 대량 작업은 이 도구로 하지 마세요). 관리자가 설정 > 일반 설정에서
+    "MCP 쓰기 도구 허용"을 켜야만 동작합니다. 코어/플러그인 파일은 건드리지 않으며 서재 DB의
+    즐겨찾기 상태만 변경합니다."""
+    def _run():
+        from services.mcp_admin_tools_service import McpAdminToolsService
+        return McpAdminToolsService.bulk_set_favorite(db_type, book_ids, is_favorite, user_id)
+    return _quiet(_run)
+
+
+@mcp.tool()
+def propose_bulk_book_metadata_update(series_names: list, db_type: str = "general", library_id: str = "all",
+                                       author: str = None, publisher: str = None, summary: str = None,
+                                       link: str = None, genre: str = None, tags: str = None,
+                                       isbn: str = None, series_alias: str = None, books_lv: str = None,
+                                       publication_status: str = None) -> dict:
+    """[쓰기 도구 - Tier B, 즉시 실행 안 함] 여러 시리즈에 대한 메타데이터 일괄 수정을
+    "제안"합니다. update_book_metadata(단일 시리즈)와 달리 이 도구는 DB를 바로 바꾸지
+    않고, 변경 전/후 값 미리보기를 만들어 mcp_pending_changes 테이블에 대기시킵니다.
+    관리자가 설정 > MCP 승인 대기 화면에서 검토 후 승인해야만 실제로 반영됩니다.
+    관리자가 설정 > 일반 설정에서 "MCP 쓰기 도구 허용"을 켜야만 제안 생성이 가능합니다
+    (승인/거부 자체는 그 설정과 무관하게 항상 가능). 응답의 change_id를 사용자에게 알려주고
+    관리자 승인을 요청하도록 안내하세요. 단일 시리즈만 수정한다면 즉시 반영되는
+    update_book_metadata를 대신 쓰는 게 더 간단합니다."""
+    def _run():
+        from services.mcp_proposal_service import McpProposalService
+        fields = {
+            'author': author, 'publisher': publisher, 'summary': summary, 'link': link,
+            'genre': genre, 'tags': tags, 'isbn': isbn, 'series_alias': series_alias, 'books_lv': books_lv,
+            'publication_status': publication_status,
+        }
+        fields = {k: v for k, v in fields.items() if v is not None}
+        return McpProposalService.propose_bulk_book_metadata_update(db_type, series_names, library_id, fields)
+    return _quiet(_run)
+
+
+@mcp.tool()
+def propose_bulk_set_favorite(book_ids: list, is_favorite: bool, db_type: str = "general", user_id: int = 1) -> dict:
+    """[쓰기 도구 - Tier B, 즉시 실행 안 함] 500건을 초과하는 대량 즐겨찾기 일괄 등록/해제를
+    "제안"합니다. bulk_set_favorite(≤500건, 즉시 실행)와 달리 이 도구는 DB를 바로 바꾸지
+    않고 mcp_pending_changes 테이블에 제안만 남기며, 관리자가 설정 > MCP 승인 대기 화면에서
+    승인해야 실제로 반영됩니다. 500건 이하라면 즉시 반영되는 bulk_set_favorite를 대신
+    쓰는 게 더 간단합니다."""
+    def _run():
+        from services.mcp_proposal_service import McpProposalService
+        return McpProposalService.propose_bulk_set_favorite(db_type, book_ids, is_favorite, user_id)
+    return _quiet(_run)
+
+
 if __name__ == '__main__':
     mcp.run()

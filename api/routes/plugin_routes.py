@@ -319,6 +319,13 @@ def get_dashboard_widget_data_api(plugin_id):
 
         result = provider.get_dashboard_data(db_type, limit=limit)
 
+        if result.get('success'):
+            dashboard_ui = MetadataFactory._load_plugin_ui_bundle(plugin_id, target='dashboard')
+            if dashboard_ui:
+                result['html'] = dashboard_ui.get('html', '')
+                result['css'] = dashboard_ui.get('css', '')
+                result['js'] = dashboard_ui.get('js', '')
+
         status_code = 200 if result.get('success') else 400
         return jsonify(result), status_code
     except ValueError as ve:
@@ -406,6 +413,96 @@ def get_detail_sidebar_widgets_api():
             })
 
         return jsonify({'success': True, 'widgets': widgets_with_data}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+def _find_active_rating_provider(db_type):
+    """rating_widget을 선언하고 이 세션(db_type)에 노출 가능한 provider 중 order가 가장
+    작은 것 하나를 찾는다. detail_view/detail_sidebar_widget과 달리 상세 페이지 헤더의
+    별 다섯 개 자리는 하나뿐이라 여러 provider가 동시에 활성화될 수 없는 단일 슬롯이다."""
+    from services.metadata_factory import MetadataFactory
+
+    providers = MetadataFactory.get_available_providers(include_view_ui=False, include_settings_ui=False)
+    candidates = []
+    for p in providers:
+        if not p.get('enabled'):
+            continue
+        if p.get('admin_only') and session.get('role') != 'admin':
+            continue
+        widget = p.get('rating_widget')
+        if not isinstance(widget, dict):
+            continue
+        if db_type not in _resolve_plugin_sessions(widget):
+            continue
+        candidates.append((int(widget.get('order') or 50), p.get('id')))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])
+    return MetadataFactory.get_provider_by_id(candidates[0][1])
+
+@plugin_routes_bp.route('/api/media/rating-widget', methods=['GET'])
+@login_required
+def get_rating_widget_api():
+    """도서 상세 페이지 헤더의 정적 점수 별을 대체할 커뮤니티 별점 위젯 데이터를 조회합니다.
+    성인/오디오북/영상 강좌 세션은 rating_widget 계약 자체가 sessions='general'로 제한돼
+    있으므로 활성 provider가 없다고 나오고, 프론트는 기존 정적 별로 그대로 폴백한다."""
+    db_type = request.args.get('type', 'general').strip()
+    if not check_adult_permission(db_type):
+        return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
+
+    context = {
+        'series_name': request.args.get('series_name', ''),
+        'library_id': request.args.get('library_id') or None,
+        'book_id': request.args.get('book_id') or None,
+        'author': request.args.get('author', ''),
+        'isbn': request.args.get('isbn', ''),
+    }
+
+    try:
+        provider = _find_active_rating_provider(db_type)
+        if not provider:
+            return jsonify({'success': False, 'error': 'no active rating widget'}), 404
+
+        result = provider.get_rating_widget_data(db_type, context)
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@plugin_routes_bp.route('/api/media/rating-widget/submit', methods=['POST'])
+@login_required
+def submit_rating_widget_api():
+    """커뮤니티 별점 제출. rating_widget을 선언한 provider의 submit_rating()을 호출한다 -
+    시리즈당 1회/하루 상한 등 실제 어뷰징 방지 로직은 provider(relay 호출부)가 책임진다."""
+    payload = request.get_json(silent=True) or {}
+    db_type = (payload.get('type') or 'general').strip()
+    if not check_adult_permission(db_type):
+        return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
+
+    try:
+        rating = int(payload.get('rating'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'invalid rating'}), 400
+    if rating < 1 or rating > 5:
+        return jsonify({'success': False, 'error': 'rating must be between 1 and 5'}), 400
+
+    context = {
+        'series_name': payload.get('series_name', ''),
+        'library_id': payload.get('library_id') or None,
+        'book_id': payload.get('book_id') or None,
+        'author': payload.get('author', ''),
+        'isbn': payload.get('isbn', ''),
+    }
+
+    try:
+        provider = _find_active_rating_provider(db_type)
+        if not provider:
+            return jsonify({'success': False, 'error': 'no active rating widget'}), 404
+
+        result = provider.submit_rating(db_type, context, rating)
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

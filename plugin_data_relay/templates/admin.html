@@ -160,6 +160,7 @@
                             <th style="width: 27%;">필드 스키마 (최대 5개)</th>
                             <th style="width: 8%;">사용자 수</th>
                             <th style="width: 8%;">레코드 수</th>
+                            <th style="width: 8%;">일일상한</th>
                             <th style="width: 12%;">등록일시</th>
                             <th style="width: 22%;">승인 관리</th>
                         </tr>
@@ -186,6 +187,7 @@
                                 </td>
                                 <td>{{ plugin.user_count }}명</td>
                                 <td>{{ plugin.record_count }}개</td>
+                                <td><span class="text-secondary small">{{ plugin.daily_write_limit and (plugin.daily_write_limit ~ '건/일') or '무제한' }}</span></td>
                                 <td><span class="text-secondary small">{{ plugin.created_at }}</span></td>
                                 <td>
                                     {% if plugin.status != 'approved' %}
@@ -203,7 +205,7 @@
                             {% endfor %}
                         {% else %}
                             <tr>
-                                <td colspan="8" class="text-center py-5 text-secondary">
+                                <td colspan="9" class="text-center py-5 text-secondary">
                                     <i class="bi bi-inbox display-5 d-block mb-2"></i>
                                     등록된 플러그인이 없습니다.
                                 </td>

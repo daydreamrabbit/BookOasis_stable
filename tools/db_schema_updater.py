@@ -397,6 +397,21 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
+CREATE TABLE IF NOT EXISTS mcp_pending_changes (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    tool_name VARCHAR(100) NOT NULL,
+    db_type VARCHAR(20) NOT NULL DEFAULT 'general',
+    target TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    preview TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    decided_at DATETIME DEFAULT NULL,
+    decided_by BIGINT DEFAULT NULL,
+    decision_note TEXT,
+    INDEX idx_mcp_pending_changes_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
 CREATE TABLE IF NOT EXISTS scan_history (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     task_type VARCHAR(100) NOT NULL,

@@ -1,0 +1,40 @@
+<!-- 5.8 MCP 승인 대기 탭 -->
+<div id="settings-tab-mcp-pending" class="settings-tab-content" style="display: none; flex-direction: column; gap: 1.5rem;">
+    <div class="dashboard-section">
+        <div class="mcp-pending-section-header" style="margin-bottom: 1.2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.6rem;">
+            <div>
+                <h3 class="section-title" style="margin: 0; color: var(--app-text-primary); font-size: 1.2rem; font-weight: 700;">
+                    <i class="fa-solid fa-robot" style="color: var(--app-accent); margin-right: 0.5rem;"></i> <span data-i18n="mcp_pending.title">MCP 승인 대기</span>
+                </h3>
+                <p style="font-size: 0.82rem; color: var(--app-text-muted); margin: 0.4rem 0 0 0;" data-i18n="mcp_pending.desc">
+                    AI(MCP)가 대량으로 제안한 변경 사항입니다. 아래 변경 전/후 값을 확인한 뒤 승인해야 실제로 서재 DB에 반영됩니다.
+                </p>
+            </div>
+            <button class="action-btn" data-role="mcp-pending-refresh" style="padding: 0.4rem 1rem; background-color: rgba(59, 130, 246, 0.2); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 6px; color: #93c5fd; font-weight: 600; cursor: pointer;">
+                <i class="fa-solid fa-rotate-right"></i> <span data-i18n="mcp_pending.btn_refresh">새로고침</span>
+            </button>
+        </div>
+
+        <div class="settings-table-wrapper" style="background: rgba(var(--app-panel-rgb), 0.25); border: 1px solid rgba(var(--app-panel-border-rgb), 0.05); border-radius: 8px; overflow: hidden; backdrop-filter: blur(10px);">
+            <table class="settings-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem;">
+                <thead>
+                    <tr style="background: rgba(var(--app-panel-rgb), 0.4); border-bottom: 1px solid rgba(var(--app-panel-border-rgb), 0.08); color: var(--app-text-muted);">
+                        <th style="padding: 1rem; width: 60px;">ID</th>
+                        <th style="padding: 1rem; width: 160px;" data-i18n="mcp_pending.col_tool">종류</th>
+                        <th style="padding: 1rem;" data-i18n="mcp_pending.col_target">대상</th>
+                        <th style="padding: 1rem;" data-i18n="mcp_pending.col_preview">변경 내용 미리보기</th>
+                        <th style="padding: 1rem; width: 160px;" data-i18n="mcp_pending.col_time">제안 시각</th>
+                        <th style="padding: 1rem; width: 160px;" data-i18n="mcp_pending.col_actions">액션</th>
+                    </tr>
+                </thead>
+                <tbody id="mcp-pending-table-body">
+                    <tr>
+                        <td colspan="6" style="padding: 2rem; text-align: center; color: var(--app-text-muted);"><span data-i18n="mcp_pending.loading">데이터를 불러오는 중입니다...</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script type="module" src="{{ static_asset_url('js/settings/mcp_pending.js') }}"></script>

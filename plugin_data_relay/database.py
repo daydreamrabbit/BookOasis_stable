@@ -8,7 +8,11 @@ DB_PATH = os.environ.get("RELAY_DB_PATH", os.path.join(os.path.dirname(__file__)
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,30}$")
 ALLOWED_FIELD_TYPES = {"TEXT", "INTEGER", "REAL"}
+NUMERIC_FIELD_TYPES = {"INTEGER", "REAL"}
 MAX_FIELDS_PER_PLUGIN = 5
+# 플러그인이 /register 시 요청한 daily_write_limit이 이보다 크면 강제로 이 값까지만 허용
+# (relay 자체를 대량 쓰기로부터 보호하는 플랫폼 차원의 상한 - 개발자 요청과 무관하게 적용).
+MAX_DAILY_WRITE_LIMIT = 500
 
 # 동적 테이블에 항상 존재하는 고정 컬럼 — 커스텀 필드명으로 재사용 불가
 FIXED_COLUMN_NAMES = {"id", "user_id", "created_at"}
@@ -86,11 +90,16 @@ def init_db():
             plugin_secret_hash TEXT NOT NULL,
             developer_id TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'pending',
+            daily_write_limit INTEGER DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # 기존(승인/개발자 계정 개념 도입 이전)에 생성된 DB를 위한 마이그레이션
-    for column_def in ("status TEXT NOT NULL DEFAULT 'pending'", "developer_id TEXT NOT NULL DEFAULT ''"):
+    # 기존(승인/개발자 계정/일일쓰기상한 개념 도입 이전)에 생성된 DB를 위한 마이그레이션
+    for column_def in (
+        "status TEXT NOT NULL DEFAULT 'pending'",
+        "developer_id TEXT NOT NULL DEFAULT ''",
+        "daily_write_limit INTEGER DEFAULT NULL",
+    ):
         try:
             cursor.execute(f"ALTER TABLE plugins ADD COLUMN {column_def}")
         except sqlite3.OperationalError:
@@ -156,11 +165,13 @@ def verify_developer_secret(cursor, developer_id, developer_secret):
     return row["developer_secret_hash"] == hash_secret(developer_secret)
 
 
-def register_plugin(cursor, plugin_id, fields, developer_id):
+def register_plugin(cursor, plugin_id, fields, developer_id, daily_write_limit=None):
     """
     plugin_id: 검증된 문자열
     fields: [{"name": str, "type": str}, ...] (1~5개, 이미 검증된 값)
     developer_id: 이미 /regi_user로 등록 및 인증된 개발자 식별자
+    daily_write_limit: 사용자(user_id)당 하루 쓰기(POST /records) 허용 건수. None이면 무제한.
+        MAX_DAILY_WRITE_LIMIT로 강제 clamp됨 - relay 보호가 목적이라 개발자 요청보다 우선.
     반환: plugin_secret (평문, 이 호출에서만 노출)
     """
     if not fields or len(fields) > MAX_FIELDS_PER_PLUGIN:
@@ -178,10 +189,19 @@ def register_plugin(cursor, plugin_id, fields, developer_id):
             raise InvalidIdentifierError(f"필드명 '{f['name']}'이(가) 중복되었습니다.")
         seen_names.add(f["name"])
 
+    if daily_write_limit is not None:
+        try:
+            daily_write_limit = int(daily_write_limit)
+        except (TypeError, ValueError):
+            raise InvalidIdentifierError("daily_write_limit은 정수여야 합니다.")
+        if daily_write_limit < 1:
+            raise InvalidIdentifierError("daily_write_limit은 1 이상이어야 합니다.")
+        daily_write_limit = min(daily_write_limit, MAX_DAILY_WRITE_LIMIT)
+
     plugin_secret = generate_secret()
     cursor.execute(
-        "INSERT INTO plugins (plugin_id, plugin_secret_hash, developer_id) VALUES (?, ?, ?)",
-        (plugin_id, hash_secret(plugin_secret), developer_id),
+        "INSERT INTO plugins (plugin_id, plugin_secret_hash, developer_id, daily_write_limit) VALUES (?, ?, ?, ?)",
+        (plugin_id, hash_secret(plugin_secret), developer_id, daily_write_limit),
     )
 
     for order, f in enumerate(fields):
@@ -230,6 +250,60 @@ def set_plugin_status(cursor, plugin_id, status):
         raise InvalidIdentifierError(f"status는 {sorted(PLUGIN_STATUSES)} 중 하나여야 합니다.")
     cursor.execute("UPDATE plugins SET status = ? WHERE plugin_id = ?", (status, plugin_id))
     return cursor.rowcount > 0
+
+
+def get_daily_write_limit(cursor, plugin_id):
+    cursor.execute("SELECT daily_write_limit FROM plugins WHERE plugin_id = ?", (plugin_id,))
+    row = cursor.fetchone()
+    return row["daily_write_limit"] if row else None
+
+
+def count_writes_last_24h(cursor, table_name, user_id):
+    """user_id가 최근 24시간 동안 이 플러그인 테이블에 쓴(POST) 건수. daily_write_limit
+    체크 전용 - 등록된 필드 값과 무관하게 순수 건수만 센다."""
+    cursor.execute(
+        f'SELECT COUNT(*) AS c FROM "{table_name}" WHERE user_id = ? AND created_at >= datetime(\'now\', \'-1 day\')',
+        (user_id,),
+    )
+    return cursor.fetchone()["c"]
+
+
+def find_record_by_unique_key(cursor, table_name, user_id, unique_by, values):
+    """user_id + unique_by에 나열된 필드들의 값이 모두 일치하는 기존 레코드를 찾는다
+    (업서트용 - CREATE TABLE에 UNIQUE 제약을 추가하지 않고 애플리케이션 레벨에서 처리).
+    unique_by는 이미 allowed_fields 화이트리스트 검증을 거친 값만 들어와야 한다."""
+    conditions = ["user_id = ?"]
+    params = [user_id]
+    for field in unique_by:
+        conditions.append(f'"{field}" = ?')
+        params.append(values.get(field))
+    where_clause = " AND ".join(conditions)
+    cursor.execute(f'SELECT id FROM "{table_name}" WHERE {where_clause} LIMIT 1', params)
+    row = cursor.fetchone()
+    return row["id"] if row else None
+
+
+def compute_aggregate(cursor, table_name, agg_field, filter_field=None, filter_value=None):
+    """agg_field(INTEGER/REAL 필드만 허용, 호출부에서 검증됨)의 COUNT/AVG/MIN/MAX를 서버에서
+    직접 계산해 반환 - list_records()의 200건 LIMIT과 무관하게 테이블 전체를 대상으로 집계한다.
+    filter_field/filter_value를 주면 그 조건에 맞는 행만 집계(예: 특정 book_key의 평균 별점)."""
+    where_clause = ""
+    params = []
+    if filter_field:
+        where_clause = f' WHERE "{filter_field}" = ?'
+        params.append(filter_value)
+    cursor.execute(
+        f'SELECT COUNT(*) AS count, AVG("{agg_field}") AS avg, MIN("{agg_field}") AS min, MAX("{agg_field}") AS max '
+        f'FROM "{table_name}"{where_clause}',
+        params,
+    )
+    row = cursor.fetchone()
+    return {
+        "count": row["count"] or 0,
+        "avg": row["avg"],
+        "min": row["min"],
+        "max": row["max"],
+    }
 
 
 if __name__ == "__main__":

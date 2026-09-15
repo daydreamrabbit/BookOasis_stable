@@ -37,6 +37,9 @@
                 <button class="settings-tab-btn" id="settings-tab-btn-permissions" data-settings-tab="permissions" style="display: none;">
                     <i class="fa-solid fa-user-shield"></i> <span data-i18n="settings.tab_permissions">권한 관리</span>
                 </button>
+                <button class="settings-tab-btn" id="settings-tab-btn-mcp-pending" data-settings-tab="mcp-pending" style="display: none;">
+                    <i class="fa-solid fa-robot"></i> <span data-i18n="settings.tab_mcp_pending">MCP 승인 대기</span>
+                </button>
                 <button class="settings-tab-btn" data-settings-tab="about">
                     <i class="fa-solid fa-circle-info"></i> <span data-i18n="settings.tab_about">이 S/W는...</span>
                 </button>
@@ -82,6 +85,9 @@
 
             <!-- 5.5 권한 관리 탭 -->
             {% include "components/settings/permissions_tab.html" %}
+
+            <!-- 5.8 MCP 승인 대기 탭 -->
+            {% include "components/settings/mcp_pending_tab.html" %}
 
             <!-- 6. 이 S/W는... 탭 (About) -->
             {% include "components/settings/about_tab.html" %}

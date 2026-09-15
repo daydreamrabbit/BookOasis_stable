@@ -341,6 +341,10 @@ export async function loadGeneralSettings() {
       const proxyAuthEl = document.getElementById('setting-proxy-header-auth');
       if (proxyAuthEl) proxyAuthEl.value = s.PROXY_HEADER_AUTH || '0';
 
+      // MCP 쓰기 도구 허용
+      const mcpWriteEnabledEl = document.getElementById('setting-mcp-write-enabled');
+      if (mcpWriteEnabledEl) mcpWriteEnabledEl.value = s.MCP_WRITE_ENABLED || '0';
+
       // 만화 뷰어 로딩 지연 시간 (LocalStorage)
       const comicDelayEl = document.getElementById('setting-comic-loading-delay');
       if (comicDelayEl) {
@@ -406,6 +410,7 @@ export async function submitGeneralSettings(event) {
   const comicDelay = document.getElementById('setting-comic-loading-delay')?.value || '700';
   const hddAggressiveWarmup = document.getElementById('setting-hdd-aggressive-warmup')?.checked ? '1' : '0';
   const proxyAuth = document.getElementById('setting-proxy-header-auth')?.value || '0';
+  const mcpWriteEnabled = document.getElementById('setting-mcp-write-enabled')?.value || '0';
   const rcloneRcUrl = document.getElementById('setting-rclone-rc-url')?.value || 'http://localhost:5572';
   const coverStorageRoot = document.getElementById('setting-cover-storage-root')?.value?.trim() || '';
   const timezone = document.getElementById('setting-timezone')?.value || 'UTC';
@@ -446,6 +451,7 @@ export async function submitGeneralSettings(event) {
       api.updateSystemSetting('PROCESS_RSS_LIMIT', procRss),
       api.updateSystemSetting('HDD_AGGRESSIVE_WARMUP', hddAggressiveWarmup),
       api.updateSystemSetting('PROXY_HEADER_AUTH', proxyAuth),
+      api.updateSystemSetting('MCP_WRITE_ENABLED', mcpWriteEnabled),
       api.updateSystemSetting('RCLONE_RC_URL', rcloneRcUrl),
       api.updateSystemSetting('FFMPEG_TRANSCODE_ARGS', ffmpegTranscodeArgs),
       api.updateSystemSetting('FFMPEG_VAAPI_ARGS', ffmpegVaapiArgs),

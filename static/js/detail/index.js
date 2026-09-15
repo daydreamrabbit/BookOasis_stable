@@ -183,6 +183,33 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
         }
       })();
 
+      // 헤더의 정적 점수 별(.detail-score) → 커뮤니티 별점 위젯 대체 시도. rating_widget을
+      // 선언한 플러그인이 없거나(설치 안 함) 이 세션(성인/오디오북/영상)에서 배제되면
+      // 서버가 success:false를 주고, 그 경우 renderDetailHeader가 이미 그려둔 기존 정적
+      // 별을 그대로 둔다(폴백) - detail_view가 본문을 통째로 대체한 경우는 이 자리 자체가
+      // 없으므로 건너뛴다.
+      if (!pluginDetailBundle) {
+        (async () => {
+          const scoreRoot = document.getElementById('detail-score-root');
+          if (!scoreRoot) return;
+          const libType = state.currentLibraryType || 'general';
+          const ratingContext = {
+            seriesName: safeSeriesName,
+            libraryId: actualLibraryId,
+            bookId: state.detailRepresentativeBookId,
+            author: meta.author || '',
+            isbn: meta.isbn || '',
+          };
+          try {
+            const res = await api.fetchRatingWidget(libType, ratingContext);
+            if (!res.success) return; // 활성 provider 없음 - 기존 정적 별 유지
+            renderInteractiveRatingStars(scoreRoot, libType, ratingContext, res);
+          } catch (err) {
+            console.error('[Detail] 별점 위젯 로드 실패:', err);
+          }
+        })();
+      }
+
       // 메타데이터 비동기 로드 추천 후보군 검색
       const triggerRecommendSearch = () => {
         const recSection = document.getElementById('meta-recommend-section');
@@ -301,6 +328,50 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+// 헤더의 .detail-score 자리를 클릭 가능한 커뮤니티 별점으로 그린다. widgetData는
+// {average, count, my_rating} 형태(GET/POST 응답 공통 스키마). 클릭 = 즉시 relay 제출
+// (로컬 임시 평가 같은 별개 개념 없음) - 실패 시 클릭 이전 상태로 롤백한다.
+function renderInteractiveRatingStars(root, libType, ratingContext, widgetData) {
+  const draw = (data, disabled) => {
+    const myRating = Math.max(0, Math.min(5, Math.round(Number(data.my_rating) || 0)));
+    const avgText = data.count > 0
+      ? `<span class="detail-score-summary">(${data.count}명 평균 ${Number(data.average || 0).toFixed(1)})</span>`
+      : '';
+    let starsHtml = '';
+    for (let i = 1; i <= 5; i += 1) {
+      starsHtml += `<span class="detail-score-star${i <= myRating ? ' is-filled' : ''}" data-rating="${i}">${i <= myRating ? '★' : '☆'}</span>`;
+    }
+    root.innerHTML = `<span class="detail-score-interactive"${disabled ? ' data-disabled="1"' : ''}>${starsHtml}</span>${avgText}`;
+  };
+
+  draw(widgetData, false);
+
+  root.addEventListener('click', async (event) => {
+    const starEl = event.target.closest('.detail-score-star');
+    if (!starEl || root.querySelector('[data-disabled="1"]')) return;
+    const rating = parseInt(starEl.dataset.rating, 10);
+    if (!Number.isFinite(rating)) return;
+
+    const previous = { average: widgetData.average, count: widgetData.count, my_rating: widgetData.my_rating };
+    draw({ average: widgetData.average, count: widgetData.count, my_rating: rating }, true);
+
+    try {
+      const res = await api.submitRating(libType, ratingContext, rating);
+      if (!res.success) {
+        alert(res.error || '별점 제출에 실패했습니다.');
+        draw(previous, false);
+        return;
+      }
+      widgetData = res;
+      draw(res, false);
+    } catch (err) {
+      console.error('[Detail] 별점 제출 실패:', err);
+      alert('별점 제출 중 오류가 발생했습니다.');
+      draw(previous, false);
+    }
+  });
 }
 
 // 도서 상세 사이드바 위젯 아이템 1개 렌더링.

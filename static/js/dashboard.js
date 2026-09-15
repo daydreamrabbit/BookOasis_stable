@@ -667,6 +667,38 @@ async function loadDashboardWidgetData(pluginId, limit, contentId, requestToken)
 
     if (requestToken !== pluginsLoadToken) return;
 
+    if (data.success && (data.html || data.css)) {
+      // 플러그인이 dashboard.html/dashboard.css(선택: dashboard.js)를 제공한 경우 -
+      // 위젯별 Shadow DOM에 격리해서 렌더링한다. CSS/이미지를 완전히 자유롭게 쓸 수
+      // 있지만, 다른 위젯이나 앱 전역 스타일과는 서로 새어나가지 않는다(카테고리 탭의
+      // 무격리 전역 <style> 주입과 달리, 여러 위젯이 한 화면에 동시에 떠 있는 대시보드는
+      // 격리가 필요하다).
+      container.innerHTML = '';
+      const shadowHost = document.createElement('div');
+      shadowHost.className = 'plugin-dashboard-shadow-host';
+      container.appendChild(shadowHost);
+      const shadow = shadowHost.attachShadow({ mode: 'open' });
+      if (data.css) {
+        const styleEl = document.createElement('style');
+        styleEl.textContent = data.css;
+        shadow.appendChild(styleEl);
+      }
+      if (data.html) {
+        const contentEl = document.createElement('div');
+        contentEl.innerHTML = data.html;
+        shadow.appendChild(contentEl);
+      }
+      if (data.js) {
+        try {
+          const scriptFn = new Function('pluginId', 'shadowRoot', 'items', data.js);
+          scriptFn(pluginId, shadow, data.items || []);
+        } catch (err) {
+          console.error(`[Dashboard] 위젯 스크립트 실행 오류(${pluginId}):`, err);
+        }
+      }
+      return;
+    }
+
     if (data.success && Array.isArray(data.items) && data.items.length > 0) {
       container.innerHTML = '';
       data.items.forEach(item => {

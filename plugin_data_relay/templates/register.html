@@ -91,6 +91,12 @@
                 <i class="bi bi-plus-lg me-1"></i>필드 추가
             </button>
 
+            <div class="mb-3">
+                <label class="form-label small fw-bold">사용자당 일일 쓰기 상한 (선택)</label>
+                <input type="number" class="form-control" id="dailyWriteLimit" min="1" max="500" placeholder="예: 20 (비워두면 무제한)">
+                <div class="form-text text-secondary">한 사용자(user_id)가 하루에 <code>POST /records</code>를 몇 번까지 부를 수 있는지 제한합니다. relay 보호를 위해 최대 500까지만 허용됩니다.</div>
+            </div>
+
             <button type="submit" class="btn btn-primary w-100 py-2 fw-bold">
                 <i class="bi bi-check-circle me-1"></i>등록
             </button>
@@ -140,6 +146,9 @@
                 return;
             }
 
+            const dailyWriteLimitRaw = document.getElementById('dailyWriteLimit').value.trim();
+            const dailyWriteLimit = dailyWriteLimitRaw ? parseInt(dailyWriteLimitRaw, 10) : null;
+
             const res = await fetch('/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -148,6 +157,7 @@
                     developer_secret: developerSecret,
                     plugin_id: pluginId,
                     fields,
+                    daily_write_limit: dailyWriteLimit,
                 }),
             });
             const data = await res.json();

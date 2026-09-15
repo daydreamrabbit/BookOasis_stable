@@ -25,7 +25,8 @@
 | 1.0.7 | `search`, `apply` | `on_scan_new_books_detected`, `dispatch_webhook`, `update_manifest` | 표준 이벤트 웹훅(`book.new/read/finish`) 병행 운영 권장 |
 | 1.0.8 | `search`, `apply` | `detail_sidebar_widget`, `get_detail_sidebar_data` | 도서 상세 페이지 사이드바("이 작가의 다른 도서" 등) 위젯 계약 추가 |
 | 1.0.9 | `search`, `apply` | `home_widget` | 사용자가 "홈 화면 플러그인 배치 모드"를 켰을 때만 노출되는 실제 홈 대시보드 위젯 계약 추가 (§5-1) |
-| 1.1.0+ (현재) | `search`, `apply` | `detail_view` | 도서 상세 페이지 본문 전체를 대체하는 커스텀 화면 계약 추가 (세션별 단일 슬롯) |
+| 1.1.0 | `search`, `apply` | `detail_view` | 도서 상세 페이지 본문 전체를 대체하는 커스텀 화면 계약 추가 (세션별 단일 슬롯) |
+| 1.1.1+ (현재) | `search`, `apply` | `dashboard.html`/`dashboard.css`/`dashboard.js` | `home_widget`에 커스텀 CSS/이미지 허용 - 위젯별 Shadow DOM 격리 렌더링 (§5-1) |
 
 호환성 원칙:
 
@@ -535,6 +536,38 @@ def get_dashboard_data(self, db_type, limit=10):
     # dashboard_widget과 동일한 메서드를 그대로 재사용한다 - 신규 메서드 불필요
     return {'success': True, 'items': []}
 ```
+
+### 커스텀 CSS/이미지 (`dashboard.html` / `dashboard.css` / `dashboard.js`)
+
+`get_dashboard_data()`가 반환하는 `items`는 기본적으로 프론트의 안전한 화이트리스트
+렌더러(`sanitizePluginHtml()`)로만 표시되어 텍스트/소수 인라인 태그 외에는 꾸밀 수 없다.
+완전한 CSS나 이미지가 필요하면 플러그인 디렉토리에 `dashboard.html`(선택: `dashboard.css`,
+`dashboard.js`)을 두면 된다 — category_tab의 `index.html`/`style.css`/`script.js`와 동일한
+서빙 방식이다.
+
+```
+sample_plugins/metadata/<plugin_id>/
+  dashboard.html   # 위젯 내부 마크업
+  dashboard.css    # 위젯 전용 스타일 (완전한 CSS, 이미지 배경 등 자유롭게 사용 가능)
+  dashboard.js     # (선택) function(pluginId, shadowRoot, items) { ... } 형태로 실행됨
+```
+
+프론트는 위젯마다 **Shadow DOM**을 만들어 그 안에서만 이 마크업/CSS를 렌더링한다. 즉:
+
+- 이 위젯의 CSS가 다른 위젯이나 앱 전역 스타일(`style.css` 등)로 새어나가지 않는다.
+- 반대로 앱 전역 CSS도 이 위젯 내부로 스며들지 않는다 — 완전히 새로 스타일링해야 한다.
+- `dashboard.js`가 있으면 `new Function('pluginId', 'shadowRoot', 'items', dashboard.js내용)`
+  형태로 실행되어 shadow root 내부 DOM만 조작할 수 있다(카테고리 탭의 `script.js`가
+  `container`를 받는 것과 동일한 패턴, 다만 격리를 위해 컨테이너 대신 shadow root를 받음).
+
+**주의:** `dashboard.html`/`dashboard.js` 코드 자체는 category_tab 뷰와 동일하게 완전히
+신뢰된다(관리자가 설치한 플러그인이므로). 하지만 `get_dashboard_data()`가 반환한 동적 값(외부
+API 응답, 파일명 등)을 이 마크업 안에 문자열로 끼워 넣을 때 이스케이프하는 책임은 플러그인에
+있다 — Shadow DOM은 스타일/DOM 격리를 해줄 뿐, 플러그인이 직접 만든 XSS 취약점까지 막아주지는
+않는다.
+
+이 파일들이 없으면 기존처럼 `items` + 화이트리스트 렌더러 경로가 그대로 동작한다(하위 호환,
+기존 플러그인은 아무것도 바꾸지 않아도 됨).
 
 ### 배치 형태 (`layout`)
 

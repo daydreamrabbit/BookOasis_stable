@@ -87,6 +87,11 @@ def parse_comicinfo_from_cbz(file_path):
     """Parse ComicInfo.xml inside CBZ/ZIP file and return metadata."""
     meta = {
         'author': '',
+        'cover_artist': '',
+        'teams': '',
+        'locations': '',
+        'characters': '',
+        'books_lv': '',
         'publisher': '',
         'summary': '',
         'release_date': '',
@@ -112,8 +117,26 @@ def parse_comicinfo_from_cbz(file_path):
                 elem = root.find(tag)
                 return elem.text.strip() if elem is not None and elem.text else ''
 
-            author = _get('Writer') or _get('Penciller') or _get('Artist')
-            meta['author'] = author
+            # Writer(글 작가)만 author로 채운다 - Penciller(그림 작가)를 author 폴백으로
+            # 섞으면 표지/그림 담당자가 글 작가로 잘못 표기된다. 그림 작가는 아래
+            # cover_artist에 별도로 보존한다.
+            meta['author'] = _get('Writer')
+
+            # 명시적 <CoverArtist> 태그가 있으면 우선 사용하고, 없으면 <Penciller>를
+            # 호환값으로 사용한다(존재하는 쪽 우선) - 일부 저작 도구는 CoverArtist 개념을
+            # Penciller에 저장하는 관례가 있어 두 태그 다 표지 작가 후보로 취급한다.
+            meta['cover_artist'] = _get('CoverArtist') or _get('Penciller')
+
+            meta['teams'] = normalize_metadata_list_field(_get('Teams'))
+            meta['locations'] = normalize_metadata_list_field(_get('Locations'))
+            meta['characters'] = normalize_metadata_list_field(_get('Characters'))
+
+            # AgeRating 원문을 그대로 books_lv에 채운다 - services/content_rating_service.py의
+            # _BOOKS_LV_LEVEL_MAP이 ComicInfo 표준 어휘(M/MA15+/R18+/Teen 등)를 이미
+            # 대소문자 무시하고 인식하므로 별도 매핑 테이블이 필요 없다(Kavita YAML의 숫자
+            # 코드와 달리 ComicInfo AgeRating은 이미 사람이 읽는 표준 문자열이기 때문).
+            meta['books_lv'] = _get('AgeRating')
+
             meta['publisher'] = _get('Publisher')
             meta['summary'] = clean_html_tags(_get('Summary'))
             meta['genre'] = normalize_metadata_list_field(_get('Genre'))
