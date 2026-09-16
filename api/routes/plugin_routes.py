@@ -481,11 +481,11 @@ def submit_rating_widget_api():
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
 
     try:
-        rating = int(payload.get('rating'))
+        rating = round(float(payload.get('rating')) * 2) / 2
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': 'invalid rating'}), 400
-    if rating < 1 or rating > 5:
-        return jsonify({'success': False, 'error': 'rating must be between 1 and 5'}), 400
+    if rating < 0.5 or rating > 5:
+        return jsonify({'success': False, 'error': 'rating must be between 0.5 and 5'}), 400
 
     context = {
         'series_name': payload.get('series_name', ''),

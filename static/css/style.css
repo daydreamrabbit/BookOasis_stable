@@ -2996,6 +2996,10 @@ body {
 .detail-score-interactive .detail-score-star {
     cursor: pointer;
     transition: transform 0.1s ease;
+    padding: 0.2rem;
+    margin: -0.2rem;
+    touch-action: manipulation;
+    user-select: none;
 }
 
 .detail-score-interactive .detail-score-star:hover {

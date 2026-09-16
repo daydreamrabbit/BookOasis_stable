@@ -151,8 +151,10 @@ CREATE TABLE IF NOT EXISTS series_summary (
     representative_book_id BIGINT NOT NULL,
     series_book_count BIGINT NOT NULL DEFAULT 0,
     sort_series_name VARCHAR(500) NOT NULL DEFAULT '',
+    latest_added VARCHAR(50) NOT NULL DEFAULT '',
     PRIMARY KEY (library_id, series_key),
-    INDEX idx_series_summary_order (library_id, sort_series_name, representative_book_id)
+    INDEX idx_series_summary_order (library_id, sort_series_name, representative_book_id),
+    INDEX idx_series_summary_latest_added (latest_added, representative_book_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 CREATE TABLE IF NOT EXISTS series_summary_state (

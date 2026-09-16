@@ -87,6 +87,13 @@
                                     {% call my_checkbox_row('my-setting-audio-right-dock-dim', 'AUDIO_RIGHT_DOCK_DIM_ENABLED', i18n_key='settings.audio_right_dock_dim_enabled_label') %}오디오 우측 패널 배경 딤 표시{% endcall %}
                                     <p class="settings-checkbox-desc" data-i18n="settings.audio_right_dock_dim_enabled_desc">해제하면 우측 패널만 표시되고, 메인 화면 배경 딤은 표시되지 않습니다.</p>
 
+                                    <!-- 뷰어 물리 키(볼륨/채널) 방향 반전 - 기기마다 매핑이 달라 계정이 아닌 이 브라우저/기기에만 저장 -->
+                                    <div class="settings-checkbox-row">
+                                        <input type="checkbox" id="my-setting-reverse-hw-nav-keys" data-role="my-reverse-hw-nav-keys">
+                                        <label for="my-setting-reverse-hw-nav-keys" data-i18n="settings.reverse_hw_nav_keys_label">뷰어 볼륨/채널 키 방향 반전</label>
+                                    </div>
+                                    <p class="settings-checkbox-desc" data-i18n="settings.reverse_hw_nav_keys_desc">일부 안드로이드 태블릿/e-ink 리더는 볼륨·채널 키를 반대 방향으로 페이지 넘김에 매핑합니다. 켜면 이 기기에서만 다음/이전 방향이 뒤바뀝니다 (계정 전체가 아닌 이 브라우저에만 저장됨).</p>
+
                                     <!-- 체크박스 스위치 모음 -->
                                     <div class="settings-checkbox-group">
                                         {% call my_checkbox_row('my-setting-show-sidebar-category-all', 'SHOW_SIDEBAR_CATEGORY_ALL', checked=True) %}사이드바에 '전체 도서 보기' 메뉴 표시{% endcall %}

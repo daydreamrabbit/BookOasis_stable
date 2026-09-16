@@ -257,6 +257,8 @@
     "audio_mini_player_mode_desc": "기본값은 미니바이며, 우측 오버레이 패널형은 화면 오른쪽에 고정 표시됩니다.",
     "audio_right_dock_dim_enabled_label": "오디오 우측 패널 배경 딤 표시",
     "audio_right_dock_dim_enabled_desc": "해제하면 우측 패널만 표시되고, 메인 화면 배경 딤은 표시되지 않습니다.",
+    "reverse_hw_nav_keys_label": "뷰어 볼륨/채널 키 방향 반전",
+    "reverse_hw_nav_keys_desc": "일부 안드로이드 태블릿/e-ink 리더는 볼륨·채널 키를 반대 방향으로 페이지 넘김에 매핑합니다. 켜면 이 기기에서만 다음/이전 방향이 뒤바뀝니다 (계정 전체가 아닌 이 브라우저에만 저장됨).",
     "hide_completed_label": "다 읽은 도서는 최근 읽은 도서에서 삭제",
     "tag_filter_scope_all_label": "태그 선택 시 전체 목록에서 조회",
     "show_txt_no_cover_info_banner_label": "TXT 무커버 안내 배너 표시",

@@ -277,16 +277,13 @@ export function markAsCompleted() {
 export function nextComicPage() {
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   if (scrollMode === 'scroll') {
-    if (Renderer.getComicCurrentPage() < Renderer.getComicTotalPages() - 1) {
-      Renderer.setIsScrollingToTarget(true);
-      Renderer.setComicCurrentPage(Renderer.getComicCurrentPage() + 1);
-      const targetImg = document.querySelector(`.comic-scroll-img[data-index="${Renderer.getComicCurrentPage()}"]`);
-      if (targetImg) targetImg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      Renderer.updatePageInfo();
-      saveProgress(state.activeBookId, Renderer.getComicCurrentPage(), Renderer.getComicTotalPages());
-      setTimeout(() => { Renderer.setIsScrollingToTarget(false); }, 500);
-    } else {
+    const wrapper = document.querySelector('.comic-image-wrapper');
+    if (!wrapper) return;
+    const atBottom = wrapper.scrollTop + wrapper.clientHeight >= wrapper.scrollHeight - 2;
+    if (atBottom) {
       import('../viewer_next_episode.js').then(m => m.handleNextEpisode(state.activeBookId));
+    } else {
+      wrapper.scrollBy({ top: wrapper.clientHeight * 0.85, behavior: 'smooth' });
     }
   } else {
     const step = Settings.getComicPageStep ? Settings.getComicPageStep() : 1;
@@ -317,15 +314,9 @@ export function nextComicPage() {
 export function prevComicPage() {
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   if (scrollMode === 'scroll') {
-    if (Renderer.getComicCurrentPage() > 0) {
-      Renderer.setIsScrollingToTarget(true);
-      Renderer.setComicCurrentPage(Renderer.getComicCurrentPage() - 1);
-      const targetImg = document.querySelector(`.comic-scroll-img[data-index="${Renderer.getComicCurrentPage()}"]`);
-      if (targetImg) targetImg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      Renderer.updatePageInfo();
-      saveProgress(state.activeBookId, Renderer.getComicCurrentPage(), Renderer.getComicTotalPages());
-      setTimeout(() => { Renderer.setIsScrollingToTarget(false); }, 500);
-    }
+    const wrapper = document.querySelector('.comic-image-wrapper');
+    if (!wrapper) return;
+    wrapper.scrollBy({ top: -wrapper.clientHeight * 0.85, behavior: 'smooth' });
   } else {
     const step = Settings.getComicPageStep ? Settings.getComicPageStep() : 1;
     const prevPage = Math.max(Renderer.getComicCurrentPage() - step, 0);

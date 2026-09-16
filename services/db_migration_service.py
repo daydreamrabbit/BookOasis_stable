@@ -293,6 +293,7 @@ _SCHEMA_SQL = """
         representative_book_id INTEGER NOT NULL,
         series_book_count INTEGER NOT NULL DEFAULT 0,
         sort_series_name VARCHAR(500) NOT NULL DEFAULT '',
+        latest_added VARCHAR(50) NOT NULL DEFAULT '',
         PRIMARY KEY (library_id, series_key)
     );
 
@@ -667,6 +668,7 @@ _INDEXES_SQL = """
     CREATE INDEX IF NOT EXISTS idx_books_series_lib_title ON books(series_name, library_id, title);
     CREATE INDEX IF NOT EXISTS idx_books_library_active_series ON books(library_id, COALESCE(is_deleted, 0), COALESCE(series_name, ''));
     CREATE INDEX IF NOT EXISTS idx_series_summary_order ON series_summary(library_id, sort_series_name, representative_book_id);
+    CREATE INDEX IF NOT EXISTS idx_series_summary_latest_added ON series_summary(latest_added, representative_book_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_user_progress_book_user ON user_progress(book_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_user_progress_last_read ON user_progress(user_id, last_read_at DESC);
     CREATE INDEX IF NOT EXISTS idx_user_progress_last_read_book ON user_progress(last_read_at DESC, book_id);

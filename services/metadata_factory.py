@@ -626,6 +626,7 @@ class MetadataFactory:
                 p_detail_sidebar_widget = getattr(target_class, 'detail_sidebar_widget', None)
                 p_smart_recommend_widget = getattr(target_class, 'smart_recommend_widget', None)
                 p_detail_view = getattr(target_class, 'detail_view', None)
+                p_rating_widget = getattr(target_class, 'rating_widget', None)
                 p_update_manifest = getattr(target_class, 'update_manifest', None)
                 p_admin_only = getattr(target_class, 'admin_only', False)
 
@@ -653,6 +654,7 @@ class MetadataFactory:
                     'detail_sidebar_widget': p_detail_sidebar_widget,
                     'smart_recommend_widget': p_smart_recommend_widget,
                     'detail_view': p_detail_view,
+                    'rating_widget': p_rating_widget,
                     'update_manifest': p_update_manifest,
                     'admin_only': bool(p_admin_only),
                 }

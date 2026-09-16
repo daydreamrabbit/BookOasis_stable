@@ -257,6 +257,8 @@
     "audio_mini_player_mode_desc": "Default is mini bar. Right overlay panel is fixed on the right side.",
     "audio_right_dock_dim_enabled_label": "Show Dimmed Background Behind Right Audio Panel",
     "audio_right_dock_dim_enabled_desc": "When disabled, only the right panel is shown and the page background stays undimmed.",
+    "reverse_hw_nav_keys_label": "Reverse viewer volume/channel key direction",
+    "reverse_hw_nav_keys_desc": "Some Android tablets/e-ink readers map volume or channel keys to the opposite page-turn direction. Enable this to flip next/prev on this device only (saved to this browser, not your account).",
     "hide_completed_label": "Hide Completed Books in Recent History",
     "tag_filter_scope_all_label": "When selecting tags, search in all books",
     "show_txt_no_cover_info_banner_label": "Show TXT no-cover info banner",

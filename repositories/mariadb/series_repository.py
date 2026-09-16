@@ -58,10 +58,10 @@ class SeriesRepository:
             cursor.execute("""
                 INSERT INTO series_summary (
                     library_id, series_key, representative_book_id,
-                    series_book_count, sort_series_name
+                    series_book_count, sort_series_name, latest_added
                 )
                 SELECT rep.library_id, rep.series_key, rep.rep_id,
-                       rep.series_book_count, COALESCE(b.series_name, '')
+                       rep.series_book_count, COALESCE(b.series_name, ''), rep.latest_added
                 FROM (
                     SELECT b2.library_id,
                            COALESCE(NULLIF(b2.series_name, ''), b2.title) AS series_key,
@@ -69,7 +69,8 @@ class SeriesRepository:
                                MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END),
                                MIN(b2.id)
                            ) AS rep_id,
-                           COUNT(*) AS series_book_count
+                           COUNT(*) AS series_book_count,
+                           MAX(b2.created_at) AS latest_added
                     FROM books b2
                     WHERE (b2.is_deleted = 0 OR b2.is_deleted IS NULL)
                     GROUP BY b2.library_id, COALESCE(NULLIF(b2.series_name, ''), b2.title)
@@ -129,7 +130,7 @@ class SeriesRepository:
                        ) AS is_favorite,
                        b.created_at, b.genre, b.tags, b.books_lv, b.publication_status, b.library_id,
                        COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       s.series_book_count
+                       s.series_book_count, s.latest_added AS series_latest_added
                 FROM series_summary s
                 INNER JOIN books b ON b.id = s.representative_book_id
             """
@@ -138,8 +139,18 @@ class SeriesRepository:
             # sort='desc'일 때 SQL 자체를 내림차순으로 뒤집는다 - 예전에는 항상 오름차순으로
             # LIMIT/OFFSET을 적용한 뒤 호출부에서 그 결과만 파이썬으로 재정렬해서, 페이지 1을
             # 넘어가면 SQL이 애초에 오름차순 기준 행 구간을 가져와버려 결과가 뒤죽박죽이었다.
-            title_dir = 'DESC' if str(sort or 'asc').lower() == 'desc' else 'ASC'
-            sql += f" ORDER BY s.library_id ASC, s.sort_series_name {title_dir}, s.representative_book_id ASC"
+            # date_asc/date_desc(최신/과거 추가순)도 마찬가지로 SQL에서 바로 정렬+LIMIT을
+            # 걸어야 한다 - 예전엔 이 정렬만 SQL ORDER BY를 못 태우고 호출부(series_service)가
+            # 라이브러리 전체를 무제한으로 읽어와 파이썬에서 정렬했는데, 이게 무거운 요청 하나가
+            # gunicorn 1-worker/4-thread의 GIL을 오래 잡아서 같은 워커의 다른 요청들까지
+            # pending 상태로 줄줄이 밀리는 원인이었다.
+            sort_norm = str(sort or 'asc').lower()
+            if sort_norm in ('date_asc', 'date_desc'):
+                date_dir = 'DESC' if sort_norm == 'date_desc' else 'ASC'
+                sql += f" ORDER BY s.latest_added {date_dir}, s.representative_book_id ASC"
+            else:
+                title_dir = 'DESC' if sort_norm == 'desc' else 'ASC'
+                sql += f" ORDER BY s.library_id ASC, s.sort_series_name {title_dir}, s.representative_book_id ASC"
             if limit is not None:
                 sql += " LIMIT %s"
                 params.append(int(limit))
@@ -199,7 +210,10 @@ class SeriesRepository:
         genre_filters = [str(v).strip() for v in (genre_filters or []) if str(v).strip()]
         tag_filters = [str(v).strip() for v in (tag_filters or []) if str(v).strip()]
         search_mode, search_term = parse_series_search_query(search_query)
-        title_dir = 'DESC' if str(sort or 'asc').lower() == 'desc' else 'ASC'
+        sort_norm = str(sort or 'asc').lower()
+        is_date_sort = sort_norm in ('date_asc', 'date_desc')
+        title_dir = 'DESC' if sort_norm == 'desc' else 'ASC'
+        date_dir = 'DESC' if sort_norm == 'date_desc' else 'ASC'
 
         if db_type not in ('audiobook', 'video') and not search_query and not favorite_only and not genre_filters and not tag_filters:
             try:
@@ -256,7 +270,7 @@ class SeriesRepository:
                        1 AS series_book_count
                 FROM audiobooks a
                 WHERE {' AND '.join(where)}
-                ORDER BY a.library_id ASC, a.title {title_dir}, a.id ASC
+                ORDER BY {"a.created_at " + date_dir if is_date_sort else "a.library_id ASC, a.title " + title_dir}, a.id ASC
             """
             if limit is not None:
                 sql += " LIMIT %s"
@@ -308,7 +322,7 @@ class SeriesRepository:
                        1 AS series_book_count
                 FROM videos v
                 WHERE {' AND '.join(where)}
-                ORDER BY v.library_id ASC, v.title {title_dir}, v.id ASC
+                ORDER BY {"v.created_at " + date_dir if is_date_sort else "v.library_id ASC, v.title " + title_dir}, v.id ASC
             """
             if limit is not None:
                 sql += " LIMIT %s"
@@ -376,21 +390,22 @@ class SeriesRepository:
                        0 AS is_favorite,
                        b.created_at,
                        b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       rep.series_book_count AS series_book_count
+                       rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
                 FROM books b
                 INNER JOIN (
                     SELECT COALESCE(
                         MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END),
                         MIN(b2.id)
                     ) AS rep_id,
-                    COUNT(*) AS series_book_count
+                    COUNT(*) AS series_book_count,
+                    MAX(b2.created_at) AS series_latest_added
                     FROM books b2
                     {sub_join}
                     WHERE {' AND '.join(sub_where)}
                     GROUP BY b2.library_id, COALESCE(NULLIF(b2.series_name, ''), b2.title)
                 ) rep ON b.id = rep.rep_id
                 WHERE {' AND '.join(outer_where)}
-                ORDER BY b.library_id ASC, b.series_name {title_dir}, b.id ASC
+                ORDER BY {"rep.series_latest_added " + date_dir if is_date_sort else "b.library_id ASC, b.series_name " + title_dir}, b.id ASC
             """
 
             if limit is not None:

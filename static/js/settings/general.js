@@ -79,6 +79,11 @@ function initGeneralDelegation() {
       api.updateUserSetting('SHOW_DASHBOARD_INSIGHTS', target.checked ? '1' : '0').catch((e) => {
         console.error('[Settings] 대시보드 통계 위젯 표시 서버 저장 실패:', e);
       });
+      return;
+    }
+    if (target.matches && target.matches('[data-role="my-reverse-hw-nav-keys"]')) {
+      // 기기별 하드웨어 키 매핑 차이 보정용 - 계정 동기화 없이 이 기기(브라우저)에만 저장
+      localStorage.setItem('viewer_reverse_hw_nav_keys', target.checked ? '1' : '0');
     }
   }, true);
 
@@ -553,6 +558,10 @@ export async function loadMySettings() {
 
     const homeDashboardPluginModeEl = document.getElementById('my-setting-home-dashboard-plugin-mode');
     if (homeDashboardPluginModeEl) homeDashboardPluginModeEl.checked = (s.HOME_DASHBOARD_PLUGIN_MODE === '1');
+
+    // 하드웨어 키 방향 반전 - 서버 설정이 아닌 이 기기의 localStorage에서만 로드
+    const reverseHwNavKeysEl = document.getElementById('my-setting-reverse-hw-nav-keys');
+    if (reverseHwNavKeysEl) reverseHwNavKeysEl.checked = (localStorage.getItem('viewer_reverse_hw_nav_keys') === '1');
   } catch (err) {
     console.error('[Settings] 내 설정 로드 에러:', err);
   }

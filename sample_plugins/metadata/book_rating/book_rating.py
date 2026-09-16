@@ -180,13 +180,17 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             if not self._ensure_verified(domain_url, user_id, secret_token):
                 return {"success": False, "error": "relay 인증에 실패했습니다."}
 
+            # 0.5 단위로 정규화 - 라우트에서 이미 반올림해 보내지만 provider 단독 호출 경로도
+            # 대비해 여기서도 한 번 더 맞춘다.
+            rating = round(float(rating) * 2) / 2
+
             book_key = self._book_key(context)
             resp = requests.post(
                 f"{domain_url}/api/{RELAY_PLUGIN_ID}/records",
                 json={
                     "user_id": user_id,
                     "secret_token": secret_token,
-                    "values": {"book_key": book_key, "rating": int(rating), "submitter_domain": submitter_domain},
+                    "values": {"book_key": book_key, "rating": rating, "submitter_domain": submitter_domain},
                     "unique_by": ["book_key"],
                 },
                 timeout=REQUEST_TIMEOUT,
@@ -207,7 +211,7 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
                 "success": True,
                 "average": round(float(agg.get("avg") or rating), 1),
                 "count": int(agg.get("count") or 1),
-                "my_rating": int(rating),
+                "my_rating": rating,
             }
         except requests.RequestException as e:
             logger.warning("[book_rating] 별점 제출 실패: %s", e)
@@ -227,7 +231,7 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             records = resp.json().get("records") or []
             for record in records:
                 if record.get("user_id") == user_id:
-                    return int(record.get("rating"))
+                    return float(record.get("rating"))
         except (requests.RequestException, TypeError, ValueError):
             pass
         return None

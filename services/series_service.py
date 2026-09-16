@@ -109,9 +109,11 @@ def _build_series_entries(db_type, rows):
             db_type=db_type
         )
 
-
-
-        latest_added = max((b['created_at'] for b in books if b['created_at']), default='')
+        # SQL이 이미 시리즈 단위 MAX(created_at)을 집계해 내려준 경우(series_latest_added)엔
+        # 그걸 그대로 쓴다 - representative 행만 반환되는 페이지네이션 경로에서는 해당 행의
+        # created_at만으로는 시리즈 내 다른 권의 추가일을 반영하지 못하기 때문.
+        series_latest_added = next((b.get('series_latest_added') for b in books if b.get('series_latest_added')), None)
+        latest_added = series_latest_added or max((b['created_at'] for b in books if b['created_at']), default='')
         any_favorite = 1 if any((b['is_favorite'] or 0) == 1 for b in books) else 0
         any_locked = 1 if any((b.get('metadata_locked') or 0) == 1 for b in books) else 0
         author = next((b['author'] for b in books if b['author']), '')
@@ -354,7 +356,12 @@ class SeriesService:
 
         offset = max(0, (page - 1) * limit)
         # 작가별 그룹핑/작가 드릴다운은 인덱스 없는 파이썬 그룹핑이라 항상 전체스캔 경로를 탄다.
-        requires_full_scan = bool(search_query) or (sort not in ('asc', 'desc')) or bool(group_by) or bool(author_key)
+        # date_asc/date_desc(최신/과거 추가순)는 SQL의 series_latest_added(MAX(created_at))
+        # 집계로 ORDER BY + LIMIT/OFFSET을 걸 수 있으므로 asc/desc와 동일하게 SQL 페이지네이션
+        # 경로를 탄다 - 예전엔 이 정렬만 전체 라이브러리를 무제한으로 읽어와 파이썬에서
+        # 정렬했는데, 그 무거운 동기 작업이 gunicorn 1-worker/4-thread의 GIL을 오래 붙잡아
+        # 같은 워커에서 처리 중인 다른 요청들까지 pending 상태로 줄줄이 밀리는 원인이었다.
+        requires_full_scan = bool(search_query) or (sort not in ('asc', 'desc', 'date_asc', 'date_desc')) or bool(group_by) or bool(author_key)
 
         now = time.time()
         cache_key = (

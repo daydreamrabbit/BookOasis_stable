@@ -330,30 +330,40 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
-// 헤더의 .detail-score 자리를 클릭 가능한 커뮤니티 별점으로 그린다. widgetData는
-// {average, count, my_rating} 형태(GET/POST 응답 공통 스키마). 클릭 = 즉시 relay 제출
-// (로컬 임시 평가 같은 별개 개념 없음) - 실패 시 클릭 이전 상태로 롤백한다.
+// 헤더의 .detail-score 자리를 클릭 가능한 커뮤니티 별점(0.5 단위)으로 그린다. widgetData는
+// {average, count, my_rating} 형태(GET/POST 응답 공통 스키마).
+// 별 아이콘이 작아 클릭 좌표로 반개/정수를 구분하기 어려우므로, 클릭 횟수로 구분한다:
+// 싱글클릭 = 그 별의 반개(X.5), 더블클릭 = 그 별의 정수점(X.0). 브라우저가 더블클릭 시에도
+// click을 두 번 먼저 쏘고 그다음 dblclick을 쏘는 점을 이용해 - click은 화면만 즉시 갱신하고
+// 실제 제출은 짧게 지연시켰다가, 그사이 dblclick이 오면 그 지연을 취소하고 정수점을 대신
+// 제출한다(중복 relay 호출 방지). 실패 시 커밋 이전 상태로 롤백한다.
 function renderInteractiveRatingStars(root, libType, ratingContext, widgetData) {
+  const COMMIT_DELAY_MS = 400; // 표준 더블클릭 간격보다 넉넉히 길게 잡아 오조작을 줄인다
+  let pendingTimer = null;
+
+  const starClass = (state) => {
+    if (state === 'full') return 'fa-solid fa-star is-filled';
+    if (state === 'half') return 'fa-solid fa-star-half-stroke is-filled';
+    return 'fa-regular fa-star';
+  };
+
   const draw = (data, disabled) => {
-    const myRating = Math.max(0, Math.min(5, Math.round(Number(data.my_rating) || 0)));
+    const myRating = Math.max(0, Math.min(5, Math.round((Number(data.my_rating) || 0) * 2) / 2));
     const avgText = data.count > 0
       ? `<span class="detail-score-summary">(${data.count}명 평균 ${Number(data.average || 0).toFixed(1)})</span>`
       : '';
     let starsHtml = '';
     for (let i = 1; i <= 5; i += 1) {
-      starsHtml += `<span class="detail-score-star${i <= myRating ? ' is-filled' : ''}" data-rating="${i}">${i <= myRating ? '★' : '☆'}</span>`;
+      const state = myRating >= i ? 'full' : (myRating >= i - 0.5 ? 'half' : 'empty');
+      starsHtml += `<i class="detail-score-star ${starClass(state)}" data-rating="${i}"></i>`;
     }
     root.innerHTML = `<span class="detail-score-interactive"${disabled ? ' data-disabled="1"' : ''}>${starsHtml}</span>${avgText}`;
   };
 
   draw(widgetData, false);
 
-  root.addEventListener('click', async (event) => {
-    const starEl = event.target.closest('.detail-score-star');
-    if (!starEl || root.querySelector('[data-disabled="1"]')) return;
-    const rating = parseInt(starEl.dataset.rating, 10);
-    if (!Number.isFinite(rating)) return;
-
+  const commit = async (rating) => {
+    if (root.querySelector('[data-disabled="1"]')) return;
     const previous = { average: widgetData.average, count: widgetData.count, my_rating: widgetData.my_rating };
     draw({ average: widgetData.average, count: widgetData.count, my_rating: rating }, true);
 
@@ -371,6 +381,35 @@ function renderInteractiveRatingStars(root, libType, ratingContext, widgetData) 
       alert('별점 제출 중 오류가 발생했습니다.');
       draw(previous, false);
     }
+  };
+
+  root.addEventListener('click', (event) => {
+    const starEl = event.target.closest('.detail-score-star');
+    if (!starEl || root.querySelector('[data-disabled="1"]')) return;
+    const starIndex = parseInt(starEl.dataset.rating, 10);
+    if (!Number.isFinite(starIndex)) return;
+
+    const halfRating = starIndex - 0.5;
+    draw({ average: widgetData.average, count: widgetData.count, my_rating: halfRating }, false);
+
+    if (pendingTimer) clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => {
+      pendingTimer = null;
+      commit(halfRating);
+    }, COMMIT_DELAY_MS);
+  });
+
+  root.addEventListener('dblclick', (event) => {
+    const starEl = event.target.closest('.detail-score-star');
+    if (!starEl || root.querySelector('[data-disabled="1"]')) return;
+    const starIndex = parseInt(starEl.dataset.rating, 10);
+    if (!Number.isFinite(starIndex)) return;
+
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+    commit(starIndex);
   });
 }
 

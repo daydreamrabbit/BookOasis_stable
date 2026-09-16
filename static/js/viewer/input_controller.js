@@ -139,13 +139,25 @@ function handleViewerKeydown(e) {
   // (제외하지 않으면 이 매칭이 먼저 걸려 아래 RTL 분기가 항상 무시됨)
   const isDirectionalArrowKey = (k) => k === 'arrowright' || k === 'arrowleft';
 
+  // 안드로이드 태블릿/e-ink 리더 기종마다 볼륨·채널 키를 반대 방향으로 매핑해서 보내는 경우가 있어
+  // (제조사 표준이 없음), "내 설정"에서 켤 수 있는 반전 토글로 여기서만 별도 보정한다.
+  // (일반 커스텀 Next/Prev 목록 매칭에서는 제외하고 아래에서 방향을 직접 계산)
+  const VOLUME_DOWN_KEYS = ['volumedown', 'channeldown', 'audiovolumedown'];
+  const VOLUME_UP_KEYS = ['volumeup', 'channelup', 'audiovolumeup'];
+  const isHwVolumeKey = (k) => VOLUME_DOWN_KEYS.includes(k) || VOLUME_UP_KEYS.includes(k);
+  const isVolumeDownKey = VOLUME_DOWN_KEYS.includes(rawKey) || VOLUME_DOWN_KEYS.includes(codeKey);
+  const isVolumeUpKey = VOLUME_UP_KEYS.includes(rawKey) || VOLUME_UP_KEYS.includes(codeKey);
+  const reverseHwNavKeys = localStorage.getItem('viewer_reverse_hw_nav_keys') === '1';
+
   // 1. 스페이스바, PageDown, 커스텀 Next 키는 읽는 방향에 상관없이 무조건 '다음 스토리 내용(nextPage)'
   const isForwardAction = isSpaceKey || isPageDown ||
-                          customNextKeys.some(k => !isDirectionalArrowKey(k) && (k === rawKey || k === codeKey || (k === 'space' && isSpaceKey)));
+                          customNextKeys.some(k => !isDirectionalArrowKey(k) && !isHwVolumeKey(k) && (k === rawKey || k === codeKey || (k === 'space' && isSpaceKey))) ||
+                          (reverseHwNavKeys ? isVolumeUpKey : isVolumeDownKey);
 
   // 2. PageUp, 커스텀 Prev 키는 읽는 방향에 상관없이 무조건 '이전 스토리 내용(prevPage)'
   const isBackwardAction = isPageUp ||
-                           customPrevKeys.some(k => !isDirectionalArrowKey(k) && (k === rawKey || k === codeKey || (k === 'space' && isSpaceKey)));
+                           customPrevKeys.some(k => !isDirectionalArrowKey(k) && !isHwVolumeKey(k) && (k === rawKey || k === codeKey || (k === 'space' && isSpaceKey))) ||
+                           (reverseHwNavKeys ? isVolumeDownKey : isVolumeUpKey);
 
   if (isForwardAction) {
     e.preventDefault();

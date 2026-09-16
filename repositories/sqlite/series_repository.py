@@ -25,7 +25,10 @@ class SeriesRepository:
         genre_filters = [str(v).strip() for v in (genre_filters or []) if str(v).strip()]
         tag_filters = [str(v).strip() for v in (tag_filters or []) if str(v).strip()]
         search_mode, search_term = parse_series_search_query(search_query)
-        title_dir = 'DESC' if str(sort or 'asc').lower() == 'desc' else 'ASC'
+        sort_norm = str(sort or 'asc').lower()
+        is_date_sort = sort_norm in ('date_asc', 'date_desc')
+        title_dir = 'DESC' if sort_norm == 'desc' else 'ASC'
+        date_dir = 'DESC' if sort_norm == 'date_desc' else 'ASC'
 
         if db_type == 'audiobook':
             where = ["COALESCE(a.is_deleted, 0) = 0"]
@@ -71,7 +74,7 @@ class SeriesRepository:
                        ), 0) AS is_completed
                 FROM audiobooks a
                 WHERE {' AND '.join(where)}
-                ORDER BY a.library_id ASC, a.title {title_dir}, a.id ASC
+                ORDER BY {"a.created_at " + date_dir if is_date_sort else "a.library_id ASC, a.title " + title_dir}, a.id ASC
             """
             if limit is not None:
                 sql += " LIMIT ?"
@@ -122,7 +125,7 @@ class SeriesRepository:
                        ), 0) AS is_completed
                 FROM videos v
                 WHERE {' AND '.join(where)}
-                ORDER BY v.library_id ASC, v.title {title_dir}, v.id ASC
+                ORDER BY {"v.created_at " + date_dir if is_date_sort else "v.library_id ASC, v.title " + title_dir}, v.id ASC
             """
             if limit is not None:
                 sql += " LIMIT ?"
@@ -190,21 +193,22 @@ class SeriesRepository:
                        0 AS is_favorite,
                        b.created_at,
                        b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       rep.series_book_count AS series_book_count
+                       rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
                 FROM books b
                 INNER JOIN (
                     SELECT COALESCE(
                         MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END),
                         MIN(b2.id)
                     ) AS rep_id,
-                    COUNT(*) AS series_book_count
+                    COUNT(*) AS series_book_count,
+                    MAX(b2.created_at) AS series_latest_added
                     FROM books b2
                     {sub_join}
                     WHERE {' AND '.join(sub_where)}
                     GROUP BY b2.library_id, COALESCE(NULLIF(b2.series_name, ''), b2.title)
                 ) rep ON b.id = rep.rep_id
                 WHERE {' AND '.join(outer_where)}
-                ORDER BY b.library_id ASC, b.series_name {title_dir}, b.id ASC
+                ORDER BY {"rep.series_latest_added " + date_dir if is_date_sort else "b.library_id ASC, b.series_name " + title_dir}, b.id ASC
             """
 
             if limit is not None:

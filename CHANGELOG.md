@@ -1,4 +1,8 @@
 # CHANGELOG
+## v2.6.7
+- (fix) 코믹 뷰어 스크롤 모드에서 다음/이전 페이지 이동 시 페이지 단위 점프 대신, 화면 높이의 85%만큼 부드럽게 스크롤하도록 변경 (맨 끝에서 다음으로 넘기면 기존처럼 다음 화 이동) | change comic viewer scroll-mode next/previous navigation to smoothly scroll by 85% of the viewport height instead of jumping page-by-page (advancing past the last page still moves to the next episode, as before)
+- (fix) 전체보기에서 "최신 추가순"/"과거 추가순" 정렬이 라이브러리 전체를 매번 파이썬에서 정렬해 대형 서재에서 다른 요청까지 줄줄이 pending 되던 문제 수정 — 제목 정렬처럼 SQL에서 바로 정렬+페이지네이션하도록 변경 | fix "recently added"/"oldest added" sort in the all-books view re-sorting the entire library in Python on every request, which could stall unrelated requests behind it on large libraries — now sorts and paginates in SQL like the title sort already did
+
 ## v2.6.6
 - (feature) MCP 서버에 저위험(Tier A) 쓰기 도구(`update_book_metadata`, `bulk_set_favorite`) 추가 — 관리자가 설정에서 명시적으로 켜야 동작, 모든 쓰기는 `logs/mcp_write_audit.log`에 기록 (`docs/guide_mcp_server.md` 참고) | add low-risk (Tier A) write tools to the MCP server (`update_book_metadata`, `bulk_set_favorite`) — off by default until an admin explicitly enables them, every write logged to `logs/mcp_write_audit.log` (see `docs/guide_mcp_server.md`)
 - (feature) MCP 서버에 Tier B "제안 → 관리자 승인" 큐 추가 — 대량 메타데이터 수정/즐겨찾기 처리를 AI가 즉시 반영하지 않고 제안만 생성, 설정 &gt; MCP 승인 대기 탭에서 관리자가 변경 전/후 값을 검토 후 승인해야 실제로 반영됨 | add a Tier B "propose → admin approval" queue to the MCP server — bulk metadata/favorite changes are only proposed, never applied directly; an admin reviews the before/after preview and approves in Settings &gt; MCP Pending Changes before anything is written
