@@ -59,4 +59,7 @@ def test_failed_cover_is_retried_on_next_lazy_scan():
 
     candidates = _fetch_lazy_scan_candidates(connection.cursor())
 
-    assert [book['id'] for book in candidates] == [1, 2, 5]
+    # id=6은 커버(cover_image='ready.webp')는 이미 있지만 오프셋 수집이 실패(-1)한
+    # 상태라, "커버가 있어도 필요한 오프셋 작업은 여전히 재시도한다"는 동작에 따라
+    # 후보에 포함되는 게 맞다 — id=5(둘 다 실패)와 동일하게 취급된다.
+    assert [book['id'] for book in candidates] == [1, 2, 5, 6]

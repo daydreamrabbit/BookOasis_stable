@@ -70,6 +70,7 @@ function getQueueTaskTypeName(type, t) {
     if (type === 'library_scan') return `<span style="color: #60a5fa;"><i class="fa-solid fa-folder-tree"></i> ${t('queue.type_lib')}</span>`;
     if (type === 'cover_scan') return `<span style="color: #4ade80;"><i class="fa-solid fa-image"></i> ${t('queue.type_cover')}</span>`;
     if (type === 'lazy_scan') return `<span style="color: var(--app-accent-hover);"><i class="fa-solid fa-moon"></i> ${t('queue.type_lazy')}</span>`;
+    if (type === 'batch_book_scan') return `<span style="color: #fbbf24;"><i class="fa-solid fa-book-open"></i> ${t('queue.type_batch_book_scan')}</span>`;
     return type;
 }
 

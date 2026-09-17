@@ -433,6 +433,34 @@ export async function triggerScanLibraryCovers() {
   }
 }
 
+export async function triggerLazyScanLibrary() {
+  if (!currentTargetLibrary || currentTargetLibrary.type === 'system' || currentTargetLibrary.type === 'group') return;
+  if (!['general', 'adult', 'audiobook'].includes(String(state.currentLibraryType || '').toLowerCase())) return;
+
+  const id = currentTargetLibrary.id;
+  const name = currentTargetLibrary.name;
+  try {
+    const data = await api.triggerLibraryLazyScan(state.currentLibraryType, id);
+    if (typeof window.showToast === 'function') {
+      window.showToast(
+        data.success ? data.message : (data.error || i18n.t('category.scan_fail', {error: '요청 실패'})),
+        data.success ? 'success' : 'error'
+      );
+    } else if (!data.success) {
+      alert(i18n.t('category.scan_fail', {error: data.error}));
+    } else {
+      alert(`'${name}' 라이브러리 Lazy-Scanner 작업을 대기열에 추가했습니다.`);
+    }
+  } catch (e) {
+    console.error('라이브러리 Lazy-Scanner 요청 중 오류 발생:', e);
+    if (typeof window.showToast === 'function') {
+      window.showToast('라이브러리 Lazy-Scanner 요청 중 서버 통신 오류가 발생했습니다.', 'error');
+    } else {
+      alert(i18n.t('category.server_error'));
+    }
+  }
+}
+
 export async function triggerCancelScanLibrary() {
   if (!currentTargetLibrary || currentTargetLibrary.type === 'system') return;
   const id = currentTargetLibrary.id;

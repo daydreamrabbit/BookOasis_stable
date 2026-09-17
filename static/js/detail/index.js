@@ -292,11 +292,35 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
         type: currentType
       });
       const detailHash = `#detail?${obfuscatedQuery}`;
+      const previousHistoryState = history.state;
+      const previousReturnState = previousHistoryState?.view === 'detail'
+        ? (previousHistoryState.returnState || null)
+        : (previousHistoryState && typeof previousHistoryState === 'object' ? previousHistoryState : null);
+      const returnLibraryId = previousReturnState?.libraryId ?? state.currentLibraryId;
+      const savedReturnScroll = state.scrollPositions?.[String(returnLibraryId)]
+        ?? state.scrollPositions?.last_pos
+        ?? 0;
+      const returnState = previousReturnState
+        ? {
+          ...previousReturnState,
+          scrollTop: previousReturnState.scrollTop ?? Number(savedReturnScroll),
+        }
+        : null;
+      const detailHistoryState = {
+        view: 'detail',
+        type: currentType,
+        series: safeSeriesName,
+        libraryId: actualLibraryId,
+        sourceLibraryId: state.currentLibraryId || actualLibraryId,
+        repBookId: repIdForHistory || null,
+        displayTitle: displayTitleForHistory || null,
+        returnState,
+      };
 
       if (!window.location.hash.startsWith('#detail')) {
-        history.pushState({ view: 'detail', type: currentType, series: safeSeriesName, libraryId: actualLibraryId, repBookId: repIdForHistory || null, displayTitle: displayTitleForHistory || null }, '', detailHash);
+        history.pushState(detailHistoryState, '', detailHash);
       } else {
-        history.replaceState({ view: 'detail', type: currentType, series: safeSeriesName, libraryId: actualLibraryId, repBookId: repIdForHistory || null, displayTitle: displayTitleForHistory || null }, '', detailHash);
+        history.replaceState(detailHistoryState, '', detailHash);
       }
 
       if (!isAlreadyOpen) {

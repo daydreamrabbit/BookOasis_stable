@@ -6,6 +6,7 @@ import { buildFallbackCoverUrl } from './cover_fallback.js';
 let currentTargetBookId = null;
 let currentSeriesName = null;
 let isSeriesMode = false;
+let bulkSearchQueue = null;
 let cachedPlugins = null; // 플러그인 캐시
 
 function initMetadataSearchDelegation() {
@@ -36,6 +37,12 @@ window.invalidateSearchModalPluginsCache = invalidateSearchModalPluginsCache;
  * 메타데이터 검색 모달창을 오픈하고 검색 소스 목록을 동적으로 구성합니다.
  */
 export async function openMetadataSearchModal(bookId, defaultQuery, seriesMode = false) {
+  bulkSearchQueue = null;
+  updateMetadataSearchTitle();
+  return openMetadataSearchTarget(bookId, defaultQuery, seriesMode);
+}
+
+async function openMetadataSearchTarget(bookId, defaultQuery, seriesMode = false) {
   currentTargetBookId = bookId;
   isSeriesMode = seriesMode;
   currentSeriesName = seriesMode ? defaultQuery : null;
@@ -81,6 +88,38 @@ export async function openMetadataSearchModal(bookId, defaultQuery, seriesMode =
   }
 }
 
+export async function openMetadataSearchQueue(targets) {
+  const books = (Array.isArray(targets) ? targets : [])
+    .map(book => ({ id: Number.parseInt(book?.id, 10), title: String(book?.title || '도서').trim() }))
+    .filter(book => Number.isFinite(book.id) && book.id > 0);
+  if (!books.length) return;
+
+  bulkSearchQueue = { books, index: 0 };
+  const current = books[0];
+  await openMetadataSearchTarget(current.id, current.title, false);
+  updateMetadataSearchTitle();
+}
+
+function updateMetadataSearchTitle() {
+  const title = document.getElementById('metadata-search-modal-title');
+  if (!title) return;
+  if (bulkSearchQueue) {
+    const current = bulkSearchQueue.books[bulkSearchQueue.index];
+    title.textContent = `메타정보 검색 (${bulkSearchQueue.index + 1}/${bulkSearchQueue.books.length}) · ${current?.title || ''}`;
+  } else {
+    title.textContent = window.i18n?.t('modal.meta_search_title') || '도서 메타데이터 검색';
+  }
+}
+
+async function advanceMetadataSearchQueue() {
+  if (!bulkSearchQueue || bulkSearchQueue.index + 1 >= bulkSearchQueue.books.length) return false;
+  bulkSearchQueue.index += 1;
+  const next = bulkSearchQueue.books[bulkSearchQueue.index];
+  await openMetadataSearchTarget(next.id, next.title, false);
+  updateMetadataSearchTitle();
+  return true;
+}
+
 /**
  * 모달창을 닫고 상태를 초기화합니다.
  */
@@ -90,6 +129,8 @@ export function closeMetadataSearchModal() {
   currentTargetBookId = null;
   currentSeriesName = null;
   isSeriesMode = false;
+  bulkSearchQueue = null;
+  updateMetadataSearchTitle();
 }
 
 /**
@@ -192,6 +233,7 @@ function renderMetadataResults(books, source) {
  */
 async function selectMetadataBook(book, source) {
   if (!currentTargetBookId) return;
+  const isBulkSearch = !!bulkSearchQueue;
   
   const confirmMsg = isSeriesMode
     ? i18n.t('metadata_search.confirm_series', {title: book.title, author: book.author, publisher: book.publisher})
@@ -281,6 +323,21 @@ async function selectMetadataBook(book, source) {
         } else {
           console.log('[MetadataApply-DEBUG] 단권/그리드 모드로 완료 처리');
           vm.showToast(res.message, 'success');
+
+          if (isBulkSearch) {
+            if (await advanceMetadataSearchQueue()) {
+              vm.showToast('메타정보를 적용했습니다. 다음 작품을 검색합니다.', 'success');
+              return;
+            }
+
+            bulkSearchQueue = null;
+            closeMetadataSearchModal();
+            if (typeof window.selectCategory === 'function') {
+              window.selectCategory(state.currentLibraryId);
+            }
+            return;
+          }
+
           closeMetadataSearchModal();
           
           // 현재 상세 보기(Detail View)가 활성화되어 있는 경우, 리스트로 돌아가지 않고 상세 화면만 갱신
@@ -314,6 +371,7 @@ async function selectMetadataBook(book, source) {
 
 // 글로벌 윈도우 스코프 바인딩 (인라인 HTML 핸들러 대응)
 window.openMetadataSearchModal = openMetadataSearchModal;
+window.openMetadataSearchQueue = openMetadataSearchQueue;
 window.closeMetadataSearchModal = closeMetadataSearchModal;
 window.performMetadataSearch = performMetadataSearch;
 

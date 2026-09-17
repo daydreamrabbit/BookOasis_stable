@@ -1,8 +1,7 @@
 import { state } from './state.js';
 import * as api from './api.js';
-import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js?v=20260809-unread-series-v3';
+import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js';
 import { openReader } from './viewer.js';
-import { loadLibraries } from './category.js';
 import { initInfiniteScrollObserver } from './infinite_scroll.js';
 import { stripLeadingBracketTags } from './series_display.js';
 import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js';
@@ -259,8 +258,22 @@ export async function loadReadingHistory() {
 
 // 3. 도서 검색 필터링 (클라이언트 사이드 메모리 내 즉시 필터링)
 export function filterBooks() {
-  const query = document.getElementById('library-search').value.toLowerCase().trim();
+  const searchInput = document.getElementById('library-search');
+  const rawQuery = String(searchInput?.value || '').trim();
+  const query = rawQuery.toLowerCase();
   state.searchQuery = query;
+  updateSearchActionButtonUI(query);
+
+  const activeHistoryState = window.history?.state;
+  if (activeHistoryState?.view === 'search') {
+    try {
+      window.history.replaceState(
+        { ...activeHistoryState, searchQuery: rawQuery },
+        '',
+        window.location.href
+      );
+    } catch (e) {}
+  }
 
   // 영상 강좌 세션은 개별 라이브러리 보기에서만 별도의 클라이언트 필터러(video_library.js)를 쓴다.
   // "전체보기"(all)/즐겨찾기/히스토리는 tab_media_library.js::selectCategory()가 video여도
@@ -272,17 +285,15 @@ export function filterBooks() {
     return;
   }
 
-  // 홈 대시보드에서는 검색 시 전체보기로 전환해 동일한 검색어로 목록 필터링한다.
-  if (query && state.currentLibraryId === 'home' && typeof window.selectCategory === 'function') {
-    window.selectCategory('all');
-    return;
-  }
-
-  updateSearchActionButtonUI(query);
-  
-  if (query && state.currentLibraryId === 'history') {
-    state.currentLibraryId = 'all';
-    loadLibraries();
+  // 홈/최근 읽은 도서에서 검색을 시작하면 전체보기로 이동하되, 이 검색 진입점은
+  // history에 남겨 브라우저 뒤로가기/앞으로가기가 원래 화면과 검색 결과를 복원하게 한다.
+  if (query && ['home', 'history'].includes(state.currentLibraryId) && typeof window.selectCategory === 'function') {
+    const searchNavigationFrom = state.currentLibraryId;
+    window.selectCategory('all', false, {
+      preserveSearch: true,
+      searchNavigationFrom,
+      searchQuery: rawQuery,
+    });
     return;
   }
 
@@ -308,6 +319,25 @@ export function updateSearchActionButtonUI(query) {
     btn.innerHTML = `<i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> <span class="sr-only">${i18n.t('common.search')}</span>`;
     btn.title = i18n.t('common.search');
   }
+}
+
+export function clearLibrarySearchQuery() {
+  if (filterDebounceTimer) {
+    clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = null;
+  }
+  const searchInput = document.getElementById('library-search');
+  if (searchInput) searchInput.value = '';
+  state.searchQuery = '';
+  updateSearchActionButtonUI('');
+}
+
+export function restoreLibrarySearchQuery(query = '') {
+  const rawQuery = String(query || '').trim();
+  const searchInput = document.getElementById('library-search');
+  if (searchInput) searchInput.value = rawQuery;
+  state.searchQuery = rawQuery.toLowerCase();
+  updateSearchActionButtonUI(state.searchQuery);
 }
 
 export function updateSortButtonUI() {

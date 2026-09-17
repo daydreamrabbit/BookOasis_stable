@@ -4,6 +4,11 @@ from api.auth import admin_required
 from repositories.category_repository import CategoryRepository
 from repositories.user_repository import UserRepository
 from repositories.settings_repository import SettingsRepository
+from services.content_rating_service import (
+    LEVEL_PORN,
+    SUPPORTED_CONTENT_RATING_LEVELS,
+    get_user_content_rating_max,
+)
 
 permission_bp = Blueprint('permission', __name__)
 
@@ -61,6 +66,9 @@ def get_permissions():
     try:
         # 1. 사용자 목록 조회 (general DB 기준)
         users = UserRepository.get_all_users('general')
+        for user in users:
+            if user.get('role') == 'admin':
+                user['content_rating_max'] = get_user_content_rating_max(user)
 
         general_categories, general_permissions = _fetch_library_permissions('general', include_plugins=True)
         audiobook_categories, audiobook_permissions = _fetch_library_permissions('audiobook', include_plugins=False)
@@ -208,10 +216,17 @@ def update_content_rating_permission():
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': 'content_rating_max 값이 올바르지 않습니다.'}), 400
 
-    if content_rating_max not in (0, 15, 18):
-        return jsonify({'success': False, 'error': 'content_rating_max는 0, 15, 18 중 하나여야 합니다.'}), 400
+    if content_rating_max not in SUPPORTED_CONTENT_RATING_LEVELS:
+        return jsonify({'success': False, 'error': 'content_rating_max는 0, 15, 18, 19, 20 중 하나여야 합니다.'}), 400
 
     try:
+        target_user = UserRepository.find_by_id('general', user_id)
+        if target_user and target_user.get('role') == 'admin' and content_rating_max != LEVEL_PORN:
+            return jsonify({
+                'success': False,
+                'error': '관리자 계정의 최대 허용 등급은 포르노로 고정되어 있습니다.'
+            }), 400
+
         # 3개 DB 모두 사용자 콘텐츠 등급 동기화 업데이트
         for db_type in ['general', 'adult', 'audiobook']:
             UserRepository.update_content_rating_max(db_type, user_id, content_rating_max)

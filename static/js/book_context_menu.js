@@ -1,10 +1,12 @@
 // book_context_menu.js – 도서 우클릭 단독 스캔 컨텍스트 메뉴 제어 모듈
 import { state } from './state.js';
-import * as api from './api.js?v=20260809-unread-series-v3';
+import * as api from './api.js';
 import { openBookDetail } from './modal.js';
-import { loadBooksList, loadReadingHistory } from './book_list.js?v=20260809-unread-series-v3';
-import { loadDashboardData } from './dashboard.js?v=20260809-unread-series-v3';
+import { loadBooksList, loadReadingHistory } from './book_list.js';
+import { loadDashboardData } from './dashboard.js?v=20260917-home-widget-plugin-ui-v1';
 import { hideFloatingMenu, isFloatingMenuOpen, positionMenuAtPoint } from './context_menu_manager.js';
+import { clearBookSelection, getSelectedBookTargets, isBookCardSelected } from './book_selection.js';
+import { refreshSystemStatus } from './scan_activity_status.js';
 
 let currentTargetBook = null;
 let contextMenuSuppressUntil = 0;
@@ -29,6 +31,21 @@ function isIOSDevice() {
 }
 
 const isIOS = isIOSDevice();
+
+function canRunLazyScanFromCurrentBookMenu() {
+  const user = state.currentUser || window.currentUser || {};
+  const dbType = String(state.currentLibraryType || '').toLowerCase();
+  return String(user.role || '').trim().toLowerCase() === 'admin'
+    && ['general', 'adult', 'audiobook'].includes(dbType);
+}
+
+function getLazyScanSeriesTarget(book) {
+  if (!book || book.isVolumeDetail || book.markUnreadScope !== 'series') return null;
+  const libraryId = Number(book.libraryId);
+  const seriesName = String(book.seriesName || '').trim();
+  if (!Number.isInteger(libraryId) || libraryId <= 0 || !seriesName) return null;
+  return { libraryId, seriesName };
+}
 
 export function invalidateMetadataPluginsCache() {
   cachedSearchPlugins = null;
@@ -142,7 +159,7 @@ function adjustMenuPosition(x, y) {
 }
 
 async function loadPluginContextMenuItems() {
-  if (!currentTargetBook || !currentTargetBook.id) {
+  if (!currentTargetBook || !currentTargetBook.id || currentTargetBook.selectedBooks?.length > 1) {
     clearPluginContextMenuItems();
     return;
   }
@@ -207,30 +224,52 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
   
   lastEventX = x;
   lastEventY = y;
+  const selectedBooks = Array.isArray(context.selectedBooks) ? context.selectedBooks : [];
+  const isMultiSelection = selectedBooks.length > 1;
   const seriesName = String(context.seriesName || (isVolumeDetail ? state.detailSeriesName : '') || '').trim();
-  currentTargetBook = { id: bookId, title: bookTitle, isVolumeDetail, ...context, seriesName };
+  currentTargetBook = { id: bookId, title: bookTitle, isVolumeDetail, ...context, selectedBooks, seriesName };
+
+  const menuTitle = bookMenu.querySelector('.context-menu-title');
+  if (menuTitle) menuTitle.textContent = isMultiSelection ? `도서 메뉴 (${selectedBooks.length}개 선택)` : '도서 메뉴';
+
+  const lazyScanItem = document.getElementById('ctx-lazy-scan-book');
+  if (lazyScanItem) lazyScanItem.style.display = canRunLazyScanFromCurrentBookMenu() ? '' : 'none';
+  if (lazyScanItem) {
+    const seriesTarget = !isMultiSelection ? getLazyScanSeriesTarget(currentTargetBook) : null;
+    const label = lazyScanItem.querySelector('span[data-i18n]');
+    const key = seriesTarget ? 'context_menu.lazy_scan_series' : 'context_menu.lazy_scan_book';
+    if (label) {
+      label.dataset.i18n = key;
+      label.textContent = window.i18n?.t(key) || (
+        seriesTarget ? 'Lazy-Scanner 실행 (시리즈 전체)' : 'Lazy-Scanner 실행 (선택/클릭한 작품)'
+      );
+    }
+  }
 
   // "페이지 넘김으로 보기(실험적)"는 이미지 기반 만화(zip/cbz)에서만 의미가 있음
   const pageTurnItem = document.getElementById('ctx-page-turn-book');
   if (pageTurnItem) {
     const fmt = String(context.fileFormat || '').toLowerCase();
-    pageTurnItem.style.display = (fmt === 'zip' || fmt === 'cbz') ? '' : 'none';
+    pageTurnItem.style.display = (!isMultiSelection && (fmt === 'zip' || fmt === 'cbz')) ? '' : 'none';
   }
 
   const addSeriesItem = document.getElementById('ctx-add-series-to-collection');
   if (addSeriesItem) {
-    addSeriesItem.style.display = seriesName ? '' : 'none';
+    const allSelectedHaveSeries = isMultiSelection && selectedBooks.every(book => String(book.seriesName || '').trim());
+    addSeriesItem.style.display = (isMultiSelection ? allSelectedHaveSeries : !!seriesName) ? '' : 'none';
   }
 
   // "커버 정렬"은 개별 권(볼륨) 카드에서만 의미가 있음 (시리즈 카드는 어느 권을 정렬할지 모호함)
   const coverAlignItem = document.getElementById('ctx-cover-align-book');
   if (coverAlignItem) {
-    coverAlignItem.style.display = isVolumeDetail ? '' : 'none';
+    coverAlignItem.style.display = (!isMultiSelection && isVolumeDetail) ? '' : 'none';
   }
 
   const unreadLabel = document.querySelector('#ctx-unread-book span');
   if (unreadLabel) {
-    unreadLabel.textContent = context.markUnreadScope === 'series'
+    unreadLabel.textContent = isMultiSelection
+      ? `선택한 ${selectedBooks.length}개 작품을 읽지 않은 상태로 변경 (0%)`
+      : context.markUnreadScope === 'series'
       ? (window.i18n?.t('context_menu.mark_series_as_unread') || '이 시리즈 전체를 읽지 않은 상태로 변경 (0%)')
       : (window.i18n?.t('context_menu.mark_as_unread') || '읽지 않은 상태로 변경 (0%)');
   }
@@ -244,7 +283,9 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
         if (data.success && Array.isArray(data.plugins)) {
           cachedSearchPlugins = data.plugins;
           const hasActive = cachedSearchPlugins.some(p => p.enabled);
-          metaSearchEl.style.display = hasActive ? 'block' : 'none';
+          // Keep the stylesheet's grid layout when showing the item. Setting `block` here
+          // overrides `.context-menu-item { display: grid; }` and shifts this row's label.
+          metaSearchEl.style.display = hasActive ? '' : 'none';
           // 메뉴의 높이가 변경될 수 있으므로 재조정 호출
           adjustMenuPosition(lastEventX, lastEventY);
         }
@@ -254,7 +295,7 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
     } else {
       // 2. 캐시된 목록 기준 판단
       const hasActive = cachedSearchPlugins.some(p => p.enabled);
-      metaSearchEl.style.display = hasActive ? 'block' : 'none';
+      metaSearchEl.style.display = hasActive ? '' : 'none';
     }
   }
 
@@ -346,61 +387,90 @@ window.triggerPageTurnAction = triggerPageTurnAction;
 
 export async function triggerScanSingleBookAction() {
   if (!currentTargetBook || !currentTargetBook.id) return;
-  const { id, title, isVolumeDetail } = currentTargetBook;
+  const { id, title } = currentTargetBook;
+
+  const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
+  if (selectedBooks.length > 1) {
+    const vm = await import('./view_manager.js');
+    try {
+      const result = await api.enqueueBatchBookScan(
+        state.currentLibraryType,
+        selectedBooks.map(book => book.id)
+      );
+      if (!result?.success) {
+        vm.showToast(result?.error || '다중 도서 스캔 요청에 실패했습니다.', 'error');
+        return;
+      }
+      closeBookContextMenu();
+      clearBookSelection();
+      refreshSystemStatus();
+      vm.showToast(result.message || `선택한 ${selectedBooks.length}개 작품의 스캔을 대기열에 추가했습니다.`, 'success');
+    } catch (error) {
+      console.error('[BookContextMenu] 다중 스캔 요청 실패:', error);
+      vm.showToast('다중 도서 스캔 요청 중 서버 통신 오류가 발생했습니다.', 'error');
+    }
+    return;
+  }
   
   import('./view_manager.js').then(async (vm) => {
-    vm.showToast(`"${title}" 스캔 중...`, 'info');
     try {
-      const res = await api.scanSingleBook(state.currentLibraryType, id);
-      if (res.success) {
-        vm.showToast(res.message, 'success');
-        
-        const newCoverName = res.cover_image;
-        if (!newCoverName) return;
-
-        // 캐시 버스팅을 위한 URL 타임스탬프 생성
-        const cacheBustedCoverUrl = `/covers/${newCoverName}?t=${Date.now()}`;
-
-        if (isVolumeDetail) {
-          // 상세 뷰: 해당 volume-card의 img 갱신
-          // oncontextmenu 식에 b.id 값을 인자로 보냈음
-          const volCards = document.querySelectorAll('.volume-card');
-          volCards.forEach(card => {
-            // 인라인 oncontextmenu 식 문자열 분석 혹은 innerHTML 내 openReader 호출 등으로 매칭 탐색
-            if (card.outerHTML.includes(`openReader(${id},`) || card.outerHTML.includes(`showBookContextMenu(event.clientX, event.clientY, ${id},`)) {
-              const img = card.querySelector('.volume-thumb');
-              if (img) {
-                img.src = cacheBustedCoverUrl;
-                console.log(`[CacheBusting] 상세 뷰 단행본 표지 교체 성공 (ID: ${id})`);
-              }
-            }
-          });
-        } else {
-          // 그리드 뷰: data-book-id 기반으로 매칭되는 카드 찾기
-          const targetCard = document.querySelector(`.book-card[data-book-id="${id}"]`);
-          if (targetCard) {
-            const img = targetCard.querySelector('.book-card-cover img');
-            if (img) {
-              img.src = cacheBustedCoverUrl;
-              console.log(`[CacheBusting] 그리드 뷰 책 표지 교체 성공 (ID: ${id})`);
-            }
-          }
-        }
-      } else {
-        vm.showToast(`스캔 실패: ${res.error}`, 'error');
+      const result = await api.enqueueBatchBookScan(state.currentLibraryType, [id]);
+      if (!result?.success) {
+        vm.showToast(result?.error || `"${title}" 스캔 요청에 실패했습니다.`, 'error');
+        return;
       }
+
+      closeBookContextMenu();
+      clearBookSelection();
+      refreshSystemStatus();
+      vm.showToast(result.message || `"${title}" 스캔이 대기열에 추가되었습니다.`, 'success');
     } catch (err) {
-      console.error('단일 도서 스캔 API 에러:', err);
-      vm.showToast('서버 통신 중 오류가 발생했습니다.', 'error');
+      console.error('단일 도서 스캔 대기열 등록 오류:', err);
+      vm.showToast('도서 스캔 요청 중 서버 통신 오류가 발생했습니다.', 'error');
     }
   });
 }
 
 window.triggerScanSingleBookAction = triggerScanSingleBookAction;
 
+export async function triggerLazyScanBookAction() {
+  if (!currentTargetBook || !canRunLazyScanFromCurrentBookMenu()) return;
+
+  const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
+  const seriesTarget = selectedBooks.length > 1 ? null : getLazyScanSeriesTarget(currentTargetBook);
+  const bookIds = selectedBooks.length > 1
+    ? selectedBooks.map(book => Number(book.id)).filter(id => Number.isInteger(id) && id > 0)
+    : [Number(currentTargetBook.id)];
+  if (!seriesTarget && (!currentTargetBook.id || !bookIds.length)) return;
+
+  closeBookContextMenu();
+  const vm = await import('./view_manager.js');
+  try {
+    const result = seriesTarget
+      ? await api.triggerSeriesLazyScan(state.currentLibraryType, seriesTarget.libraryId, seriesTarget.seriesName)
+      : await api.triggerBooksLazyScan(state.currentLibraryType, bookIds);
+    vm.showToast(result?.success ? result.message : (result?.error || 'Lazy-Scanner 요청에 실패했습니다.'), result?.success ? 'success' : 'error');
+    if (result?.success) clearBookSelection();
+  } catch (error) {
+    console.error('[BookContextMenu] Lazy-Scanner 요청 실패:', error);
+    vm.showToast('Lazy-Scanner 요청 중 서버 통신 오류가 발생했습니다.', 'error');
+  }
+}
+window.triggerLazyScanBookAction = triggerLazyScanBookAction;
+
 export function triggerSearchMetadataAction() {
   if (!currentTargetBook || !currentTargetBook.id) return;
   const { id, title } = currentTargetBook;
+
+  const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
+  if (selectedBooks.length > 1) {
+    if (typeof window.openMetadataSearchQueue === 'function') {
+      window.openMetadataSearchQueue(selectedBooks.map(book => ({ id: book.id, title: book.title })));
+    } else {
+      import('./view_manager.js').then(vm => vm.showToast('다중 메타정보 검색 기능을 불러오지 못했습니다.', 'error'));
+    }
+    return;
+  }
   
   if (typeof window.openMetadataSearchModal === 'function') {
     window.openMetadataSearchModal(id, title);
@@ -434,9 +504,53 @@ export async function triggerMarkAsUnreadAction() {
   if (!currentTargetBook || !currentTargetBook.id) return;
   const { id, title, markUnreadScope, seriesName, libraryId } = currentTargetBook;
   const isSeriesScope = markUnreadScope === 'series';
+  const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
 
   import('./view_manager.js').then(async (vm) => {
     try {
+      if (selectedBooks.length > 1) {
+        const uniqueTargets = new Map();
+        selectedBooks.forEach((book) => {
+          const scope = book.markUnreadScope === 'series'
+            && String(book.seriesName || '').trim()
+            && book.libraryId !== null
+            ? 'series'
+            : 'book';
+          const key = scope === 'series'
+            ? `${scope}:${book.libraryId ?? ''}:${String(book.seriesName || '').trim()}`
+            : `${scope}:${book.libraryId ?? ''}:${book.id}`;
+          if (!uniqueTargets.has(key)) uniqueTargets.set(key, { ...book, scope });
+        });
+
+        let succeeded = 0;
+        const failures = [];
+        for (const book of uniqueTargets.values()) {
+          try {
+            const result = await api.markBookAsUnread(state.currentLibraryType, book.id, {
+              scope: book.scope,
+              seriesName: book.seriesName,
+              libraryId: book.libraryId,
+            });
+            if (result?.success) succeeded += 1;
+            else failures.push({ title: book.title, error: result?.error || '변경 실패' });
+          } catch (error) {
+            failures.push({ title: book.title, error: error.message || '서버 통신 오류' });
+          }
+        }
+
+        vm.showToast(
+          `선택 항목 읽지 않음 처리: ${succeeded}/${uniqueTargets.size}개${failures.length ? ` (실패 ${failures.length}개)` : ''}`,
+          failures.length ? 'warning' : 'success'
+        );
+        if (failures.length) console.warn('[BookContextMenu] 다중 읽지 않음 처리 실패:', failures);
+        closeBookContextMenu();
+        clearBookSelection();
+        if (state.currentLibraryId === 'home') await loadDashboardData();
+        else if (state.currentLibraryId === 'history') await loadReadingHistory();
+        else await loadBooksList();
+        return;
+      }
+
       const res = await api.markBookAsUnread(state.currentLibraryType, id, {
         scope: isSeriesScope ? 'series' : 'book',
         seriesName,
@@ -516,6 +630,15 @@ document.addEventListener('contextmenu', (event) => {
   const target = resolveBookContextTarget(event);
   if (!target) return;
 
+  const card = event.target.closest('.book-card');
+  const selected = getSelectedBookTargets();
+  let selectedBooks = [];
+  if (selected.length > 1 && card && isBookCardSelected(card)) {
+    selectedBooks = selected;
+  } else if (selected.length > 0 && (!card || !isBookCardSelected(card))) {
+    clearBookSelection();
+  }
+
   suppressBookCardClickUntil = Date.now() + 700;
 
   event.preventDefault();
@@ -530,6 +653,7 @@ document.addEventListener('contextmenu', (event) => {
     libraryId: target.libraryId,
     coverAlign: target.coverAlign,
     fileFormat: target.fileFormat,
+    selectedBooks,
   });
 }, true);
 
@@ -700,14 +824,40 @@ if (bookMenuEl) {
 export function triggerAddToCollectionAction() {
   if (!currentTargetBook || !currentTargetBook.id) return;
   const { id, title } = currentTargetBook;
+  const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
   import('./tab_collections.js').then((colls) => {
-    colls.openAddToCollectionModal({ book_id: id, title: title });
+    if (selectedBooks.length > 1) {
+      colls.openAddToCollectionModal({
+        title: `선택한 ${selectedBooks.length}개 작품`,
+        items: selectedBooks.map(book => ({ book_id: book.id, title: book.title })),
+      });
+    } else {
+      colls.openAddToCollectionModal({ book_id: id, title: title });
+    }
   });
 }
 window.triggerAddToCollectionAction = triggerAddToCollectionAction;
 
 export function triggerAddSeriesToCollectionAction() {
   if (!currentTargetBook) return;
+  const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
+  if (selectedBooks.length > 1) {
+    const seriesItems = Array.from(new Map(
+      selectedBooks
+        .map(book => String(book.seriesName || '').trim())
+        .filter(Boolean)
+        .map(name => [name, { series_name: name, title: name }])
+    ).values());
+    if (!seriesItems.length) return;
+    import('./tab_collections.js').then((colls) => {
+      colls.openAddToCollectionModal({
+        title: `선택한 ${seriesItems.length}개 시리즈`,
+        items: seriesItems,
+      });
+    });
+    return;
+  }
+
   const seriesName = String(currentTargetBook.seriesName || '').trim();
   if (!seriesName) return;
   import('./tab_collections.js').then((colls) => {
@@ -732,6 +882,7 @@ if (!window.__bookContextActionBound) {
 
     const action = target.getAttribute('data-action');
     if (action === 'scan') return window.triggerScanSingleBookAction?.();
+    if (action === 'lazy-scan') return window.triggerLazyScanBookAction?.();
     if (action === 'search-meta') return window.triggerSearchMetadataAction?.();
     if (action === 'add-to-collection') return window.triggerAddToCollectionAction?.();
     if (action === 'add-series-to-collection') return window.triggerAddSeriesToCollectionAction?.();

@@ -318,6 +318,13 @@ export function openCreateCollectionModal(onCreated) {
 }
 
 export function openAddToCollectionModal(itemInfo) {
+  const isBulkAdd = Array.isArray(itemInfo?.items);
+  const collectionItems = isBulkAdd ? itemInfo.items : [itemInfo];
+  const addToSelectedCollection = async (collectionId) => {
+    if (isBulkAdd) await addItemsToCollection(collectionId, collectionItems);
+    else await addItemToCollection(collectionId, itemInfo);
+  };
+
   fetch(`/api/v1/collections?db_type=${state.currentLibraryType || 'general'}`)
     .then(r => r.json())
     .then(data => {
@@ -350,7 +357,7 @@ export function openAddToCollectionModal(itemInfo) {
         <div id="modal-add-to-collection" style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
           <div style="background: rgba(var(--app-panel-rgb), 1); border: 1px solid rgba(var(--app-panel-border-rgb), 0.1); border-radius: 12px; width: 90%; max-width: 400px; padding: 1.5rem; color: var(--app-text-primary); box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);">
             <h3 style="margin: 0 0 1rem 0; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
-              <i class="fa-solid fa-plus-circle" style="color: var(--app-accent);"></i> 컬렉션에 추가
+              <i class="fa-solid fa-plus-circle" style="color: var(--app-accent);"></i> ${escapeHtml(itemInfo?.title || '컬렉션에 추가')}
             </h3>
             <div style="margin-bottom: 1rem; max-height: 240px; overflow-y: auto;">
               ${listHtml}
@@ -371,21 +378,21 @@ export function openAddToCollectionModal(itemInfo) {
       document.getElementById('btn-new-coll-inside')?.addEventListener('click', () => {
         document.getElementById('modal-add-to-collection')?.remove();
         openCreateCollectionModal((newCollId) => {
-          addItemToCollection(newCollId, itemInfo);
+          addToSelectedCollection(newCollId);
         });
       });
 
       document.querySelectorAll('.coll-select-option').forEach(opt => {
         opt.addEventListener('click', async () => {
           const collId = opt.getAttribute('data-coll-id');
-          await addItemToCollection(collId, itemInfo);
+          await addToSelectedCollection(collId);
           document.getElementById('modal-add-to-collection')?.remove();
         });
       });
     });
 }
 
-async function addItemToCollection(collectionId, itemInfo) {
+async function addItemToCollection(collectionId, itemInfo, { silent = false } = {}) {
   if (itemInfo.author_key) {
     try {
       const res = await fetch(`/api/v1/collections/${collectionId}/items/by-author?db_type=${state.currentLibraryType || 'general'}`, {
@@ -396,14 +403,16 @@ async function addItemToCollection(collectionId, itemInfo) {
       const data = await res.json();
       if (data.success) {
         const skippedText = data.skipped_count > 0 ? ` (이미 있던 ${data.skipped_count}개는 건너뜀)` : '';
-        alert(`컬렉션에 ${data.added_count}개 항목이 추가되었습니다.${skippedText}`);
+        if (!silent) alert(`컬렉션에 ${data.added_count}개 항목이 추가되었습니다.${skippedText}`);
       } else {
-        alert(`추가 실패: ${data.error}`);
+        if (!silent) alert(`추가 실패: ${data.error}`);
       }
+      return data;
     } catch (e) {
-      alert(`오류: ${e.message}`);
+      if (!silent) alert(`오류: ${e.message}`);
+      return { success: false, error: e.message };
     }
-    return;
+    return { success: false, error: '작가 항목을 추가하지 못했습니다.' };
   }
 
   try {
@@ -420,12 +429,29 @@ async function addItemToCollection(collectionId, itemInfo) {
     });
     const data = await res.json();
     if (data.success) {
-      alert('컬렉션에 성공적으로 추가되었습니다!');
+      if (!silent) alert('컬렉션에 성공적으로 추가되었습니다!');
     } else {
-      alert(`추가 실패: ${data.error}`);
+      if (!silent) alert(`추가 실패: ${data.error}`);
     }
+    return data;
   } catch (e) {
-    alert(`오류: ${e.message}`);
+    if (!silent) alert(`오류: ${e.message}`);
+    return { success: false, error: e.message };
+  }
+}
+
+async function addItemsToCollection(collectionId, items) {
+  const results = [];
+  for (const item of items || []) {
+    results.push(await addItemToCollection(collectionId, item, { silent: true }));
+  }
+
+  const addedCount = results.filter(result => result?.success).length;
+  const failure = results.find(result => !result?.success);
+  if (addedCount === results.length) {
+    alert(`선택한 ${addedCount}개 항목을 컬렉션에 추가했습니다.`);
+  } else {
+    alert(`선택한 ${results.length}개 중 ${addedCount}개를 추가했습니다.${failure?.error ? ` 첫 오류: ${failure.error}` : ''}`);
   }
 }
 

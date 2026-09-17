@@ -30,6 +30,12 @@ function safeHref(url) {
 }
 
 export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId, displayTitle = '') {
+  const booksLvValue = String(meta.books_lv || '').trim().toLowerCase();
+  const isAdultMangaRating = ['r18', 'r18+', '성인망가', 'adult manga'].includes(booksLvValue);
+  const isPornRating = [
+    'adult only', 'adult only 18+', 'adultsonly18+', 'adults only 18+',
+    'x18+', '포르노', 'porn', 'pornography',
+  ].includes(booksLvValue);
   let visibleTitle = stripLeadingBracketTags(String(displayTitle || '').trim() || safeSeriesName);
 
   const toSeriesLikeTitle = (rawTitle) => {
@@ -87,9 +93,15 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
       0: { bg: 'rgba(148, 163, 184, 0.15)', fg: '#94a3b8', border: 'rgba(148, 163, 184, 0.3)' },
       15: { bg: 'rgba(234, 179, 8, 0.15)', fg: '#eab308', border: 'rgba(234, 179, 8, 0.3)' },
       18: { bg: 'rgba(239, 68, 68, 0.15)', fg: '#ef4444', border: 'rgba(239, 68, 68, 0.3)' },
+      19: { bg: 'rgba(192, 132, 252, 0.15)', fg: '#c084fc', border: 'rgba(192, 132, 252, 0.3)' },
+      20: { bg: 'rgba(244, 63, 94, 0.15)', fg: '#f43f5e', border: 'rgba(244, 63, 94, 0.3)' },
     };
     const colors = ratingColorMap[ratingLevel] || ratingColorMap[18];
-    const ratingLabel = meta.content_rating_label || (ratingLevel === 0 ? '전체이용가' : ratingLevel === 15 ? '15세이상' : '18세이상(성인)');
+    const ratingLabelMap = {
+      0: '전체이용가', 15: '15세이상', 18: '18세이상(성인)',
+      19: '성인망가', 20: '포르노',
+    };
+    const ratingLabel = meta.content_rating_label || ratingLabelMap[ratingLevel] || '포르노';
     ratingBadgeHtml = `
       <span class="badge" data-role="detail-rating-badge" title="열람 등급" style="background: ${colors.bg}; color: ${colors.fg}; border: 1px solid ${colors.border}; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; font-weight: 700;">
         <i class="fa-solid fa-shield-halved" style="font-size: 0.7rem; margin-right: 0.3rem;"></i>${ratingLabel}
@@ -519,15 +531,15 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
           <div class="edit-meta-row-item">
             <label>${i18n.t('detail.label_books_lv')}</label>
             <select id="edit-books-lv-input" class="edit-meta-input">
-              <option value="" ${!meta.books_lv ? 'selected' : ''}>${i18n.t('detail.books_lv_unset')}</option>
-              <option value="everyone" ${meta.books_lv === 'everyone' ? 'selected' : ''}>everyone</option>
-              <option value="일반" ${meta.books_lv === '일반' ? 'selected' : ''}>일반</option>
-              <option value="ma15+" ${meta.books_lv === 'ma15+' ? 'selected' : ''}>ma15+</option>
-              <option value="m" ${meta.books_lv === 'm' ? 'selected' : ''}>m</option>
-              <option value="15세" ${meta.books_lv === '15세' ? 'selected' : ''}>15세</option>
-              <option value="r18" ${meta.books_lv === 'r18' ? 'selected' : ''}>r18</option>
-              <option value="adult only" ${meta.books_lv === 'adult only' ? 'selected' : ''}>adult only</option>
-              <option value="18세" ${meta.books_lv === '18세' ? 'selected' : ''}>18세</option>
+              <option value="" ${!booksLvValue ? 'selected' : ''}>${i18n.t('detail.books_lv_unset')}</option>
+              <option value="everyone" ${booksLvValue === 'everyone' ? 'selected' : ''}>everyone</option>
+              <option value="일반" ${booksLvValue === '일반' ? 'selected' : ''}>일반</option>
+              <option value="ma15+" ${booksLvValue === 'ma15+' ? 'selected' : ''}>ma15+</option>
+              <option value="m" ${booksLvValue === 'm' ? 'selected' : ''}>m</option>
+              <option value="15세" ${booksLvValue === '15세' ? 'selected' : ''}>15세</option>
+              <option value="r18" ${isAdultMangaRating ? 'selected' : ''}>R18 (성인망가)</option>
+              <option value="adult only 18+" ${isPornRating ? 'selected' : ''}>Adult Only 18+ (포르노)</option>
+              <option value="18세" ${['18세', '18세이상', '18세이상(성인)', '성인'].includes(booksLvValue) ? 'selected' : ''}>18세</option>
             </select>
           </div>
           <div class="edit-meta-row-item">

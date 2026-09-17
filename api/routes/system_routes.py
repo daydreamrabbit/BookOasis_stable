@@ -4,6 +4,7 @@ system_routes.py – 시스템 상태, 큐, 정보 조회 라우터
 """
 import os
 import re
+import datetime
 from flask import Blueprint, request, jsonify, session
 from api.auth import admin_required, login_required, verify_webhook_token, webhook_token_required
 from flask import render_template
@@ -15,6 +16,24 @@ import database
 system_bp = Blueprint('system', __name__)
 
 _LIB_NAME_MEM_CACHE = {}
+
+
+def _elapsed_seconds_from_server_timestamp(value):
+    """서버/DB가 기록한 타임스탬프와 같은 시간대 기준으로 경과 초를 계산합니다."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, datetime.datetime):
+            started_at = value
+        else:
+            raw = str(value).strip()
+            if raw.endswith('Z'):
+                raw = raw[:-1] + '+00:00'
+            started_at = datetime.datetime.fromisoformat(raw)
+        now = datetime.datetime.now(started_at.tzinfo) if started_at.tzinfo else datetime.datetime.now()
+        return max(0, int((now - started_at).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 def get_library_name(db_type, lib_id):
     """라이브러리 ID에 대치되는 실제 카테고리(라이브러리) 명칭을 메모리 캐시에서 즉시 조회합니다 (DB Lock 예방)."""
@@ -80,6 +99,11 @@ def get_system_status():
         tuning_active = database.is_db_tuning(db_type)
         from services.scanner_queue import scanner_queue
         status = scanner_queue.get_queue_status()
+        if status.get('running'):
+            running = status['running']
+            running['elapsed_seconds'] = _elapsed_seconds_from_server_timestamp(
+                running.get('started_at') or running.get('enqueued_at')
+            )
 
         running_tasks = []
         has_running = False
@@ -105,6 +129,9 @@ def get_system_status():
                 running_tasks.append(f"[{target_disp} ({db_t})] 표지 전용 스캔 진행 중...")
             elif task_type == 'lazy_scan':
                 running_tasks.append("[전체 시스템] Lazy Scanner 실행 중...")
+            elif task_type == 'batch_book_scan':
+                selected_count = len(kwargs.get('book_ids') or [])
+                running_tasks.append(f"[선택 도서 {selected_count}권] 메타데이터/표지 스캔 진행 중...")
             else:
                 running_tasks.append("백그라운드 작업 진행 중...")
 
@@ -138,6 +165,8 @@ def get_system_status():
             _add_library_name(status['running'])
         for pending_task in status.get('pending', []):
             _add_library_name(pending_task)
+        for recent_task in status.get('recent_book_scans', []):
+            _add_library_name(recent_task)
 
         response = jsonify({
             'success': True,
@@ -189,6 +218,15 @@ def get_system_queue_status():
                 task['library_name'] = f"{lib_name} ({db_type})" if lib_name else f"Library {lib_id} ({db_type})"
             elif task['type'] == 'lazy_scan':
                 task['library_name'] = "전체 시스템 (Lazy Scanner)"
+            elif task['type'] == 'batch_book_scan':
+                kwargs = task.get('kwargs', {})
+                db_type = kwargs.get('db_type', 'general')
+                library_id = kwargs.get('library_id')
+                if library_id is not None:
+                    library_name = get_library_name(db_type, library_id)
+                    task['library_name'] = f"{library_name} ({db_type})" if library_name else f"Library {library_id} ({db_type})"
+                else:
+                    task['library_name'] = f"선택 도서 {len(kwargs.get('book_ids') or [])}권"
             return task
         
         if status['running']:

@@ -8,6 +8,11 @@ let lastActiveLibIds = new Set();
 let lastIsHeaderScanning = false;
 let scanLatchTimerMap = new Map();
 let latestSystemStatus = null;
+let refreshStatusPoll = null;
+
+export function refreshSystemStatus() {
+  return refreshStatusPoll ? refreshStatusPoll() : Promise.resolve();
+}
 
 function escapeActivityText(value) {
   const node = document.createElement('div');
@@ -19,7 +24,7 @@ function escapeActivityAttribute(value) {
   return escapeActivityText(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function getScanActivityTaskInfo(task, isPending = false) {
+function getScanActivityTaskInfo(task, isPending = false, isRecent = false) {
   const taskType = task?.type || task?.task_type || 'background';
   const kwargs = task?.kwargs || {};
   const libraryId = kwargs.library_id;
@@ -29,20 +34,38 @@ function getScanActivityTaskInfo(task, isPending = false) {
     library_scan: '카테고리 스캔',
     cover_scan: '표지 스캔',
     lazy_scan: '미디어 검색',
+    batch_book_scan: '선택 도서 스캔',
     gdrive_copy: 'Drive 복사',
   };
-  const title = task?.library_name
-    || (taskType === 'lazy_scan' ? '전체 시스템' : libraryId != null ? `Library ${libraryId} (${dbType})` : '백그라운드 작업');
-  const detail = isPending ? `${names[taskType] || '백그라운드 작업'} 대기 중` : stage || `${names[taskType] || '백그라운드 작업'} 진행 중`;
-  const startedAt = task?.started_at || task?.enqueued_at;
-  return { title, detail, startedAt };
+  const batchCount = Array.isArray(kwargs.book_ids) ? kwargs.book_ids.length : 0;
+  const isSingleBookScan = taskType === 'batch_book_scan' && batchCount === 1;
+  const singleBookLabel = isRecent && isSingleBookScan && kwargs.book_title
+    ? String(kwargs.book_title)
+    : '도서 1권';
+  const title = taskType === 'batch_book_scan'
+    ? `${task?.library_name ? `${task.library_name} · ` : ''}${isSingleBookScan ? singleBookLabel : `선택 도서 ${batchCount}권`}`
+    : task?.library_name
+      || (taskType === 'lazy_scan' ? '전체 시스템' : libraryId != null ? `Library ${libraryId} (${dbType})` : '백그라운드 작업');
+  const taskName = isSingleBookScan ? '도서 스캔' : (names[taskType] || '백그라운드 작업');
+  const statusLabel = task?.status === 'failed' ? '실패' : task?.status === 'cancelled' ? '취소' : '완료';
+  const detail = isRecent
+    ? (stage || (statusLabel === '완료' ? '스캔 완료' : `스캔 ${statusLabel}`))
+    : isPending ? `${taskName} 대기 중` : stage || `${taskName} 진행 중`;
+  return { title, detail };
 }
 
-function formatScanActivityElapsed(startedAt) {
-  if (!startedAt) return '';
-  const started = parseServerDateTime(startedAt);
-  if (!started) return '';
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - started.getTime()) / 1000));
+function formatScanActivityElapsed(task) {
+  let elapsedSeconds = null;
+  if (task?.elapsed_seconds !== null && task?.elapsed_seconds !== undefined
+      && Number.isFinite(Number(task.elapsed_seconds))) {
+    elapsedSeconds = Math.max(0, Math.floor(Number(task.elapsed_seconds)));
+  } else {
+    const startedAt = task?.started_at || task?.enqueued_at;
+    if (!startedAt) return '';
+    const started = parseServerDateTime(startedAt);
+    if (!started) return '';
+    elapsedSeconds = Math.max(0, Math.floor((Date.now() - started.getTime()) / 1000));
+  }
   if (elapsedSeconds < 60) return `${elapsedSeconds}초`;
   const minutes = Math.floor(elapsedSeconds / 60);
   if (minutes < 60) return `${minutes}분`;
@@ -58,12 +81,16 @@ function renderScanActivity(data) {
 
   const running = data?.raw_status?.running || null;
   const pending = Array.isArray(data?.raw_status?.pending) ? data.raw_status.pending : [];
+  const recentBookScans = Array.isArray(data?.raw_status?.recent_book_scans)
+    ? data.raw_status.recent_book_scans
+    : [];
   const isActive = Boolean(data?.success && data?.is_active);
   button.classList.toggle('is-active', isActive);
 
   const tasks = [];
   if (running) tasks.push({ task: running, pending: false });
   pending.forEach(task => tasks.push({ task, pending: true }));
+  recentBookScans.forEach(task => tasks.push({ task, pending: false, recent: true }));
   if (tasks.length === 0 && isActive && Array.isArray(data?.tasks)) {
     data.tasks.forEach(detail => tasks.push({
       task: { type: 'background', library_name: '시스템 유지보수', stage: detail },
@@ -73,7 +100,9 @@ function renderScanActivity(data) {
   button.title = tasks.length > 0 ? `스캔 활동 ${tasks.length}건` : '스캔 활동';
   summary.textContent = running
     ? `실행 중 · 대기 ${pending.length}건`
-    : pending.length ? `대기 ${pending.length}건` : tasks.length ? '실행 중' : '대기 중';
+    : pending.length ? `대기 ${pending.length}건`
+      : recentBookScans.length ? `최근 도서 스캔 ${recentBookScans.length}건`
+        : tasks.length ? '실행 중' : '대기 중';
   if (tasks.length === 0) {
     list.innerHTML = `
       <div class="scan-activity-empty">
@@ -83,13 +112,24 @@ function renderScanActivity(data) {
     return;
   }
 
-  list.innerHTML = tasks.map(({ task, pending: isPending }) => {
-    const info = getScanActivityTaskInfo(task, isPending);
-    const elapsed = isPending ? '' : formatScanActivityElapsed(info.startedAt);
+  list.innerHTML = tasks.map(({ task, pending: isPending, recent: isRecent }) => {
+    const info = getScanActivityTaskInfo(task, isPending, isRecent);
+    const recentStatus = task?.status || 'completed';
+    const itemStateClass = isPending ? ' is-pending'
+      : isRecent ? ` is-${recentStatus}`
+        : '';
+    const iconClass = isPending
+      ? 'fa-clock'
+      : isRecent
+        ? (recentStatus === 'completed' ? 'fa-circle-check' : 'fa-circle-exclamation')
+        : 'fa-circle-notch fa-spin';
+    const elapsed = isRecent
+      ? (recentStatus === 'failed' ? '실패' : recentStatus === 'cancelled' ? '취소' : '완료')
+      : isPending ? '' : formatScanActivityElapsed(task);
     return `
-      <div class="scan-activity-item${isPending ? ' is-pending' : ''}">
+      <div class="scan-activity-item${itemStateClass}">
         <span class="scan-activity-item-icon">
-          <i class="fa-solid ${isPending ? 'fa-clock' : 'fa-circle-notch fa-spin'}" aria-hidden="true"></i>
+          <i class="fa-solid ${iconClass}" aria-hidden="true"></i>
         </span>
         <div class="scan-activity-item-copy">
           <div class="scan-activity-item-title" title="${escapeActivityAttribute(info.title)}">${escapeActivityText(info.title)}</div>
@@ -238,6 +278,7 @@ export function startSystemStatusPolling() {
     }
   };
 
+  refreshStatusPoll = poll;
   // 최초 1회 즉시 실행 후 2초 주기 반응형 폴링
   poll();
   statusIntervalId = setInterval(poll, 2000);

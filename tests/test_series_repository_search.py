@@ -21,13 +21,27 @@ class SeriesRepositorySearchTest(unittest.TestCase):
                 title TEXT,
                 title_alias TEXT,
                 author TEXT,
+                isbn TEXT,
+                publisher TEXT,
+                link TEXT,
+                score REAL,
+                release_date TEXT,
+                summary TEXT,
+                localized_series TEXT,
+                cover_artist TEXT,
+                teams TEXT,
+                locations TEXT,
+                characters TEXT,
                 file_path TEXT,
                 file_format TEXT,
                 cover_image TEXT,
                 cover_updated_at TEXT,
+                cover_align TEXT DEFAULT 'center',
                 created_at TEXT,
                 genre TEXT,
                 tags TEXT,
+                books_lv TEXT,
+                publication_status TEXT,
                 library_id INTEGER,
                 metadata_locked INTEGER DEFAULT 0,
                 is_deleted INTEGER DEFAULT 0
@@ -55,6 +69,12 @@ class SeriesRepositorySearchTest(unittest.TestCase):
             ) VALUES (
                 3, '예상과 다른 시리즈', '[연재] 도굴왕 002', '산지직송',
                 '/books/도굴왕/002.zip', 'zip', 10
+            );
+            INSERT INTO books (
+                id, series_name, title, author, cover_artist, file_path, file_format, library_id
+            ) VALUES (
+                4, '삽화 테스트', '아무 책', '다른 저자', '도굴왕 그림작가',
+                '/books/삽화/001.zip', 'zip', 10
             );
             """
         )
@@ -97,6 +117,17 @@ class SeriesRepositorySearchTest(unittest.TestCase):
 
         self.assertEqual([row['id'] for row in rows], [2])
 
+    def test_cover_artist_prefix_searches_cover_artist_only(self):
+        rows = SeriesRepository.fetch_books_for_grouping(
+            'general', 10, search_query='그림작가:도굴왕', user_id=1, role='admin'
+        )
+        totals = SeriesRepository.fetch_grouping_totals(
+            'general', 10, search_query='그림작가:도굴왕', user_id=1, role='admin'
+        )
+
+        self.assertEqual([row['id'] for row in rows], [4])
+        self.assertEqual(totals['total_book_count'], 1)
+
     def test_category_totals_are_queried_separately_from_page_rows(self):
         rows = SeriesRepository.fetch_books_for_grouping(
             'general', 10, user_id=1, role='admin', limit=1, offset=0
@@ -107,8 +138,33 @@ class SeriesRepositorySearchTest(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertNotIn('total_series_count', rows[0])
-        self.assertEqual(totals['total_series_count'], 2)
-        self.assertEqual(totals['total_book_count'], 3)
+        self.assertEqual(totals['total_series_count'], 3)
+        self.assertEqual(totals['total_book_count'], 4)
+
+    def test_series_metadata_presence_checks_all_volumes(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE books SET author = '' WHERE id IN (1, 3)")
+        conn.execute("UPDATE books SET cover_artist = 'Illustrator' WHERE id = 3")
+        conn.commit()
+        conn.close()
+
+        rows = SeriesRepository.fetch_books_for_grouping(
+            'general', 10, user_id=1, role='admin'
+        )
+        series = next(row for row in rows if row['series_name'] == '예상과 다른 시리즈')
+        self.assertEqual(series['id'], 1)
+        self.assertEqual(series['has_metadata'], 1)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE books SET cover_artist = NULL WHERE id = 3")
+        conn.commit()
+        conn.close()
+
+        rows = SeriesRepository.fetch_books_for_grouping(
+            'general', 10, user_id=1, role='admin'
+        )
+        series = next(row for row in rows if row['series_name'] == '예상과 다른 시리즈')
+        self.assertEqual(series['has_metadata'], 0)
 
 
 if __name__ == '__main__':

@@ -209,8 +209,11 @@ function renderDownloadBody(users) {
 
 function renderContentRatingBody(users) {
   return users.map(user => {
-    const isDisabled = user.username === 'admin' ? 'disabled' : '';
-    const currentLevel = user.content_rating_max !== undefined && user.content_rating_max !== null ? user.content_rating_max : 18;
+    const isAdmin = user.role === 'admin';
+    const isDisabled = isAdmin ? 'disabled' : '';
+    const currentLevel = isAdmin
+      ? 20
+      : Number(user.content_rating_max !== undefined && user.content_rating_max !== null ? user.content_rating_max : 18);
     return `
       <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
         <td style="padding:0.9rem 1rem; color: var(--app-text-primary); font-weight:700;">${user.username}</td>
@@ -221,6 +224,8 @@ function renderContentRatingBody(users) {
             <option value="0" ${currentLevel === 0 ? 'selected' : ''}>전체이용가</option>
             <option value="15" ${currentLevel === 15 ? 'selected' : ''}>15세이상</option>
             <option value="18" ${currentLevel === 18 ? 'selected' : ''}>18세이상(성인)</option>
+            <option value="19" ${currentLevel === 19 ? 'selected' : ''}>성인망가 (R18)</option>
+            <option value="20" ${currentLevel === 20 ? 'selected' : ''}>포르노 (Adult Only 18+)</option>
           </select>
         </td>
       </tr>

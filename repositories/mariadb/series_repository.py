@@ -6,6 +6,7 @@ import time
 import re
 import database
 from repositories.series_search_query import parse_series_search_query
+from repositories.series_metadata_utils import book_metadata_exists_sql
 
 class SeriesRepository:
     @staticmethod
@@ -120,7 +121,7 @@ class SeriesRepository:
                 )
                 params.append(user_id)
 
-            sql = """
+            sql = f"""
                 SELECT b.id, b.series_name, b.series_alias, b.title, b.title_alias,
                        b.author, b.file_path, b.file_format, b.cover_image, b.cover_updated_at,
                        COALESCE(b.cover_align, 'center') AS cover_align,
@@ -130,6 +131,7 @@ class SeriesRepository:
                        ) AS is_favorite,
                        b.created_at, b.genre, b.tags, b.books_lv, b.publication_status, b.library_id,
                        COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                       {book_metadata_exists_sql('b')} AS has_metadata,
                        s.series_book_count, s.latest_added AS series_latest_added
                 FROM series_summary s
                 INNER JOIN books b ON b.id = s.representative_book_id
@@ -243,6 +245,8 @@ class SeriesRepository:
                 elif search_mode == 'author':
                     where.append("LOWER(COALESCE(a.author, '')) LIKE %s")
                     params.append(f"%{search_term.lower()}%")
+                elif search_mode == 'cover_artist':
+                    where.append("1 = 0")
                 else:
                     where.append("LOWER(COALESCE(a.title, '')) LIKE %s")
                     params.append(f"%{search_term.lower()}%")
@@ -293,7 +297,7 @@ class SeriesRepository:
             if search_query:
                 if not search_term:
                     where.append("1 = 0")
-                elif search_mode == 'author':
+                elif search_mode in ('author', 'cover_artist'):
                     where.append("1 = 0")
                 else:
                     where.append("LOWER(COALESCE(v.title, '')) LIKE %s")
@@ -353,6 +357,9 @@ class SeriesRepository:
                 elif search_mode == 'author':
                     sub_where.append("LOWER(COALESCE(b2.author, '')) LIKE %s")
                     sub_params.append(f"%{search_term.lower()}%")
+                elif search_mode == 'cover_artist':
+                    sub_where.append("LOWER(COALESCE(b2.cover_artist, '')) LIKE %s")
+                    sub_params.append(f"%{search_term.lower()}%")
                 else:
                     like = f"%{search_term.lower()}%"
                     sub_where.append(
@@ -390,6 +397,7 @@ class SeriesRepository:
                        0 AS is_favorite,
                        b.created_at,
                        b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                       {book_metadata_exists_sql('b')} AS has_metadata,
                        rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
                 FROM books b
                 INNER JOIN (
@@ -533,6 +541,8 @@ class SeriesRepository:
                 elif search_mode == 'author':
                     where.append("LOWER(COALESCE(a.author, '')) LIKE %s")
                     params.append(f"%{search_term.lower()}%")
+                elif search_mode == 'cover_artist':
+                    where.append("1 = 0")
                 else:
                     where.append("LOWER(COALESCE(a.title, '')) LIKE %s")
                     params.append(f"%{search_term.lower()}%")
@@ -561,7 +571,7 @@ class SeriesRepository:
             if search_query:
                 if not search_term:
                     where.append("1 = 0")
-                elif search_mode == 'author':
+                elif search_mode in ('author', 'cover_artist'):
                     where.append("1 = 0")
                 else:
                     where.append("LOWER(COALESCE(v.title, '')) LIKE %s")
@@ -597,6 +607,9 @@ class SeriesRepository:
                     sub_where.append("1 = 0")
                 elif search_mode == 'author':
                     sub_where.append("LOWER(COALESCE(b2.author, '')) LIKE %s")
+                    sub_params.append(f"%{search_term.lower()}%")
+                elif search_mode == 'cover_artist':
+                    sub_where.append("LOWER(COALESCE(b2.cover_artist, '')) LIKE %s")
                     sub_params.append(f"%{search_term.lower()}%")
                 else:
                     like = f"%{search_term.lower()}%"

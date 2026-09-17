@@ -8,15 +8,55 @@ import {
   triggerScanLibrary,
   triggerScanLibraryGroup,
   triggerScanLibraryCovers,
+  triggerLazyScanLibrary,
   triggerCancelScanLibrary
 } from './crud_controller.js';
 
 export let currentTargetLibrary = null; // 우클릭 대상 저장
 let suppressSidebarClickUntil = 0;
+let cancelScanVisibilityRequestId = 0;
 
 function isCurrentUserAdmin() {
   const user = state.currentUser || window.currentUser || {};
   return String(user.role || '').trim().toLowerCase() === 'admin';
+}
+
+function updateCancelScanVisibility(type) {
+  const cancelScanEl = document.getElementById('ctx-cancel-scan-category');
+  if (!cancelScanEl) return;
+
+  const requestId = ++cancelScanVisibilityRequestId;
+  cancelScanEl.style.display = 'none';
+
+  const target = currentTargetLibrary;
+  if (type !== 'custom' || !target?.id) return;
+
+  const libraryId = String(target.id);
+  const dbType = String(state.currentLibraryType || 'general');
+  fetch(`/api/system/status?type=${encodeURIComponent(dbType)}&_=${Date.now()}`, { cache: 'no-store' })
+    .then((response) => response.ok ? response.json() : null)
+    .then((data) => {
+      if (requestId !== cancelScanVisibilityRequestId || !data?.success) return;
+
+      const menu = document.getElementById('library-context-menu');
+      const currentTarget = currentTargetLibrary;
+      if (!menu || menu.style.display === 'none'
+          || !currentTarget
+          || String(currentTarget.id) !== libraryId
+          || String(state.currentLibraryType || 'general') !== dbType) return;
+
+      const running = data.raw_status?.running;
+      const taskType = running?.type || running?.task_type;
+      const kwargs = running?.kwargs || {};
+      const isThisLibraryScanning = ['library_scan', 'cover_scan'].includes(taskType)
+        && String(kwargs.db_type || 'general') === dbType
+        && String(kwargs.library_id ?? '') === libraryId;
+
+      cancelScanEl.style.display = isThisLibraryScanning ? 'block' : 'none';
+    })
+    .catch(() => {
+      // 상태를 확인할 수 없을 때는 잘못된 중단 버튼을 노출하지 않는다.
+    });
 }
 
 function configureCategoryContextMenu(type) {
@@ -25,12 +65,18 @@ function configureCategoryContextMenu(type) {
   document.getElementById('ctx-edit-category').style.display = isSystem ? 'none' : 'block';
   document.getElementById('ctx-delete-category').style.display = isSystem ? 'none' : 'block';
   document.getElementById('ctx-scan-category').style.display = (isSystem || isGroup) ? 'none' : 'block';
-  ['ctx-force-scan-category', 'ctx-scan-covers-category', 'ctx-cancel-scan-category'].forEach((id) => {
+  ['ctx-force-scan-category', 'ctx-scan-covers-category'].forEach((id) => {
     const element = document.getElementById(id);
     if (element) element.style.display = (isSystem || isGroup) ? 'none' : 'block';
   });
+  const lazyScanEl = document.getElementById('ctx-lazy-scan-category');
+  if (lazyScanEl) {
+    const supportsLazyScan = ['general', 'adult', 'audiobook'].includes(String(state.currentLibraryType || '').toLowerCase());
+    lazyScanEl.style.display = (isSystem || isGroup || !supportsLazyScan) ? 'none' : 'block';
+  }
   const scanGroupEl = document.getElementById('ctx-scan-group');
   if (scanGroupEl) scanGroupEl.style.display = isGroup ? 'block' : 'none';
+  updateCancelScanVisibility(type);
 }
 
 export function setCurrentTargetLibrary(val) {
@@ -102,6 +148,7 @@ export function bindSidebarContextMenu() {
         configureCategoryContextMenu(type);
       } else {
         currentTargetLibrary = null;
+        updateCancelScanVisibility('system');
         document.getElementById('ctx-edit-category').style.display = 'none';
         document.getElementById('ctx-delete-category').style.display = 'none';
         document.getElementById('ctx-scan-category').style.display = 'none';
@@ -111,8 +158,8 @@ export function bindSidebarContextMenu() {
         if (document.getElementById('ctx-scan-covers-category')) {
           document.getElementById('ctx-scan-covers-category').style.display = 'none';
         }
-        if (document.getElementById('ctx-cancel-scan-category')) {
-          document.getElementById('ctx-cancel-scan-category').style.display = 'none';
+        if (document.getElementById('ctx-lazy-scan-category')) {
+          document.getElementById('ctx-lazy-scan-category').style.display = 'none';
         }
         if (document.getElementById('ctx-scan-group')) {
           document.getElementById('ctx-scan-group').style.display = 'none';
@@ -184,6 +231,7 @@ export function bindSidebarContextMenu() {
       if (action === 'force-scan') return triggerScanLibrary ? triggerScanLibrary(true) : window.triggerScanLibrary?.(true);
       if (action === 'scan-group') return triggerScanLibraryGroup ? triggerScanLibraryGroup() : window.triggerScanLibraryGroup?.();
       if (action === 'scan-covers') return triggerScanLibraryCovers ? triggerScanLibraryCovers() : window.triggerScanLibraryCovers?.();
+      if (action === 'lazy-scan-library') return triggerLazyScanLibrary ? triggerLazyScanLibrary() : window.triggerLazyScanLibrary?.();
       if (action === 'cancel-scan') return triggerCancelScanLibrary ? triggerCancelScanLibrary() : window.triggerCancelScanLibrary?.();
       if (action === 'add') return triggerAddLibrary ? triggerAddLibrary() : window.triggerAddLibrary?.();
       if (action === 'edit') return triggerEditLibrary ? triggerEditLibrary() : window.triggerEditLibrary?.();

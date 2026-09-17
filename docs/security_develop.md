@@ -39,6 +39,10 @@
 
 주의: subprocess 케이스와 달리 `requests`/`sqlite3` 등은 정상적인 플러그인도 쓸 수 있는 흔한 모듈이라(예: 외부 API 호출), 무조건 차단이 아니라 "감지 시 경고 로그 + 관리자 대시보드에 노출" 쪽이 더 맞을 수 있음 — 착수 시 재검토.
 
+**오픈소스 연동 후보 (2026-09-17 추가 검토)**: 검사 항목을 하나씩 손으로 늘리는 대신 기존 도구를 붙이는 게 유지보수 부담이 훨씬 적을 수 있다.
+- **[Bandit](https://github.com/PyCQA/bandit)** (PyCQA, Apache-2.0): 지금 `_find_forbidden_calls_in_source`가 하려는 일(위험 패턴 AST 검사)을 이미 폭넓게, 검증된 룰셋으로 제공한다 — `eval`/`exec`, `pickle.loads`, `subprocess`/`os.system`, 하드코딩 시크릿, 안전하지 않은 `yaml.load`, `tarfile` 경로 순회 등. 순수 Python 의존성이라 무겁지 않고 라이선스도 AGPL과 충돌 없음. 4-1을 "직접 검사 항목 추가"가 아니라 "Bandit 실행 + 결과 룰ID별로 차단/경고 등급 매핑"으로 바꾸는 방향 검토.
+- **[pip-audit](https://github.com/pypa/pip-audit)** (PyPA 공식, Apache-2.0): `ensure_plugin_dependencies()`(`metadata_factory.py:281`)가 설치하는 플러그인별 pip 의존성 자체에 알려진 CVE가 있는지는 지금 전혀 검사하지 않는다 — 이 문서 3번(이슈) 목록에 없던 별개의 위협이라 추가로 적어둠. PyPI Advisory DB 대조라 설치 시점에 바로 돌릴 수 있다.
+
 ### 4-2. 설치뿐 아니라 업데이트 시점에도 검사 + 관리자 승인 게이트 (가장 중요)
 `[[project_mcp_tier_b_approval_queue]]`의 "제안 → 관리자 승인" 구조를 재사용:
 - 샘플 업데이트/외부 소스 업데이트 적용 전에 새 버전 소스에 대해 4-1의 스캔을 실행

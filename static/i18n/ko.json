@@ -351,7 +351,7 @@
     "filter_title": "장르/태그 필터 열기",
     "sort_title": "정렬 조건 변경",
     "sort_asc": "가나다 오름차순",
-    "search_placeholder": "제목·시리즈·별칭 / 작가:작가명 (단축키: {shortcut})",
+    "search_placeholder": "제목·시리즈·별칭 / 작가:작가명 / 그림작가:작가명 (단축키: {shortcut})",
     "group_mode_default": "기본",
     "group_mode_author": "작가별"
   },
@@ -433,6 +433,9 @@
     "edit_category": "카테고리 수정",
     "delete_category": "카테고리 삭제",
     "scan_book_now": "이 책 즉시 스캔 (표지/메타)",
+    "lazy_scan_library": "라이브러리 Lazy-Scanner 실행 (누락 정보만)",
+    "lazy_scan_book": "Lazy-Scanner 실행 (선택/클릭한 작품)",
+    "lazy_scan_series": "Lazy-Scanner 실행 (시리즈 전체)",
     "search_metadata": "메타정보 검색",
     "add_to_collection": "컬렉션에 추가",
     "add_series_to_collection": "이 시리즈를 컬렉션에 추가",
@@ -511,7 +514,8 @@
     "scan_errors": {
       "ERR_NO_COVER": "도서 내 표지 이미지가 존재하지 않거나 추출 결과가 0바이트(빈 파일)입니다.",
       "ERR_OFFSET_FAIL": "오프셋 분석 실패",
-      "ERR_LAZY_COVER_FAIL": "Lazy 스캔 중 표지 복원 실패"
+      "ERR_LAZY_COVER_FAIL": "Lazy 스캔 중 표지 복원 실패",
+      "ERR_LAZY_OFFSET_FAIL": "Lazy 스캔 중 페이지 오프셋 저장 실패"
     },
     "error_txt_sub": "텍스트 파일을 정상적으로 디코딩하여 읽어오지 못했습니다.",
     "error_txt_load": "로드 실패",
@@ -749,6 +753,7 @@
     "type_lib": "전체 스캔",
     "type_cover": "표지 스캔",
     "type_lazy": "Lazy 스캔",
+    "type_batch_book_scan": "선택 도서 스캔",
     "system": "시스템",
     "clear_confirm": "대기 중인 모든 스캔 작업을 삭제하시겠습니까?\n(현재 실행 중인 작업은 중단되지 않습니다.)",
     "clear_fail": "삭제 실패: ",

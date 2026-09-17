@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import hashlib
 import time
 import subprocess
 import datetime
@@ -9,6 +10,30 @@ import database
 
 # SIGTERM/SIGINT 수신 시 워커 루프를 안전 종료하기 위한 전역 플래그
 stop_requested = False
+
+
+def _is_recent_scan_finished_at(value, now=None, max_age_seconds=20):
+    """작업 종료 시각이 활동창에 남길 짧은 표시 구간 안인지 판정한다."""
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.endswith('Z'):
+            raw = raw[:-1] + '+00:00'
+        try:
+            value = datetime.datetime.fromisoformat(raw)
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(value, datetime.datetime):
+        return False
+
+    if now is None:
+        now = datetime.datetime.now(value.tzinfo)
+    elif value.tzinfo and now.tzinfo is None:
+        now = now.replace(tzinfo=value.tzinfo)
+    elif not value.tzinfo and now.tzinfo:
+        now = now.replace(tzinfo=None)
+
+    age_seconds = (now - value).total_seconds()
+    return -2 <= age_seconds <= max_age_seconds
 
 
 class ScanCancelledError(Exception):
@@ -41,6 +66,12 @@ class ScannerQueue:
             db_type = kwargs.get('db_type', 'general')
             library_id = kwargs.get('library_id')
             return f"{task_type}_{db_type}_{library_id}"
+        elif task_type == 'batch_book_scan':
+            db_type = kwargs.get('db_type', 'general')
+            book_ids = kwargs.get('book_ids') or []
+            normalized_ids = ','.join(sorted(str(book_id) for book_id in book_ids))
+            target_hash = hashlib.sha256(normalized_ids.encode('utf-8')).hexdigest()[:16]
+            return f"batch_book_scan_{db_type}_{target_hash}"
         elif task_type == 'gdrive_copy':
             db_type = kwargs.get('db_type', 'general')
             dest_local_path = str(kwargs.get('dest_local_path') or '').strip().rstrip('/\\')
@@ -53,7 +84,7 @@ class ScannerQueue:
         try:
             from repositories.scanner_queue_repository import ScannerQueueRepository
             existing = ScannerQueueRepository.get_task_by_key(task_key)
-            if existing and existing['status'] in ('pending', 'running') and not force_requeue and task_type != 'lazy_scan':
+            if existing and existing['status'] in ('pending', 'running', 'exit_pending') and not force_requeue:
                 self.log(f"Task '{task_key}' is already in state '{existing['status']}'. Rejecting duplicate.")
                 return False
 
@@ -93,6 +124,7 @@ class ScannerQueue:
                 )
                 return False
 
+            self._invalidate_status_cache()
             self.log(f"Task '{task_key}' enqueued successfully (DB-backed).")
 
             # 내장 워커 가동 상태 헬스체크 및 필요 시 자동 재기동
@@ -129,11 +161,13 @@ class ScannerQueue:
 
         status = {
             'running': None,
-            'pending': []
+            'pending': [],
+            'recent_book_scans': [],
         }
         try:
             from repositories.scanner_queue_repository import ScannerQueueRepository
             row_run, rows_pending = ScannerQueueRepository.fetch_queue_status()
+            recent_rows = ScannerQueueRepository.fetch_recent_batch_book_scans()
             
             if row_run:
                 try:
@@ -160,6 +194,25 @@ class ScannerQueue:
                     'kwargs': kwargs,
                     'enqueued_at': row['enqueue_at'],
                     'stage': row['stage']
+                })
+
+            for row in recent_rows:
+                if not _is_recent_scan_finished_at(row.get('finished_at')):
+                    continue
+                try:
+                    kwargs = json.loads(row['kwargs']) if row.get('kwargs') else {}
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    kwargs = {}
+                status['recent_book_scans'].append({
+                    'id': row['id'],
+                    'type': row['task_type'],
+                    'key': row['task_key'],
+                    'kwargs': kwargs,
+                    'enqueued_at': row['enqueue_at'],
+                    'started_at': row['started_at'],
+                    'finished_at': row['finished_at'],
+                    'stage': row.get('stage'),
+                    'status': row['status'],
                 })
         except Exception as e:
             self.log(f"Failed to get queue status from DB: {e}")
@@ -321,7 +374,9 @@ def run_scanner_worker_loop():
             try:
                 try:
                     if task_type == 'lazy_scan':
-                        _process_lazy_scan(sq, task_id)
+                        _process_lazy_scan(sq, task_id, **kwargs)
+                    elif task_type == 'batch_book_scan':
+                        _process_batch_book_scan(sq, task_id, **kwargs)
                     elif task_type == 'library_scan':
                         _process_library_scan(sq, **kwargs)
                     elif task_type == 'cover_scan':
@@ -366,7 +421,8 @@ def run_scanner_worker_loop():
                             pass
                 sq.log(f"Task result update done: key={task_key}, type={task_type}, id={task_id}")
 
-            if not error_message and not cancelled:
+            # 다중 선택 스캔은 일부 항목이 실패해도 앞서 처리된 권의 DB 변경을 반영해야 한다.
+            if (not error_message or task_type == 'batch_book_scan') and not cancelled:
                 # 스캔 완료 시 신규 추가 도서 대시보드 캐시 무효화
                 try:
                     from utils.redis_helper import redis_delete_pattern
@@ -433,12 +489,44 @@ def _lazy_scan_should_yield_to_priority_task(sq, sub_batch_count):
     return False
 
 
-def _process_lazy_scan(sq, task_id):
+def _process_lazy_scan(sq, task_id, **kwargs):
     global active_subprocess, stop_requested
     from repositories.scanner_queue_repository import ScannerQueueRepository
 
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     script_path = os.path.join(BASE_DIR, 'tools', 'lazy_scanner.py')
+
+    command = [sys.executable, script_path]
+    command.extend(['--task-id', str(int(task_id))])
+    db_type = kwargs.get('db_type')
+    if db_type is not None:
+        if db_type not in ('general', 'adult', 'audiobook'):
+            raise ValueError(f"Unsupported Lazy-Scanner database type: {db_type}")
+        command.extend(['--db-type', str(db_type)])
+
+    book_ids = kwargs.get('book_ids')
+    library_id = kwargs.get('library_id')
+    series_name = kwargs.get('series_name')
+    if book_ids is not None and (library_id is not None or series_name is not None):
+        raise ValueError('Lazy-Scanner task cannot combine book IDs with a library or series target.')
+    if series_name is not None and library_id is None:
+        raise ValueError('Lazy-Scanner series target requires a library ID.')
+    if book_ids is not None:
+        if not isinstance(book_ids, list) or not book_ids:
+            raise ValueError('Lazy-Scanner book_ids must be a non-empty list.')
+        if db_type not in ('general', 'adult', 'audiobook'):
+            raise ValueError('A supported db_type is required for targeted Lazy-Scanner tasks.')
+        command.append('--book-ids')
+        command.extend(str(int(book_id)) for book_id in book_ids)
+    elif library_id is not None:
+        if db_type not in ('general', 'adult', 'audiobook'):
+            raise ValueError('A supported db_type is required for targeted Lazy-Scanner tasks.')
+        command.extend(['--library-id', str(int(library_id))])
+        if series_name is not None:
+            series_name = str(series_name).strip()
+            if not series_name:
+                raise ValueError('Lazy-Scanner series_name must not be empty.')
+            command.extend(['--series-name', series_name])
 
     sub_batch_count = 0
     env = os.environ.copy()
@@ -451,7 +539,7 @@ def _process_lazy_scan(sq, task_id):
             time.sleep(3.0)
 
         active_subprocess = subprocess.Popen(
-            [sys.executable, script_path],
+            command,
             cwd=BASE_DIR,
             env=env,
             stdout=subprocess.PIPE,
@@ -567,6 +655,71 @@ def _process_library_scan(sq, **kwargs):
     from services.scheduler_service import run_scan_job
     # 가변 인자 딕셔너리를 그대로 포워딩하여 호출
     run_scan_job(**kwargs)
+
+
+def _update_batch_book_scan_stage(sq, task_id, stage):
+    try:
+        from repositories.scanner_queue_repository import ScannerQueueRepository
+        ScannerQueueRepository.update_task_stage(task_id, stage)
+    except Exception as error:
+        sq.log(f"Failed to update batch book scan progress: {error}")
+
+
+def _process_batch_book_scan(sq, task_id, db_type='general', book_ids=None, **_kwargs):
+    """선택 도서를 순차 재스캔하며 현재 순번/작품명을 큐 진행 단계에 기록한다."""
+    from repositories.book_scan_repository import BookScanRepository
+    from services.book_scan_service import BookScanService
+
+    ids = []
+    for raw_id in book_ids or []:
+        try:
+            book_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if book_id > 0 and book_id not in ids:
+            ids.append(book_id)
+    if not ids:
+        raise ValueError('다중 스캔 작업에 유효한 도서 ID가 없습니다.')
+
+    succeeded = 0
+    failures = []
+    total = len(ids)
+    for index, book_id in enumerate(ids, start=1):
+        title = f'도서 ID {book_id}'
+        try:
+            book = BookScanRepository.get_book_basic_info_raw(db_type, book_id)
+            if book and book.get('title'):
+                title = str(book['title']).strip() or title
+        except Exception as lookup_error:
+            sq.log(f"Batch scan title lookup failed for book_id={book_id}: {lookup_error}")
+
+        _update_batch_book_scan_stage(
+            sq,
+            task_id,
+            f'선택 도서 스캔 {index}/{total} · {title} (완료 {index - 1}/{total})',
+        )
+        try:
+            success, message, _cover_image = BookScanService.scan_single_book(db_type, book_id)
+            if success:
+                succeeded += 1
+            else:
+                failure = f'{title}: {message or "스캔 실패"}'
+                failures.append(failure)
+                sq.log(f"Batch book scan failed: {failure}")
+        except Exception as scan_error:
+            failure = f'{title}: {scan_error}'
+            failures.append(failure)
+            sq.log(f"Batch book scan raised an exception: {failure}")
+
+    single_title = f' · {title}' if total == 1 else ''
+    summary = f'선택 도서 스캔 완료{single_title} · 성공 {succeeded}/{total}, 실패 {len(failures)}'
+    _update_batch_book_scan_stage(sq, task_id, summary)
+    sq.log(summary)
+    if failures:
+        failure_details = '; '.join(failures[:5])
+        if len(failures) > 5:
+            failure_details += f'; 외 {len(failures) - 5}건'
+        raise RuntimeError(f'{summary}: {failure_details}')
     
 def _process_cover_scan(sq, **kwargs):
     from services.cover_scan_service import CoverScanService
