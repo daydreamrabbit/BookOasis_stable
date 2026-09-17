@@ -218,7 +218,8 @@ export async function loadVideoCourseGrid(libraryId) {
     lastLoadedVideos = data.videos || [];
     lastLoadedLibraryId = libraryId;
 
-    // 검색창에 이미 입력된 검색어가 있으면(라이브러리 전환 시에도) 유지 적용
+    // 사이드바 라이브러리 전환은 selectCategory()가 검색어를 초기화한다.
+    // 같은 화면의 직접 재로딩이라면 입력창에 남아 있는 검색어를 그대로 적용한다.
     const query = (document.getElementById('library-search')?.value || '').toLowerCase().trim();
     const visibleVideos = query
       ? lastLoadedVideos.filter(v => (v.title || '').toLowerCase().includes(query))

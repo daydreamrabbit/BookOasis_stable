@@ -5,6 +5,7 @@ series_repository.py – 시리즈(Series) 데이터를 그룹화하고 추출�
 import time
 import database
 from repositories.series_search_query import parse_series_search_query
+from repositories.series_metadata_utils import book_metadata_exists_sql
 
 class SeriesRepository:
     @staticmethod
@@ -48,6 +49,8 @@ class SeriesRepository:
                 elif search_mode == 'author':
                     where.append("COALESCE(a.author, '') LIKE ?")
                     params.append(f"%{search_term}%")
+                elif search_mode == 'cover_artist':
+                    where.append("1 = 0")
                 else:
                     where.append("COALESCE(a.title, '') LIKE ?")
                     params.append(f"%{search_term}%")
@@ -97,7 +100,7 @@ class SeriesRepository:
             if search_query:
                 if not search_term:
                     where.append("1 = 0")
-                elif search_mode == 'author':
+                elif search_mode in ('author', 'cover_artist'):
                     where.append("1 = 0")
                 else:
                     where.append("COALESCE(v.title, '') LIKE ?")
@@ -156,6 +159,9 @@ class SeriesRepository:
                 elif search_mode == 'author':
                     sub_where.append("COALESCE(b2.author, '') LIKE ?")
                     sub_params.append(f"%{search_term}%")
+                elif search_mode == 'cover_artist':
+                    sub_where.append("COALESCE(b2.cover_artist, '') LIKE ?")
+                    sub_params.append(f"%{search_term}%")
                 else:
                     like = f"%{search_term}%"
                     sub_where.append(
@@ -193,6 +199,7 @@ class SeriesRepository:
                        0 AS is_favorite,
                        b.created_at,
                        b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                       {book_metadata_exists_sql('b')} AS has_metadata,
                        rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
                 FROM books b
                 INNER JOIN (
@@ -328,6 +335,8 @@ class SeriesRepository:
                 elif search_mode == 'author':
                     where.append("COALESCE(a.author, '') LIKE ?")
                     params.append(f"%{search_term}%")
+                elif search_mode == 'cover_artist':
+                    where.append("1 = 0")
                 else:
                     where.append("COALESCE(a.title, '') LIKE ?")
                     params.append(f"%{search_term}%")
@@ -356,7 +365,7 @@ class SeriesRepository:
             if search_query:
                 if not search_term:
                     where.append("1 = 0")
-                elif search_mode == 'author':
+                elif search_mode in ('author', 'cover_artist'):
                     where.append("1 = 0")
                 else:
                     where.append("COALESCE(v.title, '') LIKE ?")
@@ -392,6 +401,9 @@ class SeriesRepository:
                     sub_where.append("1 = 0")
                 elif search_mode == 'author':
                     sub_where.append("COALESCE(b2.author, '') LIKE ?")
+                    sub_params.append(f"%{search_term}%")
+                elif search_mode == 'cover_artist':
+                    sub_where.append("COALESCE(b2.cover_artist, '') LIKE ?")
                     sub_params.append(f"%{search_term}%")
                 else:
                     like = f"%{search_term}%"

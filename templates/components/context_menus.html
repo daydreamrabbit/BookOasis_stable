@@ -4,7 +4,8 @@
         <li class="context-menu-item" id="ctx-scan-category" data-role="library-context-action" data-action="scan"><i class="fa-solid fa-rotate" style="color: var(--app-accent);"></i> <span data-i18n="context_menu.scan_now">지금 스캔</span></li>
         <li class="context-menu-item" id="ctx-force-scan-category" data-role="library-context-action" data-action="force-scan"><i class="fa-solid fa-arrows-rotate" style="color: #ea580c;"></i> <span data-i18n="context_menu.force_rescan">강제 재스캔 (전체)</span></li>
         <li class="context-menu-item" id="ctx-scan-covers-category" data-role="library-context-action" data-action="scan-covers"><i class="fa-solid fa-image" style="color: #3b82f6;"></i> <span data-i18n="context_menu.refresh_cover">표지 새로고침</span></li>
-        <li class="context-menu-item" id="ctx-cancel-scan-category" data-role="library-context-action" data-action="cancel-scan"><i class="fa-solid fa-circle-stop" style="color: #ef4444;"></i> <span data-i18n="context_menu.cancel_scan">스캔 중단</span></li>
+        <li class="context-menu-item" id="ctx-lazy-scan-category" data-role="library-context-action" data-action="lazy-scan-library"><i class="fa-solid fa-wand-magic-sparkles" style="color: #a78bfa;"></i> <span data-i18n="context_menu.lazy_scan_library">라이브러리 Lazy-Scanner 실행</span></li>
+        <li class="context-menu-item" id="ctx-cancel-scan-category" data-role="library-context-action" data-action="cancel-scan" style="display: none;"><i class="fa-solid fa-circle-stop" style="color: #ef4444;"></i> <span data-i18n="context_menu.cancel_scan">스캔 중단</span></li>
         <li class="context-menu-item" id="ctx-scan-group" style="display: none;" data-role="library-context-action" data-action="scan-group"><i class="fa-solid fa-layer-group" style="color: var(--app-accent);"></i> <span data-i18n="context_menu.scan_group">하위 카테고리 일괄 스캔</span></li>
         <li class="context-menu-item" id="ctx-add-category" data-role="library-context-action" data-action="add"><i class="fa-solid fa-plus"></i> <span data-i18n="context_menu.add_category">새 카테고리 추가</span></li>
         <li class="context-menu-item" id="ctx-edit-category" data-role="library-context-action" data-action="edit"><i class="fa-solid fa-pen-to-square"></i> <span data-i18n="context_menu.edit_category">카테고리 수정</span></li>
@@ -20,6 +21,7 @@
     </div>
     <ul class="context-menu-list">
         <li class="context-menu-item" id="ctx-scan-book" data-role="book-context-action" data-action="scan"><i class="fa-solid fa-barcode" style="color: var(--app-accent);"></i> <span data-i18n="context_menu.scan_book_now">이 책 즉시 스캔 (표지/메타)</span></li>
+        <li class="context-menu-item" id="ctx-lazy-scan-book" data-role="book-context-action" data-action="lazy-scan" style="display: none;"><i class="fa-solid fa-wand-magic-sparkles" style="color: #a78bfa;"></i> <span data-i18n="context_menu.lazy_scan_book">Lazy-Scanner 실행 (선택/클릭한 작품)</span></li>
         <li class="context-menu-item" id="ctx-search-meta-book" data-role="book-context-action" data-action="search-meta"><i class="fa-solid fa-magnifying-glass" style="color: #3b82f6;"></i> <span data-i18n="context_menu.search_metadata">메타정보 검색</span></li>
         <li class="context-menu-item" id="ctx-add-to-collection" data-role="book-context-action" data-action="add-to-collection"><i class="fa-solid fa-bookmark" style="color: var(--app-accent);"></i> <span data-i18n="context_menu.add_to_collection">컬렉션에 추가</span></li>
         <li class="context-menu-item" id="ctx-add-series-to-collection" data-role="book-context-action" data-action="add-series-to-collection"><i class="fa-solid fa-book-bookmark" style="color: #38bdf8;"></i> <span data-i18n="context_menu.add_series_to_collection">이 시리즈를 컬렉션에 추가</span></li>
@@ -68,20 +70,6 @@
         <li class="context-menu-item" data-role="volume-cover-align-context-action" data-align="right"><i class="fa-solid fa-align-right" style="color: var(--app-accent);"></i> <span>오른쪽 정렬</span></li>
         <li class="context-menu-item context-menu-close-item" data-role="volume-cover-align-context-close"><i class="fa-solid fa-xmark" style="color: #f87171;"></i> <span>닫기</span></li>
     </ul>
-</div>
-
-<!-- 도서 카드 정보 팝업 (읽기전용): 제목/실제경로/도서 수/파일 크기, 카드의 '...' 아이콘 클릭 시 노출 -->
-<div id="book-info-popup" class="context-menu" style="display: none; min-width: 260px; max-width: 360px;">
-    <div class="context-menu-header">
-        <span class="context-menu-title">도서 정보</span>
-        <button type="button" class="context-menu-close-btn" data-role="book-info-popup-close" aria-label="닫기"><span class="context-menu-close-icon">&times;</span></button>
-    </div>
-    <div class="book-info-popup-body">
-        <div class="book-info-popup-row"><span class="book-info-popup-label">제목</span><span class="book-info-popup-value" id="book-info-popup-title"></span></div>
-        <div class="book-info-popup-row"><span class="book-info-popup-label">실제 경로</span><span class="book-info-popup-value" id="book-info-popup-path"></span></div>
-        <div class="book-info-popup-row" id="book-info-popup-count-row"><span class="book-info-popup-label">도서 수</span><span class="book-info-popup-value" id="book-info-popup-count"></span></div>
-        <div class="book-info-popup-row"><span class="book-info-popup-label">파일 크기</span><span class="book-info-popup-value" id="book-info-popup-size"></span></div>
-    </div>
 </div>
 
 <!-- 스케줄 작업용 컨텍스트 메뉴 -->

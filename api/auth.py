@@ -6,6 +6,7 @@ import os
 import database
 from werkzeug.security import generate_password_hash, check_password_hash
 from services.settings_service import SettingsService
+from services.content_rating_service import LEVEL_PORN, get_user_content_rating_max
 from repositories.user_repository import UserRepository
 
 from utils.i18n_helper import get_available_languages
@@ -240,7 +241,11 @@ def check_authentication():
                         session['has_audiobook_access'] = user.get('has_audiobook_access', 1)
                         session['has_video_access'] = user.get('has_video_access', 1)
                         session['has_download_access'] = user.get('has_download_access', 1)
-                        session['content_rating_max'] = user.get('content_rating_max', 18)
+                        session['content_rating_max'] = get_user_content_rating_max(user)
+
+    # 이전에 로그인한 관리자 세션도 저장된 등급값과 무관하게 최고 등급으로 고정한다.
+    if session.get('role') == 'admin':
+        session['content_rating_max'] = LEVEL_PORN
         
     # 1. 미로그인 시 차단
     if 'user_id' not in session:
@@ -299,7 +304,8 @@ def login():
             session['has_audiobook_access'] = user.get('has_audiobook_access', 1)
             session['has_video_access'] = user.get('has_video_access', 1)
             session['has_download_access'] = user.get('has_download_access', 1)
-            session['content_rating_max'] = user.get('content_rating_max', 18)
+            content_rating_max = get_user_content_rating_max(user)
+            session['content_rating_max'] = content_rating_max
 
             return jsonify({
                 'success': True,
@@ -309,7 +315,7 @@ def login():
                 'has_audiobook_access': user.get('has_audiobook_access', 1),
                 'has_video_access': user.get('has_video_access', 1),
                 'has_download_access': user.get('has_download_access', 1),
-                'content_rating_max': user.get('content_rating_max', 18)
+                'content_rating_max': content_rating_max
             })
         else:
             return jsonify({'success': False, 'error': _t('api.invalid_credentials')}), 401

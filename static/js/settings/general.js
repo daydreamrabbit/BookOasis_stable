@@ -10,7 +10,7 @@ import { changeDashboardTheme, populateCustomThemeOptions, rescanCustomThemesUi,
 import { startCoverStorageMigration } from './cover_storage_settings.js';
 import { getTempShortcut, setTempShortcut, initShortcutRecorderEvents } from './shortcut_recorder.js';
 import { runVaapiCheck, triggerLazyScanNow } from './system_actions.js';
-import { loadHomeDashboardLayout } from '../dashboard.js';
+import { loadHomeDashboardLayout } from '../dashboard.js?v=20260917-home-widget-plugin-ui-v1';
 
 function initGeneralDelegation() {
   if (window.__generalDelegationBound) return;
@@ -139,9 +139,7 @@ export function applySettingsToUI(settings) {
   toggleDashboardInsightsSetting(isShowInsights);
   if (settings.BOOK_THUMBNAIL_WIDTH) {
     const width = parseInt(settings.BOOK_THUMBNAIL_WIDTH, 10) || 160;
-    const height = Math.round(width * 1.375); // 160:220 비율 유지
     document.documentElement.style.setProperty('--book-card-width', `${width}px`);
-    document.documentElement.style.setProperty('--book-card-height', `${height}px`);
   }
   if (settings.PAGE_LIMIT) {
     state.LIMIT = parseInt(settings.PAGE_LIMIT, 10) || 60;

@@ -280,7 +280,7 @@ export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
     }
     console.log('[Viewer-Core] DB Progress flush 완료. 화면 데이터 갱신을 실행합니다.');
     if (state.currentLibraryId === 'home') {
-      import('../dashboard.js').then((d) => d.loadDashboardData());
+      import('../dashboard.js?v=20260917-home-widget-plugin-ui-v1').then((d) => d.loadDashboardData());
     } else if (state.currentLibraryId === 'history') {
       import('../book_list.js').then((b) => b.loadReadingHistory());
     }

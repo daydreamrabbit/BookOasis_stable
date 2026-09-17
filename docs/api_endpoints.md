@@ -258,7 +258,7 @@
   | `link` | string | 선택 | 외부 링크 |
   | `genre` | string | 선택 | 장르(쉼표 구분) |
   | `tags` | string | 선택 | 태그(쉼표 구분) |
-  | `books_lv` | string | 선택 | 도서 등급 (`everyone`/`ma15+`/`m`/`r18`/`adult only`/`일반`/`15세`/`18세` 중 하나, 미지정 시 전체이용가) |
+  | `books_lv` | string | 선택 | 도서 등급 (`everyone`/`ma15+`/`m`/`r18`/`adult only`/`adult only 18+`/`일반`/`15세`/`18세`/`성인망가`/`포르노` 중 하나, 미지정 시 전체이용가) |
   | `cover_image` | file | 선택 | 표지 이미지 파일 |
 
 ### `[POST/PATCH]` `/api/media/series/alias`
@@ -955,7 +955,7 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
 ---
 
 ### `[POST]` `/api/admin/permissions/update-content-rating`
-* **설명**: 특정 사용자 계정의 콘텐츠 등급 최대 허용치(0=전체이용가/15=15세이상/18=18세이상)를 글로벌 변경합니다. 일반 도서관 내 도서의 `books_lv` 컬럼 또는 성인 장르/태그 키워드 매칭으로 판정된 등급이 이 값을 초과하면 열람(뷰어/다운로드)이 차단됩니다.
+* **설명**: 특정 사용자 계정의 콘텐츠 등급 최대 허용치(0=전체이용가/15=15세이상/18=18세이상/19=성인망가/20=포르노)를 글로벌 변경합니다. 일반 도서관 내 도서의 `books_lv` 컬럼 또는 성인 장르/태그 키워드 매칭으로 판정된 등급이 이 값을 초과하면 열람(뷰어/다운로드)이 차단됩니다. ComicInfo 등급은 `M`=18, `R18`=19, `Adult Only 18+`=20으로 분류합니다.
 * **권한**: `@admin_required`
 * **요청 파라미터**:
   ```json
@@ -1337,7 +1337,6 @@ MCP 서버(`tools/mcp_server.py`)의 Tier B 쓰기 도구(`propose_bulk_book_met
 * `DELETE /api/v1/collections/<int:collection_id>`: 컬렉션 삭제 (담긴 아이템도 함께 삭제)
 * `POST /api/v1/collections/<int:collection_id>/items`: 아이템 추가 (`book_id` / `series_name` / `audiobook_id` / `video_id` 중 하나)
 * `DELETE /api/v1/collections/<int:collection_id>/items/<int:item_id>`: 아이템 제거
-
 
 
 

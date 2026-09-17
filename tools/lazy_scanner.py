@@ -24,6 +24,22 @@ from tools.scanner.cover import get_series_cover_fallback, COVER_THUMB_MAX_W, CO
 
 # 우아한 종료 시그널 감지 플래그
 stop_requested = False
+_progress_update_warning_logged = False
+
+
+def _update_lazy_scan_stage(task_id, stage):
+    """Lazy-Scanner 하위 프로세스의 진행 정보를 공용 스캔 대기열에 기록합니다."""
+    global _progress_update_warning_logged
+    if task_id is None:
+        return
+    try:
+        from repositories.scanner_queue_repository import ScannerQueueRepository
+        ScannerQueueRepository.update_task_stage(task_id, str(stage)[:240])
+    except Exception as exc:
+        # 진행 표시용 보조 기능이 스캔 본 작업을 중단시키지 않도록 최초 실패만 로그로 남긴다.
+        if not _progress_update_warning_logged:
+            print(f"[Lazy-Scanner] 스캔활동 진행 상태 저장 실패(스캔은 계속 진행): {exc}")
+            _progress_update_warning_logged = True
 
 
 def _collect_zip_offsets_safe(file_path):
@@ -52,7 +68,21 @@ def _load_lazy_scan_no_cover_retry_days():
     return max(0, days)
 
 
-def _fetch_lazy_scan_candidates(cursor, no_cover_retry_days=0):
+def _fetch_lazy_scan_candidates(cursor, no_cover_retry_days=0, library_id=None,
+                               include_all_library_books=False):
+    # 관리자가 라이브러리 메뉴에서 직접 요청한 스캔은 해당 라이브러리의 모든 행을
+    # 살펴봐야 DB에 남은 오래된 cover_image 경로나 최근 NO_COVER 마커에 가려진
+    # 실제 누락 파일을 찾을 수 있다. _build_scan_targets가 실제 커버 파일과 오프셋을
+    # 확인해 정상 도서는 제외하므로, 전역/예약 스캔의 최적화된 SQL 필터는 유지한다.
+    if include_all_library_books and library_id is not None:
+        cursor.execute("""
+            SELECT id, file_path, series_name, file_format, cover_image, library_id, total_pages, has_offsets,
+                   COALESCE(metadata_locked, 0) AS metadata_locked
+            FROM books
+            WHERE LOWER(file_path) NOT LIKE ? AND library_id = ?
+        """, ('%.txt', library_id))
+        return cursor.fetchall()
+
     no_cover_clause = "cover_image = 'NO_COVER'"
     if no_cover_retry_days > 0:
         # 실패 마킹 시각(cover_updated_at)으로부터 N일이 지난 것만 재후보로 삼는다.
@@ -66,20 +96,42 @@ def _fetch_lazy_scan_candidates(cursor, no_cover_retry_days=0):
             f"(cover_updated_at IS NULL OR cover_updated_at <= datetime('now', '-{no_cover_retry_days} days')))"
         )
 
-    cursor.execute(f"""
+    library_filter = " AND library_id = ?" if library_id is not None else ""
+    sql = f"""
         SELECT id, file_path, series_name, file_format, cover_image, library_id, total_pages, has_offsets,
                COALESCE(metadata_locked, 0) AS metadata_locked
         FROM books
-        WHERE LOWER(file_path) NOT LIKE '%.txt'
+        WHERE LOWER(file_path) NOT LIKE ?
+          {library_filter}
           AND (
               (cover_image IS NULL OR cover_image = '')
               OR {no_cover_clause}
               OR (
                   LOWER(COALESCE(file_format, '')) IN ('zip', 'cbz')
-                  AND COALESCE(has_offsets, 0) = 0
+                  AND COALESCE(cover_image, '') NOT IN ('', 'NO_COVER')
+                  AND (
+                      COALESCE(total_pages, 0) = 0
+                      OR COALESCE(has_offsets, 0) IN (0, -1)
+                  )
               )
           )
-    """)
+    """
+    params = ['%.txt']
+    if library_id is not None:
+        params.append(library_id)
+    cursor.execute(sql, tuple(params))
+    return cursor.fetchall()
+
+
+def _fetch_lazy_scan_series_books(cursor, library_id, series_name):
+    """시리즈 카드에서 요청된 라이브러리+시리즈의 모든 권을 가져온다."""
+    cursor.execute("""
+        SELECT id, file_path, series_name, file_format, cover_image, library_id, total_pages, has_offsets,
+               COALESCE(metadata_locked, 0) AS metadata_locked
+        FROM books
+        WHERE library_id = ? AND series_name = ?
+        ORDER BY id
+    """, (library_id, series_name))
     return cursor.fetchall()
 
 
@@ -194,7 +246,7 @@ def _load_lazy_scan_probe_workers():
     return max(1, workers)
 
 
-def _build_scan_targets(db_type, books, library_remote_map):
+def _build_scan_targets(db_type, books, library_remote_map, allow_remote_offset_only=False):
     """DB에서 1차 선별된 후보 도서들을 실제 물리 파일 상태까지 점검해 최종 스캔
     대상 목록((book, offset_only) 튜플 리스트)으로 좁힌다. conn/세션 누적 상태와
     무관한 순수 필터링 단계라 별도 함수로 분리해도 안전하다."""
@@ -227,7 +279,9 @@ def _build_scan_targets(db_type, books, library_remote_map):
         offset_missing = False
         file_format = (book['file_format'] or '').lower()
         if file_format in ('zip', 'cbz'):
-            if book['total_pages'] == 0 or book['has_offsets'] == 0:
+            has_offsets = int(book['has_offsets'] or 0)
+            total_pages = int(book['total_pages'] or 0)
+            if total_pages == 0 or has_offsets == 0 or (has_offsets == -1 and not cover_missing):
                 offset_missing = True
 
         metadata_locked = int(book['metadata_locked'] or 0) == 1
@@ -254,11 +308,17 @@ def _build_scan_targets(db_type, books, library_remote_map):
             from utils.drive_helper import is_remote_path
             _is_remote = is_remote_path(file_path)
 
-        # [원격 경로 최적화] 커버는 정상이고 오프셋만 없는 원격지(GDRIVE 등) 도서는
-        # 백그라운드 대량 스캔 부하 차단을 위해 Lazy 스캔 수집 대상에서 원천 배제합니다.
-        # (뷰어에서 열릴 때 실시간으로 파싱되므로 성능에 문제 없음)
-        if offset_only and _is_remote:
+        # 예약/전역 백그라운드 스캔은 원격 오프셋 수집을 건너뛰어 원격 I/O를 억제한다.
+        # 관리자가 메뉴에서 특정 도서/라이브러리를 직접 요청한 경우에는 명시적 실행이므로
+        # 로컬에 마운트된 rclone/FUSE 파일을 처리하되, 실제 파일 경로가 아닌 gdrive:// 공유
+        # 링크는 ZipFile로 열 수 없으므로 제외한다.
+        if offset_only and _is_remote and not allow_remote_offset_only:
             continue
+        if offset_only and allow_remote_offset_only:
+            from utils.drive_helper import is_gdrive_url
+            if is_gdrive_url(file_path):
+                print(f"[Lazy-Scanner] gdrive:// 가상 경로의 오프셋 전용 처리는 건너뜁니다: {os.path.basename(file_path)}")
+                continue
             
         if offset_only:
             print(f"[Lazy-Scanner] 오프셋 전용 재수집 대상: {os.path.basename(file_path)}")
@@ -291,11 +351,32 @@ def _group_targets_by_folder(targets):
     return folder_groups
 
 
-def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
+def run_lazy_cover_extraction(target_book_id=None, target_db_type=None,
+                              target_book_ids=None, target_library_id=None,
+                              target_series_name=None, task_id=None):
     global stop_requested
 
     if target_book_id is not None:
-        print(f"[Lazy-Scanner] 🚀 단일 도서 즉시 스캔 기동 시작 (Book ID: {target_book_id})")
+        target_book_ids = [target_book_id]
+
+    if target_series_name is not None:
+        target_series_name = str(target_series_name).strip()
+        if not target_series_name:
+            raise ValueError("시리즈 Lazy-Scanner에는 시리즈명이 필요합니다.")
+        if target_library_id is None:
+            raise ValueError("시리즈 Lazy-Scanner에는 라이브러리 ID가 필요합니다.")
+        if target_book_ids is not None:
+            raise ValueError("시리즈 Lazy-Scanner와 도서 ID 옵션은 함께 사용할 수 없습니다.")
+
+    if target_book_ids is not None:
+        target_book_ids = list(dict.fromkeys(int(book_id) for book_id in target_book_ids))
+        if not target_book_ids:
+            raise ValueError("Lazy-Scanner 단건/선택 스캔에는 도서 ID가 하나 이상 필요합니다.")
+        print(f"[Lazy-Scanner] 🚀 선택 도서 즉시 스캔 기동 시작 (Book IDs: {target_book_ids})")
+    elif target_series_name is not None:
+        print(f"[Lazy-Scanner] 🚀 시리즈 전체 Lazy-Scanner 기동 시작 (Library ID: {target_library_id}, Series: {target_series_name})")
+    elif target_library_id is not None:
+        print(f"[Lazy-Scanner] 🚀 라이브러리 Lazy-Scanner 기동 시작 (Library ID: {target_library_id})")
     else:
         print("[Lazy-Scanner] 🚀 독립 백그라운드 표지 스캐너 기동 시작")
     
@@ -324,6 +405,7 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
                     print("[Lazy-Scanner] 🛑 용량 한도 달성으로 DB 순회를 중단하고 차기 서브-배치로 이관합니다.")
                 break
 
+            _update_lazy_scan_stage(task_id, f"[{db_type}] 스캔 후보를 찾는 중")
             conn = _open_database_connection(db_type)
             if conn is None:
                 continue
@@ -336,26 +418,50 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
                 pass
             cursor = conn.cursor()
             
-            if target_book_id is not None:
-                cursor.execute("""
+            if target_book_ids is not None:
+                placeholders = ', '.join('?' for _ in target_book_ids)
+                cursor.execute(f"""
                     SELECT id, file_path, series_name, file_format, cover_image, library_id, total_pages, has_offsets,
                            COALESCE(metadata_locked, 0) AS metadata_locked
-                    FROM books WHERE id = ?
-                """, (target_book_id,))
+                    FROM books WHERE id IN ({placeholders})
+                """, tuple(target_book_ids))
+            elif target_series_name is not None:
+                books = _fetch_lazy_scan_series_books(
+                    cursor,
+                    target_library_id,
+                    target_series_name,
+                )
+            elif target_library_id is not None:
+                books = _fetch_lazy_scan_candidates(
+                    cursor,
+                    no_cover_retry_days=no_cover_retry_days,
+                    library_id=target_library_id,
+                    include_all_library_books=True,
+                )
             else:
                 # ── DB SQL 필터링 최적화 ──
                 # 1. txt 확장자 제외
                 # 2. 커버 경로가 없거나 이전 추출에 실패한 경우
-                # 3. ZIP/CBZ 포맷 중 페이지 수(total_pages)=0 이거나 오프셋(has_offsets)=0 인 경우
+                # 3. 표지가 있는 ZIP/CBZ 중 페이지 수/오프셋이 없거나 이전 수집 실패(-1)로 표시된 경우
                 # 위 스캔 후보 도서만 DB 인덱스 레벨에서 1차 선별하여 퍼포먼스 극대화
                 books = _fetch_lazy_scan_candidates(cursor, no_cover_retry_days=no_cover_retry_days)
                 
-            if target_book_id is not None:
+            if target_book_ids is not None:
                 books = cursor.fetchall()
-            print(f"[Lazy-Scanner] 📋 DB({db_type}) 스캔 필요 후보 도서 레코드 조회 완료 (총 {len(books)}권). 파일 물리 점검 시작...")
+            if target_series_name is not None:
+                print(f"[Lazy-Scanner] 📚 시리즈 도서 조회 완료 (총 {len(books)}권). 커버 파일 물리 상태 포함 검사 시작...")
+            elif target_library_id is not None:
+                print(f"[Lazy-Scanner] 📋 DB({db_type}) 라이브러리 도서 레코드 조회 완료 (총 {len(books)}권). 커버 파일 물리 상태 포함 검사 시작...")
+            else:
+                print(f"[Lazy-Scanner] 📋 DB({db_type}) 스캔 필요 후보 도서 레코드 조회 완료 (총 {len(books)}권). 파일 물리 점검 시작...")
             library_remote_map = _fetch_library_remote_map(cursor)
 
-            targets = _build_scan_targets(db_type, books, library_remote_map)
+            targets = _build_scan_targets(
+                db_type,
+                books,
+                library_remote_map,
+                allow_remote_offset_only=(target_book_ids is not None or target_library_id is not None),
+            )
             
             folder_groups = _group_targets_by_folder(targets)
             
@@ -363,6 +469,7 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
             lib_errors = {}
             total = len(targets)
             done = 0
+            _update_lazy_scan_stage(task_id, f"[{db_type}] 처리 대상 {total}권 확인")
             
             for parent_dir, folder_books in folder_groups.items():
                 # 폴더당 1회만 메타데이터 파싱 (커버 재추출이 필요한 도서가 있을 때만)
@@ -416,6 +523,7 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
                     # filename에서는 제거한다 (실제 다운로드 시점의 file_path는 그대로 사용).
                     from utils.drive_helper import split_gdrive_file_id
                     filename = os.path.basename(split_gdrive_file_id(file_path)[0])
+                    _update_lazy_scan_stage(task_id, f"[{db_type}] {done}/{total} 처리 중 · {filename}")
                     
                     if library_id not in lib_errors:
                         lib_errors[library_id] = []
@@ -471,22 +579,9 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
                                 if _is_remote:
                                     try:
                                         import zipfile
-                                        from utils.sort_helper import natural_sort_key
-                                        img_ext = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
                                         with zipfile.ZipFile(file_path, 'r') as zf:
-                                            infolist = zf.infolist()
-                                            img_infos = [info for info in infolist if info.filename.lower().endswith(img_ext)]
-                                            img_infos.sort(key=lambda x: natural_sort_key(x.filename))
-                                            offsets = []
-                                            for page_idx, info in enumerate(img_infos):
-                                                offsets.append((
-                                                    page_idx,
-                                                    info.filename,
-                                                    info.header_offset,
-                                                    info.compress_size,
-                                                    info.file_size,
-                                                    info.compress_type
-                                                ))
+                                            from tools.scanner.offset import collect_zip_offsets_from_open_zip
+                                            offsets = collect_zip_offsets_from_open_zip(zf)
                                     except Exception as re_err:
                                         print(f"[Lazy-Scanner] 원격 오프셋 직접 수집 실패: {re_err}")
                                         offsets = []
@@ -508,7 +603,7 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
                                         break
                                 else:
                                     print(f"[Lazy-Scanner] 오프셋 수집 결과 없음 (이미지 없는 ZIP?): {filename}")
-                            if target_book_id is None:
+                            if target_book_ids is None:
                                 if _is_remote:
                                     time.sleep(3.0)
                                 else:
@@ -540,7 +635,7 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
                                 shared_cover = cover_image_path
 
                             # ComicInfo.xml 메타데이터가 있으면 함께 업데이트
-                            if comicinfo_meta and any(comicinfo_meta.get(k) for k in ('author', 'summary', 'publisher', 'release_date')):
+                            if comicinfo_meta and any(comicinfo_meta.get(k) for k in ('author', 'summary', 'publisher', 'release_date', 'books_lv')):
                                 cursor.execute("""
                                     UPDATE books SET
                                         cover_image = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN ? ELSE cover_image END,
@@ -548,7 +643,8 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
                                         author = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), author) ELSE author END,
                                         publisher = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), publisher) ELSE publisher END,
                                         summary = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), summary) ELSE summary END,
-                                        release_date = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), release_date) ELSE release_date END
+                                        release_date = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), release_date) ELSE release_date END,
+                                        books_lv = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), books_lv) ELSE books_lv END
                                     WHERE id = ? AND COALESCE(metadata_locked, 0) = 0
                                 """, (
                                     cover_image_path,
@@ -556,6 +652,7 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
                                     comicinfo_meta.get('publisher', ''),
                                     comicinfo_meta.get('summary', ''),
                                     comicinfo_meta.get('release_date', ''),
+                                    comicinfo_meta.get('books_lv', ''),
                                     book_id
                                 ))
                             else:
@@ -603,41 +700,52 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None):
 
                     except Exception as e:
                         err_msg = str(e)
-                        print(f"[Lazy-Scanner ERROR] 표지 추출 실패 ({filename}): {err_msg}")
-                        
-                        error_type = "Exception"
-                        if "이중 압축" in err_msg or "Nested" in err_msg:
-                            error_type = "NestedZipError"
-                        elif "BadZipFile" in err_msg:
-                            error_type = "BadZipFile"
-                        elif "ValueError" in err_msg or "표지" in err_msg:
-                            error_type = "NoCover"
-                        elif file_path.lower().endswith('.pdf') and ("pdfium" in err_msg.lower() or "syntax error" in err_msg.lower() or "page tree" in err_msg.lower() or "cannot open" in err_msg.lower() or "data format error" in err_msg.lower()):
-                            error_type = "PdfiumFormatError"
-                            
-                        # 실패 상태를 UI에 표시하되 다음 스케줄에서는 다시 추출을 시도합니다.
-                        try:
-                            cursor.execute("""
-                                UPDATE books SET
-                                    cover_image = CASE WHEN COALESCE(cover_image, '') = '' THEN 'NO_COVER' ELSE cover_image END,
-                                    has_offsets = CASE WHEN (COALESCE(total_pages, 0) = 0 OR COALESCE(has_offsets, 0) = 0) THEN -1 ELSE has_offsets END
-                                WHERE id = ?
-                            """, (book_id,))
-                            conn.commit()
-                        except Exception as db_mark_err:
-                            print(f"[Lazy-Scanner WARNING] 실패 상태 마킹 중 무시된 에러: {db_mark_err}")
+                        if offset_only:
+                            print(f"[Lazy-Scanner ERROR] 오프셋 전용 처리 실패 ({filename}, {type(e).__name__}): {err_msg}")
+                            error_type = "OffsetIndexError"
+                            report_message = f"ERR_LAZY_OFFSET_FAIL: {err_msg}"
+                            # 커버가 이미 정상인 작품을 NO_COVER로 표시하거나 오프셋 재시도를
+                            # 막는 -1 상태로 덮어쓰지 않는다. 다음 Lazy-Scanner 실행에서 재시도한다.
+                        else:
+                            print(f"[Lazy-Scanner ERROR] 표지 추출 실패 ({filename}, {type(e).__name__}): {err_msg}")
+
+                            error_type = "Exception"
+                            if "이중 압축" in err_msg or "Nested" in err_msg:
+                                error_type = "NestedZipError"
+                            elif "BadZipFile" in err_msg:
+                                error_type = "BadZipFile"
+                            elif "ValueError" in err_msg or "표지" in err_msg:
+                                error_type = "NoCover"
+                            elif file_path.lower().endswith('.pdf') and ("pdfium" in err_msg.lower() or "syntax error" in err_msg.lower() or "page tree" in err_msg.lower() or "cannot open" in err_msg.lower() or "data format error" in err_msg.lower()):
+                                error_type = "PdfiumFormatError"
+
+                            report_message = f"ERR_LAZY_COVER_FAIL: {err_msg}"
+                            # 커버 추출 실패는 NO_COVER로 기록하고, 동시에 실패한 ZIP 오프셋은
+                            # 재시도 간격 정책을 따르도록 -1로 둔다. 오프셋 전용 오류는 위에서
+                            # 분리했으므로 이미 정상인 커버 상태는 건드리지 않는다.
+                            try:
+                                cursor.execute("""
+                                    UPDATE books SET
+                                        cover_image = 'NO_COVER',
+                                        cover_updated_at = CURRENT_TIMESTAMP,
+                                        has_offsets = CASE WHEN (COALESCE(total_pages, 0) = 0 OR COALESCE(has_offsets, 0) = 0) THEN -1 ELSE has_offsets END
+                                    WHERE id = ?
+                                """, (book_id,))
+                                conn.commit()
+                            except Exception as db_mark_err:
+                                print(f"[Lazy-Scanner WARNING] 실패 상태 마킹 중 무시된 에러: {db_mark_err}")
 
                         lib_errors[library_id].append({
                             'file_path': file_path,
                             'filename': filename,
                             'error_type': error_type,
-                            'message': f"ERR_LAZY_COVER_FAIL: {err_msg}"
+                            'message': report_message
                         })
                         
                     gc.collect()
                     if batch_limit_reached or stop_requested:
                         break
-                    if target_book_id is None:
+                    if target_book_ids is None:
                         # 원격(rclone/GDrive) API 부하 조절용 sleep. 로컬 디스크는 그런
                         # 제약이 없는데도 예전엔 여기서 원격/로컬 구분 없이 무조건 3초를
                         # 대기해, 초기 스캔이 커버 추출을 미루는 PDF(tools/scanner/cover.py
@@ -722,7 +830,7 @@ def get_series_cover_fallback_single(series_name, parent_dir, filename, file_pat
     # 파싱이나 zip/pdf 직접 열기 같은 "실제 바이트가 필요한" 단계 직전에 조용히 포기한다.
     # 커버/메타데이터가 꼭 필요하면 정석은 "Drive에서 복사해오기"로 내 드라이브에 옮긴
     # 뒤 그 로컬 사본을 다시 스캔하는 것이다.
-    from utils.drive_helper import is_gdrive_url
+    from utils.drive_helper import is_gdrive_url, is_remote_path
 
     # 미리 파싱된 메타데이터가 없으면 여기서 직접 파싱 (단독 호출 시 하위 호환)
     if b64_keys_lower is None:
@@ -777,8 +885,11 @@ def get_series_cover_fallback_single(series_name, parent_dir, filename, file_pat
     if file_path.lower().endswith(('.zip', '.cbz')):
         try:
             from tools.scanner.metadata import parse_comicinfo_from_cbz
-            comicinfo_meta = parse_comicinfo_from_cbz(file_path)
-            if any(comicinfo_meta.get(k) for k in ('author', 'summary', 'publisher')):
+            comicinfo_meta = parse_comicinfo_from_cbz(
+                file_path,
+                is_remote=is_remote_path(file_path)
+            )
+            if any(comicinfo_meta.get(k) for k in ('author', 'summary', 'publisher', 'books_lv')):
                 print(f"[Lazy-Scanner] ComicInfo.xml 메타데이터 추출 성공: {filename}")
         except Exception as e:
             print(f"[Lazy-Scanner] ComicInfo.xml 파싱 중 예외 무시: {e}")
@@ -1243,18 +1354,44 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Lazy scanner runner')
     parser.add_argument('--book-id', type=int, default=None)
-    parser.add_argument('--db-type', choices=['general', 'adult'], default=None)
+    parser.add_argument('--book-ids', nargs='+', type=int, default=None)
+    parser.add_argument('--library-id', type=int, default=None)
+    parser.add_argument('--series-name', type=str, default=None)
+    parser.add_argument('--db-type', choices=['general', 'adult', 'audiobook'], default=None)
+    parser.add_argument('--task-id', type=int, default=None)
     args = parser.parse_args()
+
+    if args.book_id is not None and args.book_ids:
+        parser.error('--book-id와 --book-ids는 함께 사용할 수 없습니다.')
+    if args.library_id is not None and (args.book_id is not None or args.book_ids):
+        parser.error('--library-id와 도서 ID 옵션은 함께 사용할 수 없습니다.')
+    if args.series_name is not None and (args.book_id is not None or args.book_ids):
+        parser.error('--series-name과 도서 ID 옵션은 함께 사용할 수 없습니다.')
+    if args.series_name is not None and args.library_id is None:
+        parser.error('--series-name에는 --library-id가 필요합니다.')
+    if (args.library_id is not None or args.book_id is not None or args.book_ids or args.series_name is not None) and not args.db_type:
+        parser.error('개별 Lazy-Scanner 실행에는 --db-type이 필요합니다.')
+
+    target_book_ids = args.book_ids
+    if args.book_id is not None:
+        target_book_ids = [args.book_id]
+    is_targeted_scan = target_book_ids is not None or args.library_id is not None
 
     cover_resize_has_more_work = False
     try:
         # run_lazy_cover_extraction()은 끝에서 항상 sys.exit(0/10)을 호출해 SystemExit을 던지므로,
         # 그 뒤에 이어 붙이면 아래 코드는 영원히 실행되지 않는다. 영상 백필은 반드시 먼저 실행한다.
-        if args.book_id is None:
+        if not is_targeted_scan:
             run_lazy_video_duration_backfill()
             run_lazy_video_container_revalidation()
             cover_resize_has_more_work = run_lazy_cover_resize()
-        run_lazy_cover_extraction(target_book_id=args.book_id, target_db_type=args.db_type)
+        run_lazy_cover_extraction(
+            target_book_ids=target_book_ids,
+            target_library_id=args.library_id,
+            target_series_name=args.series_name,
+            target_db_type=args.db_type,
+            task_id=args.task_id,
+        )
     except SystemExit as se:
         # 표지 추출은 이미 다 끝나서(exit 0) 스캐너 큐가 이 lazy 스캔 태스크를 끝내려 하더라도,
         # 커버 리사이즈 백필이 아직 안 끝났으면 exit(10)로 덮어써서 재기동을 계속 요청한다.
@@ -1266,4 +1403,3 @@ if __name__ == '__main__':
         tb = traceback.format_exc()
         print(f"[Lazy-Scanner FATAL ERROR] 치명적 예외 발생으로 프로세스가 중단되었습니다:\n{tb}")
         sys.exit(1)
-

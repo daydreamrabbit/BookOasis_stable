@@ -1596,6 +1596,18 @@ body {
     color: #7f8a93;
 }
 
+.scan-activity-item.is-completed .scan-activity-item-icon {
+    color: #22c55e;
+}
+
+.scan-activity-item.is-failed .scan-activity-item-icon {
+    color: #ef4444;
+}
+
+.scan-activity-item.is-cancelled .scan-activity-item-icon {
+    color: #7f8a93;
+}
+
 .scan-activity-item-copy {
     min-width: 0;
 }
@@ -1617,6 +1629,11 @@ body {
     margin-top: 0.25rem;
     color: #8f9aa3;
     font-size: 0.75rem;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .scan-activity-item-time {
@@ -1847,9 +1864,10 @@ body {
     color: var(--app-text-muted);
     font-size: 0.85rem;
     cursor: pointer;
-    display: flex;
+    display: grid;
+    grid-template-columns: 1.25rem minmax(0, 1fr);
     align-items: center;
-    gap: 0.6rem;
+    column-gap: 0.6rem;
     transition: all 0.2s ease;
 }
 
@@ -1859,8 +1877,14 @@ body {
 }
 
 .context-menu-item i {
-    width: 14px;
+    width: 1.25rem;
+    min-width: 1.25rem;
+    text-align: center;
     color: var(--app-text-muted);
+}
+
+.context-menu-item > span {
+    min-width: 0;
 }
 
 .context-menu-item:hover i {
@@ -1900,31 +1924,6 @@ body {
     background: rgba(255, 255, 255, 0.08);
 }
 
-.book-info-popup-body {
-    padding: 0.25rem 0.85rem 0.75rem 0.85rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
-}
-
-.book-info-popup-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-}
-
-.book-info-popup-label {
-    font-size: 0.72rem;
-    color: var(--app-text-muted);
-    font-weight: 700;
-}
-
-.book-info-popup-value {
-    font-size: 0.82rem;
-    color: var(--app-text-primary);
-    word-break: break-all;
-}
-
 .plugin-context-menu-group-title {
     padding: 0.45rem 1rem 0.35rem 1rem;
     color: var(--app-text-muted);
@@ -1934,9 +1933,10 @@ body {
     font-weight: 700;
     cursor: default;
     user-select: none;
-    display: flex;
+    display: grid;
+    grid-template-columns: 1.25rem minmax(0, 1fr);
     align-items: center;
-    gap: 0.45rem;
+    column-gap: 0.6rem;
 }
 
 .plugin-context-menu-group-title::before {
@@ -1944,13 +1944,14 @@ body {
     width: 0.45rem;
     height: 0.45rem;
     border-radius: 999px;
+    justify-self: center;
     background: var(--plugin-accent, #22c55e);
     box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.07);
 }
 
 .context-menu-item.plugin-context-menu-item {
     align-items: center;
-    gap: 0.65rem;
+    column-gap: 0.6rem;
     box-shadow: inset 2px 0 0 transparent;
 }
 
@@ -1965,7 +1966,7 @@ body {
 }
 
 .plugin-context-menu-label {
-    flex: 1;
+    min-width: 0;
 }
 
 /* 모달 스타일 */
@@ -2344,8 +2345,9 @@ body {
 
 .books-grid {
     display: grid;
+    /* Kavita처럼 최소 폭을 기준으로 가용 너비에 맞춰 열을 늘리고 재배치한다. */
     grid-template-columns: repeat(auto-fill, minmax(var(--book-card-width, 160px), 1fr));
-    gap: 1.5rem;
+    gap: 1.5rem 1rem;
 }
 
 /* 무한 스크롤로 뷰포트에서 멀어진 카드를 정리(grid_pruning.js)할 때 그 자리를 대신하는
@@ -2400,7 +2402,9 @@ body {
 }
 
 .book-card-cover {
-    height: var(--book-card-height, 220px);
+    width: 100%;
+    height: auto;
+    aspect-ratio: 160 / 233;
     position: relative;
     overflow: hidden;
     background: var(--app-bg-sidebar);
@@ -2409,9 +2413,127 @@ body {
 .book-card-cover img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    /* Kavita처럼 썸네일 프레임을 빈틈없이 채운다. 원본 비율과 프레임 비율 차이는
+       소폭 늘려 맞추며, 잘림이나 흐림 배경 띠를 만들지 않는다. */
+    object-fit: fill;
+    position: relative;
+    z-index: 1;
     opacity: 0;
-    transition: transform 0.5s ease, opacity 0.25s ease;
+    transition: opacity 0.25s ease;
+}
+
+.book-card-select-toggle {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 7;
+    box-sizing: border-box;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    color: #eab308;
+    background: rgba(var(--app-panel-rgb), 0.65);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.25s ease;
+    backdrop-filter: blur(4px);
+}
+
+.book-card:hover .book-card-select-toggle,
+.book-card--selected .book-card-select-toggle,
+.book-card-select-toggle:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.book-card--selectable .book-card-select-toggle {
+    top: 8px;
+    right: 8px;
+}
+
+@media (hover: none) {
+    .book-card-select-toggle {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
+.book-card-select-toggle i {
+    font-size: 0.78rem;
+}
+
+.book-card-select-toggle[aria-pressed="false"] i {
+    visibility: hidden;
+}
+
+.book-card--selected {
+    border-color: var(--app-accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 68%, transparent);
+}
+
+.book-selection-toolbar {
+    position: fixed;
+    z-index: 20040;
+    left: 50%;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    max-width: calc(100vw - 24px);
+    padding: 0.6rem 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--app-accent) 55%, var(--app-border));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--app-bg-card) 94%, transparent);
+    color: var(--app-text-primary);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(10px);
+}
+
+.book-selection-toolbar[hidden] {
+    display: none;
+}
+
+.book-selection-toolbar-summary {
+    color: var(--app-accent-hover);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.book-selection-toolbar-hint {
+    color: var(--app-text-muted);
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+.book-selection-clear {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.35rem 0.55rem;
+    border: 1px solid var(--app-border);
+    border-radius: 6px;
+    color: var(--app-text-primary);
+    background: transparent;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .book-selection-toolbar {
+    gap: 0.45rem;
+    padding: 0.5rem 0.6rem;
+  }
+
+  .book-selection-toolbar-hint {
+    display: none;
+  }
 }
 
 /* 실제 커버 로드가 끝나면(ui.js wireCoverFadeIn) 붙는 클래스 - 뚝뚝 끊기듯 나타나는 대신
@@ -2426,6 +2548,11 @@ body {
     aspect-ratio: 16 / 9;
 }
 
+.book-card[data-role="video-course-card"] .book-card-cover img {
+    object-fit: cover;
+    transition: transform 0.5s ease, opacity 0.25s ease;
+}
+
 /* 카테고리별 커버 화면비율 설정(4:3 기본 / 16:9 선택) - ui.js createBookCard가 카드마다 굽는 data-cover-ratio */
 .book-card[data-cover-ratio="16-9"] .book-card-cover {
     height: auto;
@@ -2433,44 +2560,16 @@ body {
 }
 
 .book-card:hover .book-card-cover img {
+    transform: none;
+}
+
+.book-card[data-role="video-course-card"]:hover .book-card-cover img {
     transform: scale3d(1.08, 1.08, 1);
 }
 
 /* 제목 감추기(넷플릭스 스타일) - 카드 하단 제목/서브텍스트 영역을 통째로 숨겨 썸네일만 노출 */
 .book-card.book-card--hide-title .book-card-info {
     display: none;
-}
-
-/* 카드 정보 팝업(...) 트리거 - 썸네일 우하단, 평소엔 숨겨두고 카드 hover 시에만 노출 */
-.book-card-kebab-btn {
-    position: absolute;
-    bottom: 8px;
-    right: 8px;
-    width: 26px;
-    height: 26px;
-    border: none;
-    border-radius: 50%;
-    background: rgba(10, 11, 13, 0.75);
-    color: var(--app-text-secondary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.85rem;
-    cursor: pointer;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.2s ease, background 0.2s ease;
-    z-index: 4;
-}
-
-.book-card:hover .book-card-kebab-btn {
-    opacity: 1;
-    pointer-events: auto;
-}
-
-.book-card-kebab-btn:hover {
-    background: var(--app-accent);
-    color: var(--app-accent-contrast);
 }
 
 .book-badge-count {
@@ -2765,22 +2864,29 @@ body {
     position: absolute;
     top: 8px;
     left: 8px;
+    box-sizing: border-box;
     background: rgba(var(--app-panel-rgb), 0.65);
     border: 1px solid rgba(255, 255, 255, 0.15);
     color: #eab308;
-    width: 34px;
-    height: 34px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1rem;
+    font-size: 0.78rem;
     cursor: pointer;
     z-index: 4;
     opacity: 0;
     pointer-events: none;
     transition: all 0.25s ease;
     backdrop-filter: blur(4px);
+}
+
+.book-card--selectable .btn-card-fav-toggle {
+    left: 8px;
+    right: auto;
 }
 
 .btn-card-fav-toggle.active {
@@ -2793,8 +2899,8 @@ body {
     pointer-events: auto;
 }
 
-.book-card:hover .btn-card-fav-toggle:hover {
-    transform: scale(1.15);
+.book-card:hover .btn-card-fav-toggle:hover,
+.book-card:hover .book-card-select-toggle:hover {
     background: rgba(var(--app-panel-rgb), 0.9);
     border-color: #eab308;
     box-shadow: 0 0 10px rgba(234, 179, 8, 0.4);
@@ -3200,6 +3306,27 @@ body {
     box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4);
 }
 
+/* 메타데이터 잠금 해제 액션은 상세 메타 영역에 포인터를 올리거나
+   키보드로 포커스했을 때만 드러낸다. */
+.detail-header-meta .btn-unlock-metadata {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+.detail-header-meta:hover .btn-unlock-metadata,
+.detail-header-meta:focus-within .btn-unlock-metadata {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+@media (hover: none) {
+    .detail-header-meta .btn-unlock-metadata {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
 /* 하단 단행본 목록 섹션 */
 .volumes-section {
     display: flex;
@@ -3370,10 +3497,49 @@ body {
     justify-content: center;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
     backdrop-filter: blur(2px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+.book-card:hover .book-card-locked-badge,
+.book-card:focus-within .book-card-locked-badge,
+.detail-cover-container:hover .book-card-locked-badge {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    .book-card-locked-badge {
+        opacity: 1;
+    }
 }
 
 .book-card-locked-badge i {
     font-size: 0.7rem;
+}
+
+.book-card-metadata-missing {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 6;
+    box-sizing: border-box;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(248, 113, 113, 0.55);
+    border-radius: 50%;
+    color: #f87171;
+    background: rgba(var(--app-panel-rgb), 0.78);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    pointer-events: none;
+}
+
+.book-card-metadata-missing i {
+    font-size: 0.72rem;
 }
 
 /* 카드 하단 메타 텍스트: 오디오북 챕터/이어읽기 진행률 */
@@ -4600,8 +4766,3 @@ body {
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
 }
-
-
-
-
-

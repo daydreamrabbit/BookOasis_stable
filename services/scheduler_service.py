@@ -661,9 +661,8 @@ def enqueue_scan_job(db_type, db_path, library_id, physical_path, force=False, f
 def run_lazy_scanner_job():
     """백그라운드 스캐너 작업을 큐에 적재"""
     from services.scanner_queue import scanner_queue
-    print("[Scheduler] Lazy cover scanner job scheduled -> Enqueuing (force_requeue)...")
-    scanner_queue.enqueue('lazy_scan', force_requeue=True)
-
+    print("[Scheduler] Lazy cover scanner job scheduled -> Enqueuing if no Lazy-Scanner is active...")
+    scanner_queue.enqueue('lazy_scan')
 
 
 

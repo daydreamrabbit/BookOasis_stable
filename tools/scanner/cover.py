@@ -6,6 +6,7 @@ import zipfile
 import urllib.parse
 import base64
 import io
+import re
 import xml.etree.ElementTree as ET
 from PIL import Image
 from tools.scanner.folder_image import find_common_cover, find_individual_cover, find_common_banner
@@ -247,9 +248,7 @@ def extract_cover_from_b64(file_path, cover_b64, force=False, library_id=None):
         return None
 
 def extract_banner_from_b64(file_path, banner_b64, force=False, library_id=None):
-    """메타 YAML의 banner 필드(Base64)를 디코드해 covers/{library_id}/banner_{hash}.webp로 저장.
-    커버와 동일한 파일경로 MD5 해시를 쓰되 접두사만 banner_로 다르다 - 커버/배너가 항상 같은
-    파일명 세트로 짝지어져 캐시 무효화(파일 재해시) 로직을 그대로 재사용할 수 있다."""
+    """YAML Base64 배너를 경로·콘텐츠 해시가 포함된 WebP 캐시로 저장한다."""
     try:
         import re
         if "," in banner_b64:
@@ -265,7 +264,8 @@ def extract_banner_from_b64(file_path, banner_b64, force=False, library_id=None)
         img_data = base64.b64decode(banner_b64)
 
         book_hash = hashlib.md5(file_path.encode('utf-8')).hexdigest()
-        banner_filename = f"banner_{book_hash}.webp"
+        content_hash = hashlib.sha256(img_data).hexdigest()[:16]
+        banner_filename = f"banner_{book_hash}_{content_hash}.webp"
 
         if library_id is not None:
             dest_dir = os.path.join(get_covers_dir(), str(library_id))
@@ -306,8 +306,24 @@ def get_folder_banner(file_path, folder_path, banner_b64=None, force=False, libr
         if result:
             return result
 
+    cand_path = find_common_banner(folder_path)
+    if not cand_path:
+        # 원본이 사라졌다면 기존 캐시 경로를 계속 반환하지 않는다.
+        # 호출자는 DB 참조를 비우고, 참조가 사라진 생성 WebP를 정리할 수 있다.
+        return None
+
+    try:
+        with open(cand_path, 'rb') as banner_file:
+            img_data = banner_file.read()
+        if not img_data:
+            return None
+    except Exception as e:
+        print(f"[Scanner-Banner] Folder banner read failed: {cand_path}: {e}")
+        return None
+
     banner_hash = hashlib.md5(file_path.encode('utf-8')).hexdigest()
-    banner_filename = f"banner_{banner_hash}.webp"
+    content_hash = hashlib.sha256(img_data).hexdigest()[:16]
+    banner_filename = f"banner_{banner_hash}_{content_hash}.webp"
     if library_id is not None:
         dest_dir = os.path.join(get_covers_dir(), str(library_id))
         db_banner_path = f"{library_id}/{banner_filename}"
@@ -319,13 +335,9 @@ def get_folder_banner(file_path, folder_path, banner_b64=None, force=False, libr
     if not force and os.path.exists(local_banner_path) and os.path.getsize(local_banner_path) > 0:
         return db_banner_path
 
-    cand_path = find_common_banner(folder_path)
-    if not cand_path:
-        return None
-
     try:
         os.makedirs(dest_dir, exist_ok=True)
-        with Image.open(cand_path) as img:
+        with Image.open(io.BytesIO(img_data)) as img:
             save_as_thumbnail_webp(img, local_banner_path, max_w=BANNER_THUMB_MAX_W, max_h=BANNER_THUMB_MAX_H)
         print(f"[Scanner-Banner] Folder banner WebP convert copy complete: {cand_path} -> {local_banner_path}, Force={force}")
         return db_banner_path
@@ -337,6 +349,51 @@ def get_folder_banner(file_path, folder_path, banner_b64=None, force=False, libr
         except Exception as e2:
             print(f"[Scanner-Banner] Folder banner copy backup also failed: {e2}")
             return None
+
+
+def cleanup_unreferenced_generated_banners(cache_paths, referenced_paths, library_id):
+    """Remove only orphaned scanner-generated banner WebPs for one library.
+
+    Keep the allow-list deliberately narrow: cache paths must be exactly
+    ``{library_id}/banner_{book-md5}[_<content-sha256>].webp``. User covers,
+    arbitrary uploads, files in other libraries, and symlinks are never removed.
+    """
+    if library_id is None:
+        return []
+
+    library_component = str(library_id)
+
+    def normalize(path):
+        return str(path or '').replace('\\', '/')
+
+    referenced = {normalize(path) for path in referenced_paths if path}
+    covers_root = os.path.realpath(get_covers_dir())
+    library_dir = os.path.join(covers_root, library_component)
+    if os.path.islink(library_dir) or os.path.realpath(library_dir) != library_dir:
+        return []
+
+    removed = []
+    generated_name = re.compile(r'^banner_[0-9a-f]{32}(?:_[0-9a-f]{16})?\.webp$')
+    for cache_path in sorted({normalize(path) for path in cache_paths if path}):
+        if cache_path in referenced:
+            continue
+        parts = cache_path.split('/')
+        if len(parts) != 2 or parts[0] != library_component:
+            continue
+        filename = parts[1]
+        if not generated_name.fullmatch(filename):
+            continue
+
+        target = os.path.join(library_dir, filename)
+        if os.path.islink(target) or not os.path.isfile(target):
+            continue
+        try:
+            os.remove(target)
+            removed.append(cache_path)
+            print(f"[Scanner-Cleanup] Removed unreferenced generated banner: {cache_path}")
+        except OSError as e:
+            print(f"[Scanner-Cleanup WARNING] Could not remove generated banner {cache_path}: {e}")
+    return removed
 
 
 def get_series_cover_fallback(series_name, folder_path, force=False, is_remote=False, filename=None, file_path=None, library_id=None):

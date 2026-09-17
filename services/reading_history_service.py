@@ -182,7 +182,7 @@ class ReadingHistoryService:
     @staticmethod
     def get_recently_added(db_type, user_id=None, role=None):
         # 1. Redis 캐시 확인 (구형 캐시에 series_alias 없으면 DB 재조회)
-        cache_key = f"cache:recent_added:v2:{db_type}:{user_id}:{role}"
+        cache_key = f"cache:recent_added:v3:{db_type}:{user_id}:{role}"
         cached_data = redis_get(cache_key)
         if cached_data:
             try:

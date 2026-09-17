@@ -4,6 +4,7 @@ import json
 import time
 import hashlib
 import subprocess
+from functools import lru_cache
 from urllib.parse import urlencode
 from dotenv import load_dotenv
 load_dotenv()
@@ -20,6 +21,16 @@ IS_WORKER = os.environ.get('BOOKOASIS_IS_WORKER') == 'true'
 
 # 글로벌 자식 프로세스 레퍼런스
 _worker_process = None
+
+
+@lru_cache(maxsize=512)
+def _static_asset_content_hash(asset_path, modified_ns, file_size):
+    """CSS/JS 파일 내용이 바뀌면 프록시 캐시 URL도 바뀌도록 짧은 지문을 반환합니다."""
+    try:
+        with open(asset_path, 'rb') as asset_file:
+            return hashlib.sha256(asset_file.read()).hexdigest()[:16]
+    except OSError:
+        return ''
 
 def start_scanner_worker_process():
     """독립 스캐너 워커 프로세스를 기동합니다."""
@@ -224,6 +235,20 @@ if not IS_WORKER:
             from flask import url_for
             params = dict(kwargs or {})
             params.setdefault('v', app.config.get('RELEASE_VERSION', 'dev'))
+            asset_name = os.fspath(filename)
+            if asset_name.lower().endswith(('.css', '.js')):
+                asset_path = os.path.join(app.static_folder, asset_name)
+                try:
+                    asset_stat = os.stat(asset_path)
+                    content_hash = _static_asset_content_hash(
+                        asset_path,
+                        asset_stat.st_mtime_ns,
+                        asset_stat.st_size,
+                    )
+                    if content_hash:
+                        params.setdefault('asset', content_hash)
+                except (OSError, TypeError, ValueError):
+                    pass
             return url_for('static', filename=filename, **params)
 
         def append_release_version(url):

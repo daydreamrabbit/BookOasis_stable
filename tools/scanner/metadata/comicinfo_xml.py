@@ -42,6 +42,7 @@ class NetworkCircuitBreaker:
 
 
 _circuit_breaker = NetworkCircuitBreaker(max_failures=3, reset_timeout=60)
+DEFAULT_REMOTE_PARSE_TIMEOUT_SECONDS = 15.0
 
 
 def clean_html_tags(text):
@@ -79,15 +80,12 @@ def normalize_metadata_list_field(value):
     return ', '.join(normalized)
 
 
-def parse(target_path, is_remote=False):
-    return parse_comicinfo_from_cbz(target_path)
-
-
-def parse_comicinfo_from_cbz(file_path):
-    """Parse ComicInfo.xml inside CBZ/ZIP file and return metadata."""
-    meta = {
+def _empty_meta():
+    return {
         'author': '',
+        'localized_series': '',
         'cover_artist': '',
+        'link': '',
         'teams': '',
         'locations': '',
         'characters': '',
@@ -100,6 +98,27 @@ def parse_comicinfo_from_cbz(file_path):
         'cover_b64': None,
     }
 
+
+def _remote_parse_timeout_seconds():
+    """Bound a potentially blocking ZIP read through an rclone/FUSE mount."""
+    try:
+        configured = float(os.getenv(
+            'COMICINFO_REMOTE_TIMEOUT_SECONDS',
+            str(DEFAULT_REMOTE_PARSE_TIMEOUT_SECONDS)
+        ))
+        return max(1.0, min(configured, 120.0))
+    except (TypeError, ValueError):
+        return DEFAULT_REMOTE_PARSE_TIMEOUT_SECONDS
+
+
+def parse(target_path, is_remote=False):
+    return parse_comicinfo_from_cbz(target_path, is_remote=is_remote)
+
+
+def _parse_comicinfo_from_cbz_local(file_path):
+    """Read one archive in the calling thread; remote callers isolate this in a worker."""
+    meta = _empty_meta()
+    file_path = os.fspath(file_path)
     if not file_path.lower().endswith(('.cbz', '.zip')):
         return meta
 
@@ -115,12 +134,19 @@ def parse_comicinfo_from_cbz(file_path):
 
             def _get(tag):
                 elem = root.find(tag)
+                if elem is None:
+                    elem = next(
+                        (child for child in root.iter()
+                         if child.tag.rsplit('}', 1)[-1] == tag),
+                        None
+                    )
                 return elem.text.strip() if elem is not None and elem.text else ''
 
             # Writer(글 작가)만 author로 채운다 - Penciller(그림 작가)를 author 폴백으로
             # 섞으면 표지/그림 담당자가 글 작가로 잘못 표기된다. 그림 작가는 아래
             # cover_artist에 별도로 보존한다.
             meta['author'] = _get('Writer')
+            meta['localized_series'] = _get('LocalizedSeries')
 
             # 명시적 <CoverArtist> 태그가 있으면 우선 사용하고, 없으면 <Penciller>를
             # 호환값으로 사용한다(존재하는 쪽 우선) - 일부 저작 도구는 CoverArtist 개념을
@@ -131,11 +157,11 @@ def parse_comicinfo_from_cbz(file_path):
             meta['locations'] = normalize_metadata_list_field(_get('Locations'))
             meta['characters'] = normalize_metadata_list_field(_get('Characters'))
 
-            # AgeRating 원문을 그대로 books_lv에 채운다 - services/content_rating_service.py의
-            # _BOOKS_LV_LEVEL_MAP이 ComicInfo 표준 어휘(M/MA15+/R18+/Teen 등)를 이미
-            # 대소문자 무시하고 인식하므로 별도 매핑 테이블이 필요 없다(Kavita YAML의 숫자
-            # 코드와 달리 ComicInfo AgeRating은 이미 사람이 읽는 표준 문자열이기 때문).
+            # AgeRating 원문을 그대로 저장하고 등급 단계 변환은 ContentRatingService에 맡긴다.
             meta['books_lv'] = _get('AgeRating')
+            # ComicInfo 표준 Web 필드가 작품 관련 링크다. 일부 생성기는 WebLink를 쓰므로
+            # 호환 폴백으로 함께 읽는다.
+            meta['link'] = _get('Web') or _get('WebLink')
 
             meta['publisher'] = _get('Publisher')
             meta['summary'] = clean_html_tags(_get('Summary'))
@@ -149,11 +175,63 @@ def parse_comicinfo_from_cbz(file_path):
                 meta['release_date'] = f"{year}-{month or '01'}-{day or '01'}"
 
     except zipfile.BadZipFile:
-        pass
-    except Exception as e:
-        print(f"[Scanner] ComicInfo.xml parsing error ({file_path}): {e}")
+        return meta
 
     meta['genre'] = normalize_metadata_list_field(meta.get('genre', ''))
     meta['tags'] = normalize_metadata_list_field(meta.get('tags', ''))
 
     return meta
+
+
+def parse_comicinfo_from_cbz(file_path, is_remote=False, timeout=None):
+    """Parse ComicInfo.xml locally or with a bounded wait for remote VFS files."""
+    meta = _empty_meta()
+    if not file_path or not str(file_path).lower().endswith(('.cbz', '.zip')):
+        return meta
+
+    if not is_remote:
+        try:
+            return _parse_comicinfo_from_cbz_local(file_path)
+        except Exception as error:
+            print(f"[Scanner] ComicInfo.xml parsing error ({file_path}): {error}")
+            return meta
+
+    if _circuit_breaker.is_tripped():
+        print(f"[Scanner-ComicInfo] ⚠️ 원격 ComicInfo 읽기 일시 중지(최근 VFS 시간 초과): {file_path}")
+        return meta
+
+    result = []
+
+    def _parse_remote():
+        try:
+            result.append(_parse_comicinfo_from_cbz_local(file_path))
+        except Exception as error:
+            result.append(error)
+
+    timeout_seconds = timeout if timeout is not None else _remote_parse_timeout_seconds()
+    try:
+        timeout_seconds = max(1.0, min(float(timeout_seconds), 120.0))
+    except (TypeError, ValueError):
+        timeout_seconds = DEFAULT_REMOTE_PARSE_TIMEOUT_SECONDS
+
+    worker = threading.Thread(target=_parse_remote, daemon=True)
+    worker.start()
+    worker.join(timeout_seconds)
+
+    if worker.is_alive():
+        _circuit_breaker.record_failure()
+        print(f"[Scanner-ComicInfo] ⚠️ 원격 CBZ ComicInfo 읽기 시간 초과 ({timeout_seconds:.1f}s): {file_path}")
+        return meta
+
+    if not result:
+        _circuit_breaker.record_failure()
+        return meta
+
+    parsed = result[0]
+    if isinstance(parsed, Exception):
+        _circuit_breaker.record_failure()
+        print(f"[Scanner-ComicInfo] 원격 ComicInfo 파싱 실패(무시): {file_path}: {parsed}")
+        return meta
+
+    _circuit_breaker.record_success()
+    return parsed

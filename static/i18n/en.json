@@ -351,7 +351,7 @@
     "filter_title": "Open Genre/Tag Filter",
     "sort_title": "Change Sort Criteria",
     "sort_asc": "Alphabetical Ascending",
-    "search_placeholder": "Title·series·alias / 작가:author (Shortcut: {shortcut})",
+    "search_placeholder": "Title·series·alias / 작가:author / 그림작가:illustrator (Shortcut: {shortcut})",
     "group_mode_default": "Default",
     "group_mode_author": "By Author"
   },
@@ -433,6 +433,9 @@
     "edit_category": "Edit Category",
     "delete_category": "Delete Category",
     "scan_book_now": "Scan This Book Now (Cover/Meta)",
+    "lazy_scan_library": "Run Lazy Scanner for This Library",
+    "lazy_scan_book": "Run Lazy Scanner for Selected/Clicked Books",
+    "lazy_scan_series": "Run Lazy Scanner for Entire Series",
     "search_metadata": "Search Metadata",
     "add_to_collection": "Add to Collection",
     "add_series_to_collection": "Add This Series to Collection",
@@ -511,7 +514,8 @@
     "scan_errors": {
       "ERR_NO_COVER": "Cover image not found or 0 bytes.",
       "ERR_OFFSET_FAIL": "Offset analysis failed",
-      "ERR_LAZY_COVER_FAIL": "Lazy scan cover restore failed"
+      "ERR_LAZY_COVER_FAIL": "Lazy scan cover restore failed",
+      "ERR_LAZY_OFFSET_FAIL": "Lazy scan page offset indexing failed"
     },
     "error_txt_sub": "Failed to properly decode and read the text file.",
     "error_txt_load": "Load failed",
@@ -749,6 +753,7 @@
     "type_lib": "Library Scan",
     "type_cover": "Cover Scan",
     "type_lazy": "Lazy Scan",
+    "type_batch_book_scan": "Selected Book Scan",
     "system": "System",
     "clear_confirm": "Are you sure you want to clear all pending scan tasks?\\n(Currently running tasks will not be interrupted.)",
     "clear_fail": "Failed to clear: ",

@@ -225,7 +225,7 @@ class UserRepository:
 
     @staticmethod
     def update_content_rating_max(db_type, user_id, content_rating_max):
-        """사용자별 콘텐츠 등급 최대 허용치(0/15/18) 갱신"""
+        """사용자별 콘텐츠 등급 최대 허용치(0/15/18/19/20) 갱신"""
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:

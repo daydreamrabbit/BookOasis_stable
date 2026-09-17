@@ -6,10 +6,10 @@ import { showToast } from './view_manager.js';
 import { buildFallbackCoverUrl, getBookCoverSrc, buildTextCoverDataUri, coverAlignToObjectPosition } from './cover_fallback.js';
 import { stripLeadingBracketTags, middleTruncateTitle } from './series_display.js';
 import { initGridPruning, resetGridPruning, notifyCardsAppended, notifyCardsPrepended } from './grid_pruning.js';
+import { clearBookSelection, syncBookSelectionCard } from './book_selection.js';
 import './scan_activity_status.js';
 import './account_menu.js';
 import './category_info_popover.js';
-import './book_card_info_popup.js';
 
 // 커버 이미지가 (플레이스홀더 → 실제 src로) 로드 완료되면 .is-loaded를 붙여 CSS로 fade-in한다.
 // 실제 로딩 시간은 그대로지만, 뚝뚝 끊기듯 팍 나타나는 대신 부드럽게 나타나서 "계속 로딩
@@ -215,6 +215,7 @@ export function createBookCard(item, options = {}) {
   // 영상강좌는 항상 16:9 강제, 그 외(일반/성인/오디오북)는 카테고리별 커버 비율 설정을 따른다
   card.dataset.coverRatio = isVideo ? '16-9' : (state.currentLibraryAspectRatio === '16:9' ? '16-9' : '4-3');
   card.dataset.bookId = item.id || item.representative_book_id || '';
+  card.dataset.coverAlign = item.cover_align || 'center';
   if (item.is_author_group) card.dataset.isAuthorGroup = '1';
 
   const fmt = String(item.file_format || '').toLowerCase();
@@ -225,6 +226,13 @@ export function createBookCard(item, options = {}) {
     hasTrackCount ||
     item.audiobook_id !== undefined
   );
+  const isMarkedCompleted = Number(item.is_completed) === 1;
+  const hasUnfinishedSiblings = Number(item.has_unfinished_siblings) === 1;
+  const totalPages = Number(item.total_pages || 0);
+  const pagesRead = Number(item.pages_read || 0);
+  const isPageCountComplete = !isVideo && !isAudiobook && totalPages > 0 && pagesRead >= totalPages;
+  const readingIsComplete = isMarkedCompleted || isPageCountComplete;
+  const showResumeAction = options.showAction !== false && (!readingIsComplete || hasUnfinishedSiblings);
   const coverFormat = isVideo ? 'video' : (isAudiobook ? 'audiobook' : item.file_format);
 
   const rawSeriesName = String(item.series_name || '').trim();
@@ -235,7 +243,7 @@ export function createBookCard(item, options = {}) {
   card.dataset.libraryId = item.library_id ?? '';
   card.dataset.bookCount = parseInt(item.book_count, 10) || 1;
 
-  // 제목 감추기(넷플릭스 스타일)와 카드 정보 팝업(...)은 일반/성인 도서 카드 전용 기능
+  // 제목 감추기(넷플릭스 스타일)는 일반/성인 도서 카드 전용 기능
   const isBookCard = !isVideo && !isAudiobook;
   const shouldHideTitle = isBookCard && !!state.currentLibraryHideTitles;
   if (shouldHideTitle) {
@@ -263,7 +271,7 @@ export function createBookCard(item, options = {}) {
     if (now - lastClickTime < 200) return; // 중복 호출 방지
     lastClickTime = now;
 
-    if (e.target.closest('.btn-resume-series') || e.target.closest('.btn-card-fav-toggle') || e.target.closest('.book-card-kebab-btn')) {
+    if (e.target.closest('.btn-resume-series') || e.target.closest('.btn-card-fav-toggle') || e.target.closest('.book-card-select-toggle')) {
       return;
     }
     console.log('[BookCard] Triggering handlePrimaryClick!', item);
@@ -280,12 +288,12 @@ export function createBookCard(item, options = {}) {
   let pointerStartX = 0;
   let pointerStartY = 0;
   card._onPointerDown = (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || e.target.closest('.book-card-select-toggle') || e.ctrlKey || e.metaKey || e.shiftKey) return;
     pointerStartX = e.clientX;
     pointerStartY = e.clientY;
   };
   card._onPointerUp = (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || e.target.closest('.book-card-select-toggle') || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const diffX = Math.abs(e.clientX - pointerStartX);
     const diffY = Math.abs(e.clientY - pointerStartY);
     if (diffX < 8 && diffY < 8) {
@@ -310,7 +318,7 @@ export function createBookCard(item, options = {}) {
       ? Number(item.total_tracks)
       : ((item.book_count !== undefined && Number(item.book_count) > 0) ? Number(item.book_count) : (Number(item.total_pages) || 1));
     subTextHtml = `<p class="book-card-sub-audio"><i class="fa-solid fa-headphones"></i> ${chapters}</p>`;
-  } else if (item.pages_read > 0 && options.showProgress) {
+  } else if (item.pages_read > 0 && options.showProgress && (!readingIsComplete || hasUnfinishedSiblings)) {
     subTextHtml = `<p class="book-card-sub-progress">${i18n.t('dashboard.continue_reading', { pages: item.pages_read })}</p>`;
   }
 
@@ -343,27 +351,38 @@ export function createBookCard(item, options = {}) {
     `;
   }
 
+  const hasMetadataFlag = item.has_metadata;
+  const metadataMissingBadgeHtml = !item.is_author_group
+    && hasMetadataFlag !== undefined
+    && hasMetadataFlag !== null
+    && Number(hasMetadataFlag) === 0
+    ? `<span class="book-card-metadata-missing" title="메타데이터 정보 없음" aria-label="메타데이터 정보 없음"><i class="fa-solid fa-link-slash" aria-hidden="true"></i></span>`
+    : '';
+
   const audiobookCompletedDotHtml = (isAudiobook || isVideo) && Number(item.is_completed) === 1
     ? `<span class="book-card-audiobook-completed" title="${i18n.t('detail.audiobook_completed')}" aria-label="${i18n.t('detail.audiobook_completed')}"></span>`
     : '';
 
-  const infoKebabHtml = isBookCard
-    ? `<button class="book-card-kebab-btn" data-role="card-info-kebab" title="정보"><i class="fa-solid fa-ellipsis"></i></button>`
+  const isSelectableCard = options.allowSelection && !item.is_author_group;
+  if (isSelectableCard) card.classList.add('book-card--selectable');
+  const selectionToggleHtml = isSelectableCard
+    ? `<button type="button" class="book-card-select-toggle" data-role="book-card-select-toggle" aria-pressed="false" aria-label="작품 선택" title="작품 선택"><i class="fa-solid fa-check" aria-hidden="true"></i></button>`
+    : '';
+  const resumeButtonHtml = showResumeAction
+    ? `<button class="btn-resume-series" title="${options.actionTitle || '읽기'}"><i class="fa-solid fa-book-open"></i></button>`
     : '';
 
   card.innerHTML = `
     <div class="book-card-cover">
       <div class="book-card-overlay"></div>
       <img src="${imgSrc}" ${imgDataSrcAttr} alt="${displayTitle}" decoding="async" loading="lazy"${fetchPriorityAttr}${coverObjectPositionStyle}>
+      ${selectionToggleHtml}
       ${badgeHtml}
       ${favBtnHtml}
       ${lockedBadgeHtml}
+      ${metadataMissingBadgeHtml}
       ${audiobookCompletedDotHtml}
-      ${infoKebabHtml}
-
-      <button class="btn-resume-series" title="${options.actionTitle || '읽기'}">
-        <i class="fa-solid fa-book-open"></i>
-      </button>
+      ${resumeButtonHtml}
     </div>
     <div class="book-card-info">
       <h4 class="book-card-title" title="${displayTitle}">${displayTitle}</h4>
@@ -403,6 +422,7 @@ export function createBookCard(item, options = {}) {
     wireCoverFadeIn(imgEl);
   }
 
+  syncBookSelectionCard(card);
 
 
 
@@ -504,6 +524,7 @@ export function renderHistoryGrid(booksList) {
   const container = document.getElementById('books-list-container');
   if (!container) return;
 
+  clearBookSelection();
   resetGridPruning();
   if (booksList.length === 0) {
     const tNoHistory = window.i18n ? window.i18n.t('common.no_history_books') : '최근에 읽은 도서 내역이 없습니다.';
@@ -550,8 +571,13 @@ export function renderHistoryGrid(booksList) {
 // 카드나 정리(pruning) 후 복원되는 카드는 이미 화면 안/밖 여부가 다르므로 해당 없음(undefined).
 function buildSeriesGridCard(item, priority) {
   const detailDisplayTitle = resolveCardDisplayTitle(item, true);
+  const currentLibraryId = String(state.currentLibraryId ?? '');
+  const isSpecialCategory = ['home', 'history', 'plugins', 'settings'].includes(currentLibraryId)
+    || currentLibraryId.startsWith('plugin_');
   return createBookCard(item, {
     showVolumeCount: true,
+    allowSelection: !isSpecialCategory && (state.currentLibraryType === 'general' || state.currentLibraryType === 'adult'),
+    markUnreadScope: 'series',
     actionTitle: '이어읽기',
     imagePriority: priority,
     onPrimaryClick: item.is_author_group
@@ -577,6 +603,7 @@ export function renderBooksGrid(seriesList) {
   if (!container) return;
 
   resetGridPruning();
+  clearBookSelection();
   if (seriesList.length === 0) {
     const tNoBooks = window.i18n ? window.i18n.t('common.no_library_books') : '보관함에 등록된 도서가 없습니다.';
     container.innerHTML = `<div class="loading-spinner">${tNoBooks}</div>`;
@@ -616,6 +643,7 @@ export function renderDashboardHistory(booksList) {
   const container = document.getElementById('dashboard-history-row');
   if (!container) return;
 
+  clearBookSelection();
   if (booksList.length === 0) {
     const tNoHistory = window.i18n ? window.i18n.t('common.no_history_books') : '최근에 읽은 도서 내역이 없습니다.';
     container.innerHTML = `<div class="loading-spinner loading-spinner--compact">${tNoHistory}</div>`;
@@ -761,5 +789,3 @@ window.toggleCardFavoriteEvent = async (event, name, bookId, nextStatus, authorK
     showToast('즐겨찾기 업데이트에 실패했습니다.', 'error');
   }
 };
-
-

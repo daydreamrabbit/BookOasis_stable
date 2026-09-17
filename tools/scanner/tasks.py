@@ -7,8 +7,9 @@ if MEDIA_SERVER_DIR not in sys.path:
     sys.path.append(MEDIA_SERVER_DIR)
 
 import gc
-from tools.scanner.metadata import parse_info_xml, parse_kavita_yaml, parse_series_json, parse_comicinfo_from_cbz, merge_local_metadata, is_consonant_folder
+from tools.scanner.metadata import parse_info_xml, parse_kavita_yaml, parse_series_json, parse_comicinfo_from_cbz, merge_local_metadata, merge_metadata_links, is_consonant_folder
 from tools.scanner.cover import get_series_cover_fallback, get_imgdir_cover, extract_cover_from_b64, download_cover_from_url, get_folder_banner
+from tools.scanner.folder_image import COMMON_BANNER_NAMES, find_common_banner
 from tools.scanner.offset import collect_zip_offsets_data
 from tools.scanner.path_utils import canonical_path, join_canonical
 
@@ -119,9 +120,24 @@ def _normalize_series_text(name):
     return re.sub(r'^\[(?:단행|연재|소설|만화|웹툰|일반)\]\s*', '', str(name)).strip()
 
 
-def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote=False, library_id=None, db_files_cache=None, library_root=None, gdrive_file_ids=None, db_type=None, db_book_ids=None):
+def _merge_comicinfo_fallback(target, comicinfo):
+    """Fill empty per-book metadata fields from that archive's ComicInfo.xml."""
+    if not isinstance(comicinfo, dict):
+        return
+    for key in (
+        'author', 'localized_series', 'cover_artist', 'teams', 'locations', 'characters',
+        'publisher', 'summary', 'release_date', 'genre', 'tags', 'books_lv', 'link'
+    ):
+        if key == 'link' and comicinfo.get(key):
+            target[key] = merge_metadata_links(target.get(key, ''), comicinfo[key])
+        elif comicinfo.get(key) and not target.get(key):
+            target[key] = comicinfo[key]
+
+
+def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote=False, library_id=None, db_files_cache=None, library_root=None, gdrive_file_ids=None, db_type=None, db_book_ids=None, db_banner_missing=None, db_banner_images=None):
     """Independent I/O scan task per folder (DB independent, pure FS/I/O scaling)"""
     root = canonical_path(root)
+    db_banner_images = db_banner_images or {}
     print(f"[Scanner-DEBUG-Task] 📂 entering process_folder_task - folder: '{root}'")
     
     media_files = [f for f in files if f.lower().endswith(SUPPORTED_FORMATS)]
@@ -160,6 +176,11 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
         except Exception as e:
             print(f"[Scanner-DEBUG-Task] ⚠️ Failed to get mtime for folder '{root}': {e}")
             dir_mtime = None
+
+    # rclone/CIFS/NFS mounts expose ordinary filesystem paths and can read small
+    # sidecar images directly. gdrive:// is an API-backed virtual path, not a
+    # mounted directory, so keep its existing staged-metadata behavior.
+    can_read_folder_banner = not (is_remote and root.startswith(('gdrive:', 'gdrive://')))
 
     # 2. Early skip if files are unchanged (mtime & size match DB cache)
     skipped_files = set()
@@ -211,7 +232,49 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             and (not has_imgdir_candidate or imgdir_skip)
         )
         if all_files_skipped:
-            if not has_yaml and not has_xml:
+            cached_paths_missing_banner = set(db_banner_missing or ())
+            folder_book_paths = [
+                _full_path_for(root, filename, gdrive_file_ids)
+                for filename in media_files
+            ]
+            if has_imgdir_candidate:
+                folder_book_paths.append(imgdir_virtual_path)
+            has_cached_book_without_banner = bool(
+                can_read_folder_banner
+                and cached_paths_missing_banner.intersection(folder_book_paths)
+            )
+
+            has_cached_book_with_banner = any(
+                db_banner_images.get(full_path) for full_path in folder_book_paths
+            )
+            banner_sidecar_listed = any(
+                filename.lower() in COMMON_BANNER_NAMES for filename in files
+            )
+            banner_source_candidate = banner_sidecar_listed
+            if (has_cached_book_without_banner or has_cached_book_with_banner) and not banner_source_candidate:
+                try:
+                    banner_source_candidate = bool(find_common_banner(root))
+                except Exception as e:
+                    # Let the normal extraction path report the read failure.
+                    print(f"[Scanner-DEBUG-Task] ⚠️ Banner sidecar probe failed ('{root}'): {e}")
+                    banner_source_candidate = True
+
+            # Folder mtimes do not change when an existing sidecar is edited in
+            # place, and mounted rclone paths deliberately have unknown (0)
+            # mtimes. Recheck folders with a stored banner, a visible sidecar,
+            # or remote YAML so ordinary scans can detect both replacement and
+            # removal without reopening unchanged book archives.
+            banner_recheck_needed = bool(
+                can_read_folder_banner
+                and (
+                    has_cached_book_with_banner
+                    or banner_source_candidate
+                    or (is_remote and has_yaml)
+                )
+            )
+            if banner_recheck_needed:
+                print(f"[Scanner-DEBUG-Task] 🖼️ Checking folder banner source during normal scan: '{root}'")
+            elif not has_yaml and not has_xml:
                 print(f"[Scanner-DEBUG-Task] ⚡ [Ultra-fast skip] All files unchanged (mtime/size match) - folder: '{root}'")
                 return None
             else:
@@ -238,6 +301,30 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
 
     parser_warnings = merged_meta.pop('parser_warnings', [])
 
+    banner_source_checked = can_read_folder_banner
+    banner_sidecar_listed = any(
+        filename.lower() in COMMON_BANNER_NAMES for filename in files
+    )
+    banner_source_present = bool(merged_meta.get('banner_b64')) or banner_sidecar_listed
+    folder_book_paths = [
+        _full_path_for(root, filename, gdrive_file_ids) for filename in media_files
+    ]
+    if has_imgdir_candidate:
+        folder_book_paths.append(imgdir_virtual_path)
+    has_cached_book_with_banner = any(
+        db_banner_images.get(full_path) for full_path in folder_book_paths
+    )
+    if can_read_folder_banner and has_cached_book_with_banner and not banner_source_present:
+        try:
+            banner_source_present = banner_source_present or bool(find_common_banner(root))
+        except Exception as e:
+            # A failed source probe must preserve the old DB value, not interpret
+            # an I/O error as an intentional banner deletion.
+            banner_source_checked = False
+            print(f"[Scanner-DEBUG-Task] ⚠️ Banner source probe failed ('{root}'): {e}")
+    if has_yaml and parser_warnings:
+        banner_source_checked = False
+
     meta_has_data = bool(
         merged_meta['author'] or merged_meta['publisher'] or
         merged_meta['summary'] or merged_meta['release_date'] or
@@ -250,12 +337,11 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
     series_cover_url = merged_meta.get('cover_image_url', '') if is_json_only_webtoon else ''
     shared_cover_image = None
 
-    # 배너는 표지와 달리 권마다 다를 필요 없는 시리즈/폴더 단위 히어로 이미지라, 폴더당
-    # 한 번만 확보해 그 폴더의 모든 도서 결과에 동일하게 반영한다 (공유 드라이브 도서관리
-    # 담당자와 합의된 범위: 메타 YAML의 banner 필드 우선, 없으면 폴더 내 loose banner.<ext>,
-    # 둘 다 없으면 표지처럼 zip/epub 내부를 강제로 뒤지지 않고 그냥 비워둔다).
+    # 배너는 표지와 달리 권마다 다를 필요 없는 시리즈/폴더 단위 이미지다.
+    # 일반 경로와 rclone 같은 마운트 경로 모두에서 YAML 또는 loose sidecar만 읽고,
+    # gdrive:// 가상 경로는 직접 파일 접근을 하지 않는다.
     shared_banner_image = None
-    if not is_remote and media_files:
+    if can_read_folder_banner and media_files:
         try:
             banner_seed_path = _full_path_for(root, media_files[0], gdrive_file_ids)
             shared_banner_image = get_folder_banner(banner_seed_path, root, banner_b64=merged_meta.get('banner_b64'), force=force, library_id=library_id)
@@ -266,6 +352,10 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
     results = []
     errors = list(parser_warnings)
     for filename in media_files:
+        # Folder sidecars apply to every item, but ComicInfo.xml belongs to one archive.
+        # Keep a per-item copy so a rating or author cannot leak to sibling volumes.
+        book_meta = dict(merged_meta)
+        book_meta['cover_b64_map'] = merged_meta.get('cover_b64_map', {})
         full_path = _full_path_for(root, filename, gdrive_file_ids)
         _, ext = os.path.splitext(filename)
         file_format = ext.replace('.', '').lower()
@@ -316,45 +406,34 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             # ── [General Path] Cover extraction + Offset collection ──
             print(f"[Scanner-DEBUG-Task]   - File processing started: '{filename}'")
             try:
-                # [ComicInfo.xml parsing] If local file and CBZ format, extract metadata internally
-                # Skip remote paths due to high I/O cost -> delegated to Lazy Scanner
-                if not is_remote and file_format in ('cbz', 'zip') and (
-                    not merged_meta['author'] or not merged_meta['summary'] or not merged_meta.get('genre') or not merged_meta.get('tags')
-                    or not merged_meta.get('cover_artist') or not merged_meta.get('teams')
-                    or not merged_meta.get('locations') or not merged_meta.get('characters')
-                    or not merged_meta.get('books_lv')
+                # A mounted rclone/FUSE path can be opened like a local ZIP, but a
+                # gdrive:// virtual URL cannot. The parser bounds remote reads so a
+                # stalled VFS object cannot block this scanner worker indefinitely.
+                comicinfo_fields = (
+                    'author', 'localized_series', 'cover_artist', 'teams', 'locations', 'characters',
+                    'publisher', 'summary', 'release_date', 'genre', 'tags', 'books_lv', 'link'
+                )
+                can_read_comicinfo = not (
+                    is_remote and root.startswith(('gdrive:', 'gdrive://'))
+                )
+                if (
+                    file_format in ('cbz', 'zip')
+                    and can_read_comicinfo
+                    and any(not book_meta.get(key) for key in comicinfo_fields)
                 ):
                     try:
-                        comicinfo = parse_comicinfo_from_cbz(full_path)
-                        if comicinfo['author'] and not merged_meta['author']:
-                            merged_meta['author'] = comicinfo['author']
+                        comicinfo = parse_comicinfo_from_cbz(full_path, is_remote=is_remote)
+                        _merge_comicinfo_fallback(book_meta, comicinfo)
+                        if comicinfo.get('author') and book_meta.get('author') == comicinfo['author']:
                             print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml author fallback: {comicinfo['author']}")
-                        if comicinfo.get('cover_artist') and not merged_meta.get('cover_artist'):
-                            merged_meta['cover_artist'] = comicinfo['cover_artist']
-                        if comicinfo.get('teams') and not merged_meta.get('teams'):
-                            merged_meta['teams'] = comicinfo['teams']
-                        if comicinfo.get('locations') and not merged_meta.get('locations'):
-                            merged_meta['locations'] = comicinfo['locations']
-                        if comicinfo.get('characters') and not merged_meta.get('characters'):
-                            merged_meta['characters'] = comicinfo['characters']
-                        if comicinfo.get('books_lv') and not merged_meta.get('books_lv'):
-                            merged_meta['books_lv'] = comicinfo['books_lv']
-                        if comicinfo['publisher'] and not merged_meta['publisher']:
-                            merged_meta['publisher'] = comicinfo['publisher']
-                        if comicinfo['summary'] and not merged_meta['summary']:
-                            merged_meta['summary'] = comicinfo['summary']
-                        if comicinfo['release_date'] and not merged_meta['release_date']:
-                            merged_meta['release_date'] = comicinfo['release_date']
-                        if comicinfo.get('genre') and not merged_meta.get('genre'):
-                            merged_meta['genre'] = comicinfo['genre']
-                        if comicinfo.get('tags') and not merged_meta.get('tags'):
-                            merged_meta['tags'] = comicinfo['tags']
+                        if comicinfo.get('books_lv') and book_meta.get('books_lv') == comicinfo['books_lv']:
+                            print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml AgeRating fallback: {comicinfo['books_lv']}")
                     except Exception as ce:
                         print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml parsing skipped: {ce}")
 
                 # Convert keys to lowercase to prevent case issues in Linux
                 filename_lower = filename.lower()
-                b64_keys_lower = {k.lower(): v for k, v in merged_meta['cover_b64_map'].items()}
+                b64_keys_lower = {k.lower(): v for k, v in book_meta['cover_b64_map'].items()}
                 
                 if filename_lower in b64_keys_lower:
                     print(f"[Scanner-DEBUG-Task]     - YAML b64 cover decoding started")
@@ -470,7 +549,16 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             'title': None,
             'cover_image': cover_image,
             'banner_image': shared_banner_image,
+            'clear_banner': bool(
+                banner_source_checked
+                and db_banner_images.get(full_path)
+                and not banner_source_present
+            ),
             'offsets_data': offsets_data,
+            'merged_meta': {
+                key: value for key, value in book_meta.items()
+                if key not in ('cover_b64_map', 'parser_warnings')
+            },
             'skip': skip,
             'offset_only': offset_only,  # Whether it's offset-only fast path
             'file_mtime': f_mtime,
@@ -495,11 +583,11 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                     'error_type': 'NoCover',
                     'message': f"IMGDIR cover extraction failed: {str(e)}"
                 })
-            if imgdir_banner is None and not is_remote:
-                try:
-                    imgdir_banner = get_folder_banner(imgdir_virtual_path, root, banner_b64=merged_meta.get('banner_b64'), force=force, library_id=library_id)
-                except Exception as e:
-                    print(f"[Scanner-DEBUG-Task] ⚠️ IMGDIR banner extraction failed ('{root}'): {e}")
+        if imgdir_banner is None and can_read_folder_banner:
+            try:
+                imgdir_banner = get_folder_banner(imgdir_virtual_path, root, banner_b64=merged_meta.get('banner_b64'), force=force, library_id=library_id)
+            except Exception as e:
+                print(f"[Scanner-DEBUG-Task] ⚠️ IMGDIR banner extraction failed ('{root}'): {e}")
 
         f_mtime = 0.0
         f_size = 0
@@ -521,6 +609,11 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             'title': imgdir_title,
             'cover_image': imgdir_cover,
             'banner_image': imgdir_banner,
+            'clear_banner': bool(
+                banner_source_checked
+                and db_banner_images.get(imgdir_virtual_path)
+                and not banner_source_present
+            ),
             'offsets_data': [],
             'skip': imgdir_skip,
             'offset_only': False,
@@ -602,4 +695,3 @@ def process_folder_covers(parent_dir, folder_rows, is_remote, library_id):
             results.append((book_id, cover_image))
     
     return results
-

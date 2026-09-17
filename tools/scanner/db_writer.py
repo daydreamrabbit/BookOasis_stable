@@ -25,6 +25,9 @@ def save_book_offsets(*args, **kwargs):
 def bulk_update_books(*args, **kwargs):
     return get_writer().bulk_update_books(*args, **kwargs)
 
+def clear_book_banners(*args, **kwargs):
+    return get_writer().clear_book_banners(*args, **kwargs)
+
 def bulk_insert_books(*args, **kwargs):
     return get_writer().bulk_insert_books(*args, **kwargs)
 

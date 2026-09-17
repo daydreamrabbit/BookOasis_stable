@@ -367,22 +367,28 @@ class ReadingProgressRepository:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
-                   CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, COALESCE(b.metadata_locked, 0) AS metadata_locked
-            FROM books b
-            INNER JOIN (
-                SELECT MAX(id) as max_id
+                   CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, b.metadata_locked
+            FROM (
+                SELECT recent_books.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY recent_books.library_id,
+                               CASE WHEN recent_books.series_name IS NULL OR recent_books.series_name = '' THEN recent_books.id ELSE NULL END,
+                               CASE WHEN recent_books.series_name IS NULL OR recent_books.series_name = '' THEN NULL ELSE recent_books.series_name END
+                           ORDER BY recent_books.created_at DESC, recent_books.id DESC
+                       ) AS series_rank
                 FROM (
-                    SELECT id, series_name
-                    FROM books
-                    WHERE COALESCE(is_deleted, 0) = 0
-                    ORDER BY id DESC
+                    SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias,
+                           b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
+                           COALESCE(b.metadata_locked, 0) AS metadata_locked
+                    FROM books b
+                    JOIN user_category_permissions p ON b.library_id = p.library_id
+                    WHERE COALESCE(b.is_deleted, 0) = 0 AND p.user_id = %s AND p.has_access = 1
+                    ORDER BY b.created_at DESC, b.id DESC
                     LIMIT 1000
-                ) sub
-                GROUP BY CASE WHEN series_name IS NOT NULL AND series_name != '' THEN series_name ELSE CONCAT(id, '') END
-            ) g ON b.id = g.max_id
-            JOIN user_category_permissions p ON b.library_id = p.library_id
+                ) recent_books
+            ) b
             LEFT JOIN user_favorites uf ON uf.book_id = b.id AND uf.user_id = %s
-            WHERE COALESCE(b.is_deleted, 0) = 0 AND p.user_id = %s AND p.has_access = 1
+            WHERE b.series_rank = 1
             ORDER BY b.created_at DESC, b.id DESC
             LIMIT 20
         """, (safe_user_id, safe_user_id))
@@ -430,21 +436,27 @@ class ReadingProgressRepository:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
-                   CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, COALESCE(b.metadata_locked, 0) AS metadata_locked
-            FROM books b
-            INNER JOIN (
-                SELECT MAX(id) as max_id
+                   CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, b.metadata_locked
+            FROM (
+                SELECT recent_books.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY recent_books.library_id,
+                               CASE WHEN recent_books.series_name IS NULL OR recent_books.series_name = '' THEN recent_books.id ELSE NULL END,
+                               CASE WHEN recent_books.series_name IS NULL OR recent_books.series_name = '' THEN NULL ELSE recent_books.series_name END
+                           ORDER BY recent_books.created_at DESC, recent_books.id DESC
+                       ) AS series_rank
                 FROM (
-                    SELECT id, series_name
-                    FROM books
-                    WHERE COALESCE(is_deleted, 0) = 0
-                    ORDER BY id DESC
+                    SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias,
+                           b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
+                           COALESCE(b.metadata_locked, 0) AS metadata_locked
+                    FROM books b
+                    WHERE COALESCE(b.is_deleted, 0) = 0
+                    ORDER BY b.created_at DESC, b.id DESC
                     LIMIT 1000
-                ) sub
-                GROUP BY CASE WHEN series_name IS NOT NULL AND series_name != '' THEN series_name ELSE CONCAT(id, '') END
-            ) g ON b.id = g.max_id
+                ) recent_books
+            ) b
             LEFT JOIN user_favorites uf ON uf.book_id = b.id AND uf.user_id = %s
-            WHERE COALESCE(b.is_deleted, 0) = 0
+            WHERE b.series_rank = 1
             ORDER BY b.created_at DESC, b.id DESC
             LIMIT 20
         """, (int(user_id) if user_id is not None else 0,))

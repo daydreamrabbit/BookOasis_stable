@@ -16,14 +16,24 @@ import { applySidebarShowMore, expandGroupContainingCategory } from './category/
 import { loadLibrarySchedules, saveLibrarySchedule, runLibraryScanNow } from './scheduler.js';
 
 // 서브 모듈 임포트
-import { loadDashboardData, loadDashboardPlugins, switchPluginsViewTab } from './dashboard.js?v=20260809-unread-series-v3';
+import { loadDashboardData, loadDashboardPlugins, switchPluginsViewTab } from './dashboard.js?v=20260917-home-widget-plugin-ui-v1';
 import { initScrollableRowNavDelegation } from './scrollable_row_nav.js';
 import { initInfiniteScrollObserver } from './infinite_scroll.js';
-import { showBookContextMenu, triggerScanSingleBookAction, triggerSearchAladinMetadataAction, triggerMarkAsUnreadAction } from './book_context_menu.js?v=20260809-unread-series-v5';
+import { showBookContextMenu, triggerScanSingleBookAction, triggerSearchAladinMetadataAction, triggerMarkAsUnreadAction } from './book_context_menu.js';
 import { openMetadataSearchModal, closeMetadataSearchModal, performMetadataSearch } from './metadata_search.js';
 
 // book_list.js 임포트
-import { loadBooksList, loadReadingHistory, filterBooks, toggleLibrarySort, resumeSeries, updateSortButtonUI } from './book_list.js?v=20260809-unread-series-v3';
+import {
+  loadBooksList,
+  loadReadingHistory,
+  filterBooks,
+  toggleLibrarySort,
+  resumeSeries,
+  updateSortButtonUI,
+  clearLibrarySearchQuery,
+  restoreLibrarySearchQuery,
+} from './book_list.js';
+import { clearBookSelection } from './book_selection.js';
 
 // plugin_custom_view.js 임포트
 import { mountCategoryPluginUI } from './plugin_custom_view.js';
@@ -355,7 +365,7 @@ async function initTabMediaLibrary() {
   initLibrarySearchShortcut();
   initLibraryTypeHotkeys();
 
-  window.addEventListener('popstate', (event) => {
+  window.addEventListener('popstate', async (event) => {
     recoverTopCategoryUiAfterBack();
 
     const viewerModal = document.getElementById('media-viewer-modal');
@@ -370,32 +380,107 @@ async function initTabMediaLibrary() {
       }
     }
     
-    if (event.state && event.state.view === 'group_mode') {
+    if (event.state && event.state.view === 'search') {
       const targetType = event.state.type || state.currentLibraryType || 'general';
       if (state.currentLibraryType !== targetType) {
-        applyLibraryTypeButtonState(targetType);
+        applyLibraryTypeButtonState(canAccessLibraryType(targetType) ? targetType : 'general');
+        await loadLibraries();
       }
-      if (event.state.libraryId && state.currentLibraryId !== event.state.libraryId) {
-        selectCategory(event.state.libraryId, true);
+      const searchQuery = String(event.state.searchQuery || '');
+      restoreLibrarySearchQuery(searchQuery);
+      await selectCategory(event.state.libraryId || 'all', true, {
+        preserveSearch: true,
+        searchQuery,
+      });
+      if (event.state.scrollTop !== undefined) {
+        restoreNavigationScroll(event.state.scrollTop, event.state.libraryId || 'all');
+      }
+      handledDetailNavigation = true;
+    } else if (event.state && event.state.view === 'group_mode') {
+      const targetType = event.state.type || state.currentLibraryType || 'general';
+      const typeChanged = state.currentLibraryType !== targetType;
+      if (typeChanged) {
+        applyLibraryTypeButtonState(targetType);
+        await loadLibraries();
+      }
+      if (event.state.libraryId && (
+        typeChanged
+        || String(state.currentLibraryId) !== String(event.state.libraryId)
+        || !!state.searchQuery
+      )) {
+        await selectCategory(event.state.libraryId, true);
       }
       restoreGroupModeView(event.state.mode, event.state.authorKey);
+      if (event.state.scrollTop !== undefined) {
+        restoreNavigationScroll(event.state.scrollTop, event.state.libraryId);
+      }
       handledDetailNavigation = true;
     } else if (event.state && event.state.view === 'detail') {
       const targetType = event.state.type || state.currentLibraryType || 'general';
       if (state.currentLibraryType !== targetType) {
         applyLibraryTypeButtonState(targetType);
-        loadLibraries();
+        await loadLibraries();
       }
-      openBookDetail(null, event.state.series, event.state.libraryId, event.state.repBookId || null, event.state.displayTitle || '');
+
+      // 상세 화면에서 작가/그림작가 검색으로 전체보기로 이동했다가 뒤로 오면,
+      // 상세 화면을 열기 전 카테고리(또는 검색/작가별 상태)도 먼저 복원한다.
+      const returnState = event.state.returnState;
+      if (returnState && typeof returnState === 'object') {
+        const returnType = returnState.type || targetType;
+        const returnTypeChanged = state.currentLibraryType !== returnType;
+        if (returnTypeChanged) {
+          applyLibraryTypeButtonState(canAccessLibraryType(returnType) ? returnType : 'general');
+          await loadLibraries();
+        }
+
+        if (returnState.view === 'search') {
+          const searchQuery = String(returnState.searchQuery || '');
+          await selectCategory(returnState.libraryId || 'all', true, {
+            preserveSearch: true,
+            searchQuery,
+          });
+        } else if (returnState.view === 'group_mode') {
+          if (returnState.libraryId && (
+            returnTypeChanged
+            || String(state.currentLibraryId) !== String(returnState.libraryId)
+            || !!state.searchQuery
+          )) {
+            await selectCategory(returnState.libraryId, true);
+          }
+          restoreGroupModeView(returnState.mode, returnState.authorKey);
+        } else if (['category', 'list'].includes(returnState.view) && returnState.libraryId) {
+          if (
+            returnTypeChanged
+            || String(state.currentLibraryId) !== String(returnState.libraryId)
+            || !!state.searchQuery
+          ) {
+            await selectCategory(returnState.libraryId, true);
+          }
+        } else {
+          const fallbackLibraryId = event.state.sourceLibraryId || event.state.libraryId;
+          if (fallbackLibraryId) {
+            await selectCategory(fallbackLibraryId, true);
+          }
+        }
+      } else {
+        const fallbackLibraryId = event.state.sourceLibraryId || event.state.libraryId;
+        if (fallbackLibraryId) {
+          await selectCategory(fallbackLibraryId, true);
+        }
+      }
+      await openBookDetail(null, event.state.series, event.state.libraryId, event.state.repBookId || null, event.state.displayTitle || '');
+      if (returnState && returnState.scrollTop !== undefined) {
+        rememberNavigationScroll(returnState.scrollTop, returnState.libraryId);
+      }
       handledDetailNavigation = true;
-    } else if (window.location.hash.startsWith('#detail')) {
+    } else if ((!event.state || !event.state.view) && window.location.hash.startsWith('#detail')) {
       const restored = decodeDetailParams(window.location.hash);
       if (restored && restored.type && state.currentLibraryType !== restored.type) {
         applyLibraryTypeButtonState(restored.type);
-        loadLibraries();
+        await loadLibraries();
       }
       if (restored && restored.series) {
-        openBookDetail(null, restored.series, restored.libraryId || 'all', restored.repBookId || null, restored.displayTitle || '');
+        await openBookDetail(null, restored.series, restored.libraryId || 'all', restored.repBookId || null, restored.displayTitle || '');
         handledDetailNavigation = true;
       }
     }
@@ -406,17 +491,25 @@ async function initTabMediaLibrary() {
         goBackToList(false);
       }
 
-      if (event.state && event.state.view === 'category' && event.state.libraryId) {
+      if (event.state && ['category', 'list'].includes(event.state.view) && event.state.libraryId) {
+        const typeChanged = !!event.state.type && state.currentLibraryType !== event.state.type;
         if (event.state.type) {
           if (!canAccessLibraryType(event.state.type)) {
             applyLibraryTypeButtonState('general');
           } else {
             applyLibraryTypeButtonState(event.state.type);
           }
-          loadLibraries();
+          await loadLibraries();
         }
-        if (state.currentLibraryId !== event.state.libraryId) {
-          selectCategory(event.state.libraryId, true);
+        if (
+          typeChanged
+          || String(state.currentLibraryId) !== String(event.state.libraryId)
+          || !!state.searchQuery
+        ) {
+          await selectCategory(event.state.libraryId, true);
+        }
+        if (event.state.scrollTop !== undefined) {
+          restoreNavigationScroll(event.state.scrollTop, event.state.libraryId);
         }
       } else if (!event.state && (window.location.hash === '' || window.location.hash.startsWith('#library='))) {
         const hashType = parseMediaTypeFromUrl();
@@ -426,11 +519,11 @@ async function initTabMediaLibrary() {
           if (resolvedType === 'video') {
             if (typeof window.loadVideoLibraryView === 'function') window.loadVideoLibraryView();
           } else {
-            loadLibraries();
+            await loadLibraries();
           }
         }
         if (state.currentLibraryId !== 'home') {
-          selectCategory('home', true);
+          await selectCategory('home', true);
         }
       }
     }
@@ -474,10 +567,199 @@ async function initTabMediaLibrary() {
   }
 }
 
-export async function selectCategory(id, skipHistory = false) {
+function makeCategoryHistoryState(libraryId, type = state.currentLibraryType) {
+  return {
+    view: 'category',
+    type: type || 'general',
+    libraryId: String(libraryId || 'home'),
+  };
+}
+
+function getCurrentNavigationScrollTop() {
+  const mainContent = document.querySelector('.library-main-content');
+  const mainContentTop = Number(mainContent?.scrollTop || 0);
+  const scrollTop = mainContentTop > 0
+    ? mainContentTop
+    : (window.pageYOffset || document.documentElement.scrollTop || mainContentTop);
+  return Math.max(0, Math.round(Number(scrollTop) || 0));
+}
+
+function rememberNavigationScroll(scrollTop, libraryId = state.currentLibraryId) {
+  const value = Number(scrollTop);
+  if (!Number.isFinite(value) || value < 0) return;
+  state.scrollPositions = state.scrollPositions || {};
+  state.scrollPositions.last_pos = value;
+  if (libraryId !== undefined && libraryId !== null) {
+    state.scrollPositions[String(libraryId)] = value;
+  }
+}
+
+function restoreNavigationScroll(scrollTop, libraryId = state.currentLibraryId) {
+  const value = Number(scrollTop);
+  if (!Number.isFinite(value) || value < 0) return;
+  rememberNavigationScroll(value, libraryId);
+  const apply = () => {
+    const mainContent = document.querySelector('.library-main-content');
+    if (mainContent) mainContent.scrollTop = value;
+    const gridView = document.getElementById('books-grid-view');
+    const dashboardView = document.getElementById('library-dashboard-view');
+    if (gridView) gridView.scrollTop = value;
+    if (dashboardView) dashboardView.scrollTop = value;
+    window.scrollTo(0, value);
+    document.documentElement.scrollTop = value;
+    document.body.scrollTop = value;
+  };
+  requestAnimationFrame(apply);
+  setTimeout(apply, 80);
+}
+
+function makeCategoryHistoryUrl(libraryId, type = state.currentLibraryType) {
+  const hashParams = new URLSearchParams({
+    library: String(libraryId || 'home'),
+    type: type || 'general',
+  });
+  return `${window.location.pathname}${window.location.search}#${hashParams.toString()}`;
+}
+
+function recordCategoryNavigation(id, skipHistory) {
+  const currentLibraryId = String(state.currentLibraryId || 'home');
+  const targetLibraryId = String(id || 'home');
+  const currentType = state.currentLibraryType || 'general';
+
+  // 앱 최초 진입 등 현재 엔트리에 state가 없을 때 기준 카테고리를 기록한다.
+  // popstate에 의해 들어온 이동(skipHistory)은 기존 state를 그대로 둔다.
+  if (skipHistory) {
+    if (!history.state) {
+      try {
+        history.replaceState(makeCategoryHistoryState(targetLibraryId, currentType), '', window.location.href);
+      } catch (e) {}
+    }
+    return;
+  }
+
+  // 검색 결과에서 다른 사이드바 항목으로 이동하면, 검색 상태를 현재 카테고리의
+  // 검색어 없는 상태로 정리한 뒤 새 카테고리 엔트리를 쌓아 뒤로가기를 자연스럽게 한다.
+  if (!history.state || history.state.view === 'search') {
+    try {
+      history.replaceState({
+        ...makeCategoryHistoryState(currentLibraryId, currentType),
+        scrollTop: getCurrentNavigationScrollTop(),
+      }, '', window.location.href);
+    } catch (e) {}
+  } else if (history.state && history.state.view !== 'detail') {
+    try {
+      history.replaceState(
+        { ...history.state, scrollTop: getCurrentNavigationScrollTop() },
+        '',
+        window.location.href
+      );
+    } catch (e) {}
+  }
+
+  const activeState = history.state;
+  const alreadyAtTarget = targetLibraryId === currentLibraryId
+    && ['category', 'list'].includes(activeState?.view)
+    && String(activeState.libraryId || currentLibraryId) === targetLibraryId
+    && String(activeState.type || currentType) === currentType;
+
+  if (alreadyAtTarget) {
+    if (activeState.view === 'list') {
+      try {
+        history.replaceState({
+          ...makeCategoryHistoryState(targetLibraryId, currentType),
+          scrollTop: getCurrentNavigationScrollTop(),
+        }, '', window.location.href);
+      } catch (e) {}
+    }
+    return;
+  }
+
+  try {
+    history.pushState(
+      makeCategoryHistoryState(targetLibraryId, currentType),
+      '',
+      makeCategoryHistoryUrl(targetLibraryId, currentType)
+    );
+  } catch (e) {
+    console.warn('[Category-Navigation] failed to save browser history state', e);
+  }
+}
+
+export async function selectCategory(id, skipHistory = false, options = {}) {
   if (id === 'smart_rec' && state.smartRecommendEnabled === false) {
     id = 'home';
   }
+
+  const preserveSearch = options && options.preserveSearch === true;
+  if (preserveSearch) {
+    const query = Object.prototype.hasOwnProperty.call(options, 'searchQuery')
+      ? options.searchQuery
+      : state.searchQuery;
+    restoreLibrarySearchQuery(query);
+  } else {
+    clearLibrarySearchQuery();
+  }
+
+  if (options && options.searchNavigationFrom) {
+    const returnLibraryId = String(options.searchNavigationFrom);
+    const searchQuery = String(options.searchQuery || '').trim();
+    const currentUrl = window.location.href;
+    const returnState = {
+      ...makeCategoryHistoryState(returnLibraryId, state.currentLibraryType),
+      scrollTop: getCurrentNavigationScrollTop(),
+    };
+    try {
+      history.replaceState(returnState, '', currentUrl);
+      history.pushState(
+        {
+          view: 'search',
+          type: state.currentLibraryType,
+          libraryId: id,
+          returnLibraryId,
+          searchQuery,
+          returnState,
+        },
+        '',
+        currentUrl
+      );
+    } catch (e) {
+      console.warn('[Search-Navigation] failed to save search history state', e);
+    }
+  } else if (options && options.searchNavigation === true) {
+    const searchQuery = String(options.searchQuery || '').trim();
+    const currentUrl = window.location.href;
+    let returnState = history.state && typeof history.state === 'object'
+      ? history.state
+      : {
+        ...makeCategoryHistoryState(state.currentLibraryId, state.currentLibraryType),
+        scrollTop: getCurrentNavigationScrollTop(),
+      };
+    try {
+      if (!history.state) {
+        history.replaceState(returnState, '', currentUrl);
+      } else if (returnState.view !== 'detail') {
+        returnState = { ...returnState, scrollTop: getCurrentNavigationScrollTop() };
+        history.replaceState(returnState, '', currentUrl);
+      }
+      history.pushState(
+        {
+          view: 'search',
+          type: state.currentLibraryType,
+          libraryId: id,
+          searchQuery,
+          returnState,
+        },
+        '',
+        makeCategoryHistoryUrl(id, state.currentLibraryType)
+      );
+    } catch (e) {
+      console.warn('[Search-Navigation] failed to save search history state', e);
+    }
+  } else {
+    recordCategoryNavigation(id, skipHistory);
+  }
+
+  clearBookSelection();
 
   // 뷰어를 명시적으로 닫지 않고(예: X버튼) 사이드바 "홈"/"최근 읽은 도서" 메뉴를 바로 눌러
   // 나가는 경우, 마지막 페이지 진행률이 아직 디바운스 대기 중(최대 3초)이거나 방금 닫히면서

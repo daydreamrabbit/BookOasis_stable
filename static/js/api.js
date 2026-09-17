@@ -292,6 +292,15 @@ export async function scanSingleBook(type, bookId) {
   return res.json();
 }
 
+export async function enqueueBatchBookScan(type, bookIds) {
+  const res = await fetch('/api/media/books/scan-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, book_ids: bookIds })
+  });
+  return res.json();
+}
+
 export async function unlockMetadata(type, seriesName, libraryId, bookId) {
   const formData = new FormData();
   formData.append('type', type || 'general');
@@ -381,6 +390,34 @@ export async function triggerLibraryCoversScan(type, libraryId) {
   const res = await fetch(`/api/media/libraries/${libraryId}/scan-covers`, {
     method: 'POST',
     body: formData
+  });
+  return res.json();
+}
+
+export async function triggerLibraryLazyScan(type, libraryId) {
+  const formData = new FormData();
+  formData.append('type', type);
+  const res = await fetch(`/api/media/libraries/${libraryId}/lazy-scan`, {
+    method: 'POST',
+    body: formData
+  });
+  return res.json();
+}
+
+export async function triggerBooksLazyScan(type, bookIds) {
+  const res = await fetch('/api/media/books/lazy-scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, book_ids: bookIds })
+  });
+  return res.json();
+}
+
+export async function triggerSeriesLazyScan(type, libraryId, seriesName) {
+  const res = await fetch('/api/media/books/lazy-scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, library_id: libraryId, series_name: seriesName })
   });
   return res.json();
 }
@@ -697,6 +734,3 @@ export async function runAnnotationContextMenuPluginAction(type, pluginId, actio
   });
   return res.json();
 }
-
-
-

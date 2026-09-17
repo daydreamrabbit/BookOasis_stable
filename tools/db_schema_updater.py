@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS books (
     library_id BIGINT,
     title VARCHAR(500) NOT NULL,
     series_name VARCHAR(500),
+    localized_series VARCHAR(500),
     author VARCHAR(500),
     isbn VARCHAR(100),
     file_path TEXT NOT NULL,

@@ -1,5 +1,6 @@
 # CHANGELOG
 ## v2.6.7
+- (fix) 홈 화면 플러그인 위젯에서 dashboard.js 캐시가 유지되어 업데이트한 커스텀 렌더러가 반영되지 않을 수 있는 문제 수정 — 위젯 모듈을 새 캐시 키로 불러옴 | fix the home plugin widget renderer not updating when the browser reused a cached dashboard.js module — load it with a new cache key
 - (fix) 코믹 뷰어 스크롤 모드에서 다음/이전 페이지 이동 시 페이지 단위 점프 대신, 화면 높이의 85%만큼 부드럽게 스크롤하도록 변경 (맨 끝에서 다음으로 넘기면 기존처럼 다음 화 이동) | change comic viewer scroll-mode next/previous navigation to smoothly scroll by 85% of the viewport height instead of jumping page-by-page (advancing past the last page still moves to the next episode, as before)
 - (fix) 전체보기에서 "최신 추가순"/"과거 추가순" 정렬이 라이브러리 전체를 매번 파이썬에서 정렬해 대형 서재에서 다른 요청까지 줄줄이 pending 되던 문제 수정 — 제목 정렬처럼 SQL에서 바로 정렬+페이지네이션하도록 변경 | fix "recently added"/"oldest added" sort in the all-books view re-sorting the entire library in Python on every request, which could stall unrelated requests behind it on large libraries — now sorts and paginates in SQL like the title sort already did
 

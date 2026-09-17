@@ -10,10 +10,123 @@ from utils.i18n import _t
 import database
 
 scan_bp = Blueprint('scan', __name__)
+LAZY_SCAN_DB_TYPES = {'general', 'adult', 'audiobook'}
 
 def get_db_path_for_scan(db_type):
     """db_type에 대응하는 스캔 대상 데이터베이스 경로/식별자 반환 (MariaDB 모드 대응)"""
     return database.get_db_path(db_type)
+
+
+def _enqueue_targeted_lazy_scan(db_type, **target):
+    from services.scanner_queue import scanner_queue
+    return scanner_queue.enqueue('lazy_scan', db_type=db_type, **target)
+
+
+@scan_bp.route('/api/media/books/lazy-scan', methods=['POST'])
+@admin_required
+def trigger_books_lazy_scan():
+    """선택 도서 또는 특정 라이브러리의 전체 시리즈를 Lazy-Scanner로 보완한다."""
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    db_type = str(payload.get('type') or request.form.get('type') or 'general').strip().lower()
+    if db_type not in LAZY_SCAN_DB_TYPES:
+        return jsonify({'success': False, 'error': '지원하지 않는 도서 데이터베이스입니다.'}), 400
+
+    raw_book_ids = payload.get('book_ids')
+    if raw_book_ids is None:
+        raw_book_ids = request.form.getlist('book_ids')
+
+    raw_series_name = payload.get('series_name')
+    raw_library_id = payload.get('library_id')
+    if raw_series_name is not None or raw_library_id is not None:
+        if raw_book_ids:
+            return jsonify({'success': False, 'error': '도서 ID와 시리즈 대상은 함께 지정할 수 없습니다.'}), 400
+        if not isinstance(raw_series_name, str) or not raw_series_name.strip():
+            return jsonify({'success': False, 'error': '스캔할 시리즈명이 필요합니다.'}), 400
+        if isinstance(raw_library_id, bool) or not str(raw_library_id).strip().isdecimal():
+            return jsonify({'success': False, 'error': '시리즈 라이브러리 ID가 올바르지 않습니다.'}), 400
+        library_id = int(raw_library_id)
+        if library_id <= 0:
+            return jsonify({'success': False, 'error': '시리즈 라이브러리 ID가 올바르지 않습니다.'}), 400
+        series_name = raw_series_name.strip()
+        if len(series_name) > 512:
+            return jsonify({'success': False, 'error': '시리즈명이 너무 깁니다.'}), 400
+
+        conn = None
+        try:
+            conn = database.get_connection(db_type)
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT COUNT(*) AS book_count FROM books WHERE library_id = ? AND series_name = ?',
+                (library_id, series_name),
+            )
+            row = cursor.fetchone()
+            book_count = int(row['book_count'] or 0) if row else 0
+            if book_count == 0:
+                return jsonify({'success': False, 'error': '해당 라이브러리에서 시리즈 도서를 찾을 수 없습니다.'}), 404
+
+            if not _enqueue_targeted_lazy_scan(
+                db_type,
+                library_id=library_id,
+                series_name=series_name,
+            ):
+                return jsonify({
+                    'success': False,
+                    'error': 'Lazy-Scanner 작업이 이미 실행 중이거나 대기 중입니다. 현재 작업이 끝난 뒤 다시 요청해 주세요.'
+                }), 409
+            return jsonify({
+                'success': True,
+                'message': f"'{series_name}' 시리즈 {book_count}권의 Lazy-Scanner 작업을 대기열에 추가했습니다."
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+        finally:
+            if conn:
+                conn.close()
+
+    if not isinstance(raw_book_ids, list) or not raw_book_ids:
+        return jsonify({'success': False, 'error': '스캔할 도서 ID가 필요합니다.'}), 400
+    if len(raw_book_ids) > 500:
+        return jsonify({'success': False, 'error': '한 번에 최대 500개 도서까지 요청할 수 있습니다.'}), 400
+
+    try:
+        book_ids = []
+        for raw_id in raw_book_ids:
+            if isinstance(raw_id, bool) or not str(raw_id).strip().isdecimal():
+                raise ValueError('도서 ID는 양의 정수여야 합니다.')
+            book_id = int(raw_id)
+            if book_id <= 0:
+                raise ValueError('도서 ID는 양의 정수여야 합니다.')
+            if book_id not in book_ids:
+                book_ids.append(book_id)
+    except (TypeError, ValueError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+    conn = None
+    try:
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        placeholders = ', '.join('?' for _ in book_ids)
+        cursor.execute(f"SELECT id FROM books WHERE id IN ({placeholders})", tuple(book_ids))
+        found_ids = {int(row['id']) for row in cursor.fetchall()}
+        if found_ids != set(book_ids):
+            return jsonify({'success': False, 'error': '요청한 도서 중 현재 라이브러리에서 찾을 수 없는 항목이 있습니다.'}), 404
+
+        if not _enqueue_targeted_lazy_scan(db_type, book_ids=book_ids):
+            return jsonify({
+                'success': False,
+                'error': 'Lazy-Scanner 작업이 이미 실행 중이거나 대기 중입니다. 현재 작업이 끝난 뒤 다시 요청해 주세요.'
+            }), 409
+        return jsonify({
+            'success': True,
+            'message': f'선택한 {len(book_ids)}개 작품의 Lazy-Scanner 작업을 대기열에 추가했습니다.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @scan_bp.route('/api/media/books/<int:book_id>/scan', methods=['POST'])
 @admin_required
@@ -28,6 +141,79 @@ def scan_single_book_api(book_id):
             return jsonify({'success': False, 'error': message}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@scan_bp.route('/api/media/books/scan-batch', methods=['POST'])
+@admin_required
+def enqueue_batch_book_scan():
+    """선택한 여러 도서의 부분 재스캔을 백그라운드 큐에 등록한다."""
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    db_type = str(payload.get('type') or 'general').strip().lower()
+    if db_type not in ('general', 'adult'):
+        return jsonify({'success': False, 'error': '일반/성인 도서만 다중 스캔할 수 있습니다.'}), 400
+
+    raw_book_ids = payload.get('book_ids')
+    if not isinstance(raw_book_ids, list) or not raw_book_ids:
+        return jsonify({'success': False, 'error': '스캔할 도서 ID가 필요합니다.'}), 400
+    if len(raw_book_ids) > 500:
+        return jsonify({'success': False, 'error': '한 번에 최대 500개 도서까지 요청할 수 있습니다.'}), 400
+
+    book_ids = []
+    try:
+        for raw_id in raw_book_ids:
+            if isinstance(raw_id, bool) or not str(raw_id).strip().isdecimal():
+                raise ValueError('도서 ID는 양의 정수여야 합니다.')
+            book_id = int(raw_id)
+            if book_id <= 0:
+                raise ValueError('도서 ID는 양의 정수여야 합니다.')
+            if book_id not in book_ids:
+                book_ids.append(book_id)
+    except (TypeError, ValueError) as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+
+    conn = None
+    try:
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        placeholders = ', '.join('?' for _ in book_ids)
+        cursor.execute(
+            f'SELECT id, library_id, title FROM books WHERE id IN ({placeholders})',
+            tuple(book_ids),
+        )
+        rows = cursor.fetchall()
+        found_ids = {int(row['id']) for row in rows}
+        if found_ids != set(book_ids):
+            return jsonify({'success': False, 'error': '요청한 도서 중 현재 데이터베이스에서 찾을 수 없는 항목이 있습니다.'}), 404
+
+        library_ids = {row['library_id'] for row in rows if row['library_id'] is not None}
+        task_kwargs = {'db_type': db_type, 'book_ids': book_ids}
+        if len(rows) == len(book_ids) and len(library_ids) == 1:
+            task_kwargs['library_id'] = next(iter(library_ids))
+        if len(book_ids) == 1:
+            task_kwargs['book_title'] = str(rows[0]['title'] or '').strip()
+
+        from services.scanner_queue import scanner_queue
+        if not scanner_queue.enqueue('batch_book_scan', **task_kwargs):
+            return jsonify({
+                'success': False,
+                'error': '같은 다중 도서 스캔 작업이 이미 실행 중이거나 대기 중입니다.',
+            }), 409
+
+        return jsonify({
+            'success': True,
+            'message': (
+                '도서 스캔을 대기열에 추가했습니다. 스캔 활동에서 진행 상황을 확인할 수 있습니다.'
+                if len(book_ids) == 1 else
+                f'선택한 {len(book_ids)}개 작품의 스캔을 대기열에 추가했습니다. 스캔 활동에서 진행 상황을 확인할 수 있습니다.'
+            ),
+        }), 202
+    except Exception as error:
+        return jsonify({'success': False, 'error': str(error)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @scan_bp.route('/api/media/libraries/<int:library_id>/scan', methods=['POST'])
 @admin_required
@@ -174,6 +360,31 @@ def trigger_library_cover_scan(library_id):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+@scan_bp.route('/api/media/libraries/<int:library_id>/lazy-scan', methods=['POST'])
+@admin_required
+def trigger_library_lazy_scan(library_id):
+    """지정 라이브러리 안의 Lazy-Scanner 후보만 보완 작업 큐에 추가한다."""
+    db_type = str(request.form.get('type', 'general')).strip().lower()
+    if db_type not in LAZY_SCAN_DB_TYPES:
+        return jsonify({'success': False, 'error': '지원하지 않는 도서 데이터베이스입니다.'}), 400
+    try:
+        from repositories.category_repository import CategoryRepository
+        if not CategoryRepository.get_library_by_id(db_type, library_id):
+            return jsonify({'success': False, 'error': _t('api.err_library_not_found')}), 404
+
+        if not _enqueue_targeted_lazy_scan(db_type, library_id=library_id):
+            return jsonify({
+                'success': False,
+                'error': 'Lazy-Scanner 작업이 이미 실행 중이거나 대기 중입니다. 현재 작업이 끝난 뒤 다시 요청해 주세요.'
+            }), 409
+        return jsonify({
+            'success': True,
+            'message': f'라이브러리 ID {library_id}의 Lazy-Scanner 작업을 대기열에 추가했습니다.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @scan_bp.route('/api/media/libraries/scan-all', methods=['POST'])
 @admin_required
 def trigger_all_libraries_scan():
@@ -228,4 +439,3 @@ def get_scan_history_api():
         return jsonify({'success': True, 'history': history})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
-
