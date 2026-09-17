@@ -1,4 +1,20 @@
 # CHANGELOG
+## v2.6.9
+- (feature) 라이브러리/선택 도서/시리즈 단위로 Lazy-Scanner를 수동 실행할 수 있는 메뉴와 큐 연동 추가 | add menus and queue integration to manually run the Lazy-Scanner for a whole library, selected books, or an entire series
+- (feature) 선택한 여러 도서를 백그라운드 큐로 일괄 재스캔하는 기능 추가 — 스캔 활동에서 진행률(현재/전체, 완료 도서명) 확인 가능 | add batch background rescanning for multiple selected books — progress (current/total, completed title) visible in scan activity
+- (fix) 원격 CBZ의 오프셋 수집 실패 시 재시도 로직 수정, 페이지 오프셋을 즉시 계산하지 않고 안전하게 폴백 저장하도록 변경 | fix offset-collection retry for remote CBZ files and store page offsets without eagerly resolving them, falling back safely
+- (fix) 신규 추가 목록이 카테고리 파티션 없이 시리즈명으로만 그룹핑되어, 접근 불가 라이브러리에 더 최신 권이 있으면 접근 가능한 라이브러리의 항목까지 통째로 사라지던 문제 수정 | fix the "recently added" list grouping by series name without partitioning by library, which could hide an accessible library's entry entirely whenever a same-named series in a restricted library had a newer volume
+- (feature) 검색창에 `그림작가:` 접두사 추가 — 글 작가와 별도로 그림 작가 기준 검색 지원 | add a `그림작가:`(cover artist) search prefix, searching separately from the writer
+- (feature) 시리즈 카드에 메타데이터 미연결 표시 추가 | show a "no metadata" indicator on series cards lacking any populated metadata
+- (feature) 콘텐츠 등급을 전체이용가/15세/18세/성인망가/포르노 5단계로 확장 — 관리자 계정은 항상 최고 등급으로 고정 | expand content rating to 5 levels (everyone/15+/18+/adult manga/porn) — admin accounts are always pinned to the highest level
+- (improvement) 라이브러리 카드 그리드를 반응형 160:233 표지 프레임으로 개편하고 CSS/JS 변경 시 정적 자산 캐시가 갱신되도록 URL 지문 추가 | rework the library card grid to a responsive 160:233 cover frame and fingerprint static CSS/JS URLs so browser caches refresh on change
+- (feature) 도서 카드 다중 선택 및 일괄 작업(즐겨찾기, 메타데이터 검색 큐 등) 지원 추가 | add multi-select and batch actions (favorite, metadata search queue, etc.) for book cards
+- (improvement) 도서 상세/카테고리 검색·시리즈 이동 시 이전 화면의 검색 상태와 스크롤 위치를 복원 | restore the previous screen's search state and scroll position when navigating back from book detail/search/series views
+
+## v2.6.8
+- (fix) 코믹 뷰어 "높이맞춤" 모드가 실제로는 너비에 맞춰져 무의미하게 동작하던 문제 수정 — 이제 높이 기준으로 확대되며, 화면 밖으로 벗어난 좌우는 롱프레스 후 드래그로 이동해서 볼 수 있음 | fix comic viewer "fit height" mode silently behaving like fit-width — it now actually scales by height, and the resulting offscreen left/right edges can be revealed with a long-press-and-drag pan
+- (fix) EPUB 목차에서 하위 항목(예: "제2부 &gt; 강변에서")을 클릭해도 상위 챕터 시작 위치로만 이동하던 문제 수정 — nav.xhtml 목차 파서가 중첩 항목의 레벨을 인식하지 못하던 게 원인 | fix clicking a nested EPUB TOC sub-item (e.g. "Part 2 &gt; By the River") jumping to the parent chapter's start instead of its own position — caused by the nav.xhtml TOC parser not recognizing nested item levels
+
 ## v2.6.7
 - (fix) 홈 화면 플러그인 위젯에서 dashboard.js 캐시가 유지되어 업데이트한 커스텀 렌더러가 반영되지 않을 수 있는 문제 수정 — 위젯 모듈을 새 캐시 키로 불러옴 | fix the home plugin widget renderer not updating when the browser reused a cached dashboard.js module — load it with a new cache key
 - (fix) 코믹 뷰어 스크롤 모드에서 다음/이전 페이지 이동 시 페이지 단위 점프 대신, 화면 높이의 85%만큼 부드럽게 스크롤하도록 변경 (맨 끝에서 다음으로 넘기면 기존처럼 다음 화 이동) | change comic viewer scroll-mode next/previous navigation to smoothly scroll by 85% of the viewport height instead of jumping page-by-page (advancing past the last page still moves to the next episode, as before)

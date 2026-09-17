@@ -63,7 +63,8 @@ def test_failed_cover_is_retried_on_next_lazy_scan():
 
     candidates = _fetch_lazy_scan_candidates(connection.cursor())
 
-    assert [book['id'] for book in candidates] == [1, 2, 5]
+    # A cover does not make a failed offset scan complete; retry it too.
+    assert [book['id'] for book in candidates] == [1, 2, 5, 6]
 
 
 def test_manual_library_scan_inspects_all_rows_and_bypasses_no_cover_cooldown():

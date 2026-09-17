@@ -8,14 +8,13 @@ class UserRepository:
     @staticmethod
     def find_by_username(db_type, username):
         """사용자 이름 기반 계정 정보 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max FROM users WHERE username = %s",
-            (username,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max FROM users WHERE username = %s",
+                (username,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -37,36 +36,33 @@ class UserRepository:
     @staticmethod
     def find_by_id(db_type, user_id):
         """사용자 ID 기반 계정 정보 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max FROM users WHERE id = %s",
-            (user_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max FROM users WHERE id = %s",
+                (user_id,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_all_users(db_type):
         """전체 사용자 목록 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, username, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max, created_at FROM users ORDER BY id ASC"
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, username, role, is_default_password, has_adult_access, has_audiobook_access, has_download_access, content_rating_max, created_at FROM users ORDER BY id ASC"
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def count_by_role(db_type, role):
         """특정 권한(role) 사용자 수 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) AS cnt FROM users WHERE role = %s", (role,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) AS cnt FROM users WHERE role = %s", (role,))
+            row = cursor.fetchone()
         return int(row['cnt']) if row else 0
 
     @staticmethod
@@ -151,11 +147,10 @@ class UserRepository:
     @staticmethod
     def get_all_category_permissions(db_type):
         """전체 카테고리 사용자 접근 권한 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, library_id, has_access FROM user_category_permissions")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, library_id, has_access FROM user_category_permissions")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod

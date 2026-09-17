@@ -9,45 +9,42 @@ class BookRepository:
     @staticmethod
     def get_book_basic_info(db_type, book_id):
         """도서 단일 행의 시리즈명, 라이브러리ID, 파일경로 기본 정보 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, series_name, library_id, file_path, file_format FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
-            (book_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, series_name, library_id, file_path, file_format FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                (book_id,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_book_rating_info(db_type, book_id):
         """콘텐츠 등급 판정에 필요한 도서 등급/장르/태그 컬럼만 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT books_lv, genre, tags FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
-            (book_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT books_lv, genre, tags FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                (book_id,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_book_reader_info(db_type, book_id, user_id=None):
         """킷오스크/외부 딥링크에서 openReader()에 바로 넘길 도서 메타(제목/포맷/진척도) 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT b.id, b.title, b.file_format, b.total_pages, b.file_path, p.pages_read
-            FROM books b
-            LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
-            WHERE b.id = ? AND COALESCE(b.is_deleted, 0) = 0
-            """,
-            (user_id, book_id)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT b.id, b.title, b.file_format, b.total_pages, b.file_path, p.pages_read
+                FROM books b
+                LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
+                WHERE b.id = ? AND COALESCE(b.is_deleted, 0) = 0
+                """,
+                (user_id, book_id)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -55,69 +52,65 @@ class BookRepository:
         """하이라이트(주석) 플러그인 컨텍스트 메뉴에 전달할 도서 요약 정보(제목/시리즈명/커버) 조회.
         title에는 이 프로젝트 파일명 관례상 보통 권/화 번호가 이미 포함돼 있어(예: '05권')
         별도의 편수 컬럼 없이도 플러그인이 title만으로 식별 가능하다."""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT title, series_name, cover_image FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
-            (book_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT title, series_name, cover_image FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                (book_id,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_books_by_series(db_type, series_name, library_id=None, user_id=None):
         """동일 시리즈 내 전체 도서 목록 조회 (유저 읽기 진척도 포함)"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        where = ["COALESCE(b.is_deleted, 0) = 0", "b.series_name = ?"]
-        params = [series_name]
-        if library_id is not None:
-            where.append("b.library_id = ?")
-            params.append(library_id)
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            where = ["COALESCE(b.is_deleted, 0) = 0", "b.series_name = ?"]
+            params = [series_name]
+            if library_id is not None:
+                where.append("b.library_id = ?")
+                params.append(library_id)
         
-        sql = f"""
-            SELECT b.id, b.title, b.file_format, b.total_pages, b.cover_image, b.cover_updated_at, b.file_path, p.pages_read
-            FROM books b
-            LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
-            WHERE {' AND '.join(where)}
-        """
-        cursor.execute(sql, (user_id, *params))
-        rows = cursor.fetchall()
-        conn.close()
+            sql = f"""
+                SELECT b.id, b.title, b.file_format, b.total_pages, b.cover_image, b.cover_updated_at, b.file_path, p.pages_read
+                FROM books b
+                LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
+                WHERE {' AND '.join(where)}
+            """
+            cursor.execute(sql, (user_id, *params))
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def get_card_summary_by_series(db_type, series_name, library_id=None):
         """그리드 카드 정보 팝업용: 시리즈 내 도서 수/전체 파일 용량/대표 경로 집계"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        where = ["COALESCE(is_deleted, 0) = 0", "series_name = ?"]
-        params = [series_name]
-        if library_id is not None:
-            where.append("library_id = ?")
-            params.append(library_id)
-        sql = f"""
-            SELECT COUNT(*) AS book_count, SUM(file_size) AS total_size, MIN(file_path) AS sample_path
-            FROM books
-            WHERE {' AND '.join(where)}
-        """
-        cursor.execute(sql, params)
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            where = ["COALESCE(is_deleted, 0) = 0", "series_name = ?"]
+            params = [series_name]
+            if library_id is not None:
+                where.append("library_id = ?")
+                params.append(library_id)
+            sql = f"""
+                SELECT COUNT(*) AS book_count, SUM(file_size) AS total_size, MIN(file_path) AS sample_path
+                FROM books
+                WHERE {' AND '.join(where)}
+            """
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_card_summary_by_book_id(db_type, book_id):
         """그리드 카드 정보 팝업용: 단일 도서의 제목/경로/파일 용량 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT title, file_path, file_size FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
-            (book_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT title, file_path, file_size FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                (book_id,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -167,13 +160,12 @@ class BookRepository:
     def get_all_authors_with_ids(db_type):
         """작가별 모음(정규화 매칭) 일괄 즐겨찾기/컬렉션 추가를 위해 전체 도서의
         id/author/series_name을 가져온다."""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, author, series_name FROM books WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(author, '') != ''"
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, author, series_name FROM books WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(author, '') != ''"
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -245,17 +237,16 @@ class BookRepository:
     @staticmethod
     def get_media_tags(db_type, library_id=None):
         """특정 라이브러리 또는 전체 도서의 고유 태그 목록 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        if library_id and library_id not in ('all', 'favorite', 'history', 'home'):
-            cursor.execute(
-                "SELECT DISTINCT tags FROM books WHERE library_id = ? AND (is_deleted = 0 OR is_deleted IS NULL) AND tags IS NOT NULL AND tags != ''",
-                (library_id,)
-            )
-        else:
-            cursor.execute("SELECT DISTINCT tags FROM books WHERE (is_deleted = 0 OR is_deleted IS NULL) AND tags IS NOT NULL AND tags != ''")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            if library_id and library_id not in ('all', 'favorite', 'history', 'home'):
+                cursor.execute(
+                    "SELECT DISTINCT tags FROM books WHERE library_id = ? AND (is_deleted = 0 OR is_deleted IS NULL) AND tags IS NOT NULL AND tags != ''",
+                    (library_id,)
+                )
+            else:
+                cursor.execute("SELECT DISTINCT tags FROM books WHERE (is_deleted = 0 OR is_deleted IS NULL) AND tags IS NOT NULL AND tags != ''")
+            rows = cursor.fetchall()
         values = []
         for r in rows:
             if isinstance(r, dict):
@@ -269,17 +260,16 @@ class BookRepository:
     @staticmethod
     def get_media_genres(db_type, library_id=None):
         """특정 라이브러리 또는 전체 도서의 고유 장르 목록 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        if library_id and library_id not in ('all', 'favorite', 'history', 'home'):
-            cursor.execute(
-                "SELECT DISTINCT genre FROM books WHERE library_id = ? AND (is_deleted = 0 OR is_deleted IS NULL) AND genre IS NOT NULL AND genre != ''",
-                (library_id,)
-            )
-        else:
-            cursor.execute("SELECT DISTINCT genre FROM books WHERE (is_deleted = 0 OR is_deleted IS NULL) AND genre IS NOT NULL AND genre != ''")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            if library_id and library_id not in ('all', 'favorite', 'history', 'home'):
+                cursor.execute(
+                    "SELECT DISTINCT genre FROM books WHERE library_id = ? AND (is_deleted = 0 OR is_deleted IS NULL) AND genre IS NOT NULL AND genre != ''",
+                    (library_id,)
+                )
+            else:
+                cursor.execute("SELECT DISTINCT genre FROM books WHERE (is_deleted = 0 OR is_deleted IS NULL) AND genre IS NOT NULL AND genre != ''")
+            rows = cursor.fetchall()
         values = []
         for r in rows:
             if isinstance(r, dict):
@@ -293,96 +283,90 @@ class BookRepository:
     @staticmethod
     def get_series_genre_tags_index(db_type):
         """스마트 추천용: 시리즈 단위 대표 정보(대표 book id, 커버, 포맷, 장르, 태그, 평점) 인덱스 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT series_name, library_id,
-                   MIN(id) AS id,
-                   MAX(cover_image) AS cover_image,
-                   MAX(cover_updated_at) AS cover_updated_at,
-                   MAX(file_format) AS file_format,
-                   MAX(genre) AS genre,
-                   MAX(tags) AS tags,
-                   MAX(author) AS author,
-                   MAX(score) AS score
-            FROM books
-            WHERE (is_deleted = 0 OR is_deleted IS NULL)
-              AND series_name IS NOT NULL AND series_name != ''
-              AND ((genre IS NOT NULL AND genre != '') OR (tags IS NOT NULL AND tags != '') OR (author IS NOT NULL AND author != ''))
-            GROUP BY series_name, library_id
-            """
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT series_name, library_id,
+                       MIN(id) AS id,
+                       MAX(cover_image) AS cover_image,
+                       MAX(cover_updated_at) AS cover_updated_at,
+                       MAX(file_format) AS file_format,
+                       MAX(genre) AS genre,
+                       MAX(tags) AS tags,
+                       MAX(author) AS author,
+                       MAX(score) AS score
+                FROM books
+                WHERE (is_deleted = 0 OR is_deleted IS NULL)
+                  AND series_name IS NOT NULL AND series_name != ''
+                  AND ((genre IS NOT NULL AND genre != '') OR (tags IS NOT NULL AND tags != '') OR (author IS NOT NULL AND author != ''))
+                GROUP BY series_name, library_id
+                """
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def get_latest_series_by_library(db_type, library_id, limit=30):
         """스마트 추천 폴백용: 장르/태그 정보가 없는 시리즈를 대신할 동일 카테고리 최신 등록 시리즈 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT series_name, library_id,
-                   MIN(id) AS id,
-                   MAX(cover_image) AS cover_image,
-                   MAX(cover_updated_at) AS cover_updated_at,
-                   MAX(file_format) AS file_format,
-                   MAX(score) AS score,
-                   MAX(created_at) AS created_at
-            FROM books
-            WHERE (is_deleted = 0 OR is_deleted IS NULL)
-              AND library_id = ?
-              AND series_name IS NOT NULL AND series_name != ''
-            GROUP BY series_name
-            ORDER BY MAX(created_at) DESC
-            LIMIT ?
-            """,
-            (library_id, limit)
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT series_name, library_id,
+                       MIN(id) AS id,
+                       MAX(cover_image) AS cover_image,
+                       MAX(cover_updated_at) AS cover_updated_at,
+                       MAX(file_format) AS file_format,
+                       MAX(score) AS score,
+                       MAX(created_at) AS created_at
+                FROM books
+                WHERE (is_deleted = 0 OR is_deleted IS NULL)
+                  AND library_id = ?
+                  AND series_name IS NOT NULL AND series_name != ''
+                GROUP BY series_name
+                ORDER BY MAX(created_at) DESC
+                LIMIT ?
+                """,
+                (library_id, limit)
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def get_book_file_info_with_permission(db_type, book_id, perm_clause, perm_params):
         """권한 체크를 수용하여 도서의 파일 경로 및 포맷 정보 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        query = f"SELECT b.file_path, b.file_format, b.library_id FROM books b WHERE b.id = ? AND COALESCE(b.is_deleted, 0) = 0{perm_clause}"
-        cursor.execute(query, (book_id, *perm_params))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            query = f"SELECT b.file_path, b.file_format, b.library_id FROM books b WHERE b.id = ? AND COALESCE(b.is_deleted, 0) = 0{perm_clause}"
+            cursor.execute(query, (book_id, *perm_params))
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_book_file_path_with_permission(db_type, book_id, perm_clause, perm_params):
         """권한 체크를 수용하여 도서의 파일 경로 및 library_id 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        query = f"SELECT b.file_path, b.library_id FROM books b WHERE b.id = ? AND COALESCE(b.is_deleted, 0) = 0{perm_clause}"
-        cursor.execute(query, (book_id, *perm_params))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            query = f"SELECT b.file_path, b.library_id FROM books b WHERE b.id = ? AND COALESCE(b.is_deleted, 0) = 0{perm_clause}"
+            cursor.execute(query, (book_id, *perm_params))
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_book_cover_image(db_type, book_id):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, cover_image FROM books WHERE id = ?", (book_id,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, cover_image FROM books WHERE id = ?", (book_id,))
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_book_pages_and_path(db_type, book_id):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT total_pages, file_path, file_format FROM books WHERE id = ?", (book_id,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT total_pages, file_path, file_format FROM books WHERE id = ?", (book_id,))
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -401,12 +385,11 @@ class BookRepository:
 
     @staticmethod
     def get_representative_book_info(db_type, book_id, perm_clause, perm_params):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        query = f"SELECT id, series_name, library_id, file_path, file_format FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}"
-        cursor.execute(query, (book_id, *perm_params))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            query = f"SELECT id, series_name, library_id, file_path, file_format FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}"
+            cursor.execute(query, (book_id, *perm_params))
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -414,98 +397,89 @@ class BookRepository:
         """series_name 또는 series_alias로 요청이 왔을 때 실제 DB의 원본 series_name 매칭"""
         if not query_series_name:
             return query_series_name
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        query = f"SELECT series_name FROM books WHERE (series_name = ? OR series_alias = ?) AND COALESCE(is_deleted, 0) = 0{perm_clause} LIMIT 1"
-        cursor.execute(query, (query_series_name, query_series_name, *perm_params))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            query = f"SELECT series_name FROM books WHERE (series_name = ? OR series_alias = ?) AND COALESCE(is_deleted, 0) = 0{perm_clause} LIMIT 1"
+            cursor.execute(query, (query_series_name, query_series_name, *perm_params))
+            row = cursor.fetchone()
         return row['series_name'] if row and row['series_name'] else query_series_name
 
     @staticmethod
     def resolve_series_library_id(db_type, series_name, perm_clause, perm_params):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        query = f"SELECT library_id FROM books WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0{perm_clause} LIMIT 1"
-        cursor.execute(query, (series_name, *perm_params))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            query = f"SELECT library_id FROM books WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0{perm_clause} LIMIT 1"
+            cursor.execute(query, (series_name, *perm_params))
+            row = cursor.fetchone()
         return row['library_id'] if row else None
 
     @staticmethod
     def get_series_meta(db_type, series_name, library_id, perm_clause, perm_params):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-
-        columns = "author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked"
-        if library_id and library_id not in ('all', 'history', 'favorite', 'home'):
-            query = f"""
-                SELECT {columns}
-                FROM books
-                WHERE series_name = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}
-                ORDER BY CASE WHEN summary IS NOT NULL AND summary != '' THEN 0 ELSE 1 END, id
-            """
-            cursor.execute(query, (series_name, library_id, *perm_params))
-        else:
-            query = f"""
-                SELECT {columns}
-                FROM books
-                WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}
-                ORDER BY CASE WHEN summary IS NOT NULL AND summary != '' THEN 0 ELSE 1 END, id
-            """
-            cursor.execute(query, (series_name, *perm_params))
-
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            columns = "author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked"
+            if library_id and library_id not in ('all', 'history', 'favorite', 'home'):
+                query = f"""
+                    SELECT {columns}
+                    FROM books
+                    WHERE series_name = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}
+                    ORDER BY CASE WHEN summary IS NOT NULL AND summary != '' THEN 0 ELSE 1 END, id
+                """
+                cursor.execute(query, (series_name, library_id, *perm_params))
+            else:
+                query = f"""
+                    SELECT {columns}
+                    FROM books
+                    WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}
+                    ORDER BY CASE WHEN summary IS NOT NULL AND summary != '' THEN 0 ELSE 1 END, id
+                """
+                cursor.execute(query, (series_name, *perm_params))
+            rows = cursor.fetchall()
         return merge_series_metadata_rows(rows)
 
     @staticmethod
     def get_books_by_series_detail(db_type, series_name, library_id, user_id, perm_clause, perm_params):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        
-        use_lib = library_id and library_id not in ('all', 'history', 'favorite', 'home')
-        if use_lib:
-            query = f"""
-                SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
-                       b.banner_image, b.banner_updated_at,
-                       b.file_path, p.pages_read, p.is_completed,
-                       CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
-                       b.library_id, p.last_read_at, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       COALESCE(b.cover_align, 'center') AS cover_align
-                FROM books b
-                LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
-                LEFT JOIN user_favorites uf ON b.id = uf.book_id AND uf.user_id = ?
-                WHERE COALESCE(b.is_deleted, 0) = 0 AND b.series_name = ? AND b.library_id = ?{perm_clause}
-            """
-            cursor.execute(query, (user_id, user_id, series_name, library_id, *perm_params))
-        else:
-            query = f"""
-                SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
-                       b.banner_image, b.banner_updated_at,
-                       b.file_path, p.pages_read, p.is_completed,
-                       CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
-                       b.library_id, p.last_read_at, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       COALESCE(b.cover_align, 'center') AS cover_align
-                FROM books b
-                LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
-                LEFT JOIN user_favorites uf ON b.id = uf.book_id AND uf.user_id = ?
-                WHERE COALESCE(b.is_deleted, 0) = 0 AND b.series_name = ?{perm_clause}
-            """
-            cursor.execute(query, (user_id, user_id, series_name, *perm_params))
-            
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            use_lib = library_id and library_id not in ('all', 'history', 'favorite', 'home')
+            if use_lib:
+                query = f"""
+                    SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
+                           b.banner_image, b.banner_updated_at,
+                           b.file_path, p.pages_read, p.is_completed,
+                           CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
+                           b.library_id, p.last_read_at, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                           COALESCE(b.cover_align, 'center') AS cover_align
+                    FROM books b
+                    LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
+                    LEFT JOIN user_favorites uf ON b.id = uf.book_id AND uf.user_id = ?
+                    WHERE COALESCE(b.is_deleted, 0) = 0 AND b.series_name = ? AND b.library_id = ?{perm_clause}
+                """
+                cursor.execute(query, (user_id, user_id, series_name, library_id, *perm_params))
+            else:
+                query = f"""
+                    SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
+                           b.banner_image, b.banner_updated_at,
+                           b.file_path, p.pages_read, p.is_completed,
+                           CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
+                           b.library_id, p.last_read_at, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                           COALESCE(b.cover_align, 'center') AS cover_align
+                    FROM books b
+                    LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
+                    LEFT JOIN user_favorites uf ON b.id = uf.book_id AND uf.user_id = ?
+                    WHERE COALESCE(b.is_deleted, 0) = 0 AND b.series_name = ?{perm_clause}
+                """
+                cursor.execute(query, (user_id, user_id, series_name, *perm_params))
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def get_series_latest_updated(db_type, series_name, perm_clause, perm_params):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        query = f"SELECT MAX(cover_updated_at) AS latest_updated FROM books WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}"
-        cursor.execute(query, (series_name, *perm_params))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            query = f"SELECT MAX(cover_updated_at) AS latest_updated FROM books WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0{perm_clause}"
+            cursor.execute(query, (series_name, *perm_params))
+            row = cursor.fetchone()
         return row['latest_updated'] if row else None
 
     @staticmethod
@@ -590,30 +564,29 @@ class BookRepository:
     @staticmethod
     def get_series_cover_candidates(db_type, series_name, library_id=None):
         """시리즈에 속한 실존하는 커버 이미지 후보 리스트 획득"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        if library_id is not None:
-            cursor.execute(
-                """
-                SELECT cover_image 
-                FROM books 
-                WHERE series_name = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0 AND cover_image IS NOT NULL AND cover_image != ''
-                ORDER BY title ASC
-                """,
-                (series_name, library_id)
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT cover_image 
-                FROM books 
-                WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0 AND cover_image IS NOT NULL AND cover_image != ''
-                ORDER BY title ASC
-                """,
-                (series_name,)
-            )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            if library_id is not None:
+                cursor.execute(
+                    """
+                    SELECT cover_image
+                    FROM books
+                    WHERE series_name = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0 AND cover_image IS NOT NULL AND cover_image != ''
+                    ORDER BY title ASC
+                    """,
+                    (series_name, library_id)
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT cover_image
+                    FROM books
+                    WHERE series_name = ? AND COALESCE(is_deleted, 0) = 0 AND cover_image IS NOT NULL AND cover_image != ''
+                    ORDER BY title ASC
+                    """,
+                    (series_name,)
+                )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -665,91 +638,87 @@ class BookRepository:
     @staticmethod
     def find_missing_cover(db_type, library_id=None, limit=50, offset=0):
         """표지 이미지가 비어있는 도서 목록 및 총 건수 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        where = "COALESCE(is_deleted, 0) = 0 AND (cover_image IS NULL OR cover_image = '')"
-        params = []
-        if library_id:
-            where += " AND library_id = ?"
-            params.append(library_id)
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            where = "COALESCE(is_deleted, 0) = 0 AND (cover_image IS NULL OR cover_image = '')"
+            params = []
+            if library_id:
+                where += " AND library_id = ?"
+                params.append(library_id)
 
-        cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
-        total = cursor.fetchone()['cnt']
+            cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
+            total = cursor.fetchone()['cnt']
 
-        cursor.execute(
-            f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
-            (*params, limit, offset)
-        )
-        items = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+            cursor.execute(
+                f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+                (*params, limit, offset)
+            )
+            items = [dict(row) for row in cursor.fetchall()]
         return {'total': total, 'items': items}
 
     @staticmethod
     def find_missing_genre_and_tags(db_type, library_id=None, limit=50, offset=0):
         """장르와 태그가 모두 비어있는 도서 목록 및 총 건수 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        where = ("COALESCE(is_deleted, 0) = 0"
-                 " AND (genre IS NULL OR genre = '') AND (tags IS NULL OR tags = '')")
-        params = []
-        if library_id:
-            where += " AND library_id = ?"
-            params.append(library_id)
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            where = ("COALESCE(is_deleted, 0) = 0"
+                     " AND (genre IS NULL OR genre = '') AND (tags IS NULL OR tags = '')")
+            params = []
+            if library_id:
+                where += " AND library_id = ?"
+                params.append(library_id)
 
-        cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
-        total = cursor.fetchone()['cnt']
+            cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
+            total = cursor.fetchone()['cnt']
 
-        cursor.execute(
-            f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
-            (*params, limit, offset)
-        )
-        items = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+            cursor.execute(
+                f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+                (*params, limit, offset)
+            )
+            items = [dict(row) for row in cursor.fetchall()]
         return {'total': total, 'items': items}
 
     @staticmethod
     def find_missing_offsets(db_type, library_id=None, limit=50, offset=0):
         """zip/cbz 도서 중 페이지 오프셋 캐시가 없는(로컬 파일만 해당) 도서 목록 및 총 건수 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        where = ("COALESCE(is_deleted, 0) = 0"
-                 " AND file_format IN ('zip', 'cbz') AND COALESCE(has_offsets, 0) = 0")
-        params = []
-        for kw in BookRepository._REMOTE_PATH_KEYWORDS:
-            where += " AND file_path NOT LIKE ?"
-            params.append(f"%{kw}%")
-        if library_id:
-            where += " AND library_id = ?"
-            params.append(library_id)
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            where = ("COALESCE(is_deleted, 0) = 0"
+                     " AND file_format IN ('zip', 'cbz') AND COALESCE(has_offsets, 0) = 0")
+            params = []
+            for kw in BookRepository._REMOTE_PATH_KEYWORDS:
+                where += " AND file_path NOT LIKE ?"
+                params.append(f"%{kw}%")
+            if library_id:
+                where += " AND library_id = ?"
+                params.append(library_id)
 
-        cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
-        total = cursor.fetchone()['cnt']
+            cursor.execute(f"SELECT COUNT(*) AS cnt FROM books WHERE {where}", params)
+            total = cursor.fetchone()['cnt']
 
-        cursor.execute(
-            f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
-            (*params, limit, offset)
-        )
-        items = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+            cursor.execute(
+                f"SELECT id, title, series_name, library_id, file_path FROM books WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+                (*params, limit, offset)
+            )
+            items = [dict(row) for row in cursor.fetchall()]
         return {'total': total, 'items': items}
 
     @staticmethod
     def find_duplicate_series_across_libraries(db_type):
         """동일한 시리즈명이 서로 다른(2개 이상) 카테고리에 흩어져 있는 케이스 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT series_name, COUNT(DISTINCT library_id) AS library_count,
-                   GROUP_CONCAT(DISTINCT library_id) AS library_ids,
-                   COUNT(*) AS book_count
-            FROM books
-            WHERE COALESCE(is_deleted, 0) = 0 AND series_name IS NOT NULL AND series_name != ''
-            GROUP BY series_name
-            HAVING library_count > 1
-            ORDER BY library_count DESC, series_name
-            """
-        )
-        items = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT series_name, COUNT(DISTINCT library_id) AS library_count,
+                       GROUP_CONCAT(DISTINCT library_id) AS library_ids,
+                       COUNT(*) AS book_count
+                FROM books
+                WHERE COALESCE(is_deleted, 0) = 0 AND series_name IS NOT NULL AND series_name != ''
+                GROUP BY series_name
+                HAVING library_count > 1
+                ORDER BY library_count DESC, series_name
+                """
+            )
+            items = [dict(row) for row in cursor.fetchall()]
         return {'total': len(items), 'items': items}

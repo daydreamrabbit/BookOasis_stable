@@ -738,6 +738,36 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
 
 ---
 
+### `[GET]` `/api/media/recommendations`
+* **설명**: 특정 시리즈 하나를 기준으로 장르/태그/작가 겹침 기반 유사작을 계산해 반환합니다. "스마트 추천" 탭이 최근 읽은 시리즈마다 이 API를 반복 호출해 화면을 구성하지만, 특정 시리즈 하나만 넘기면 되는 범용 API라 도서 상세 페이지 등 다른 화면에서 "비슷한 작품" 그리드를 직접 그릴 때도 그대로 재사용할 수 있습니다(예: 상세 페이지 본문에 자체 추천 그리드를 그리는 플러그인 - 사이드바에 붙는 `detail_sidebar_widget`/`smart_recommend_widget` 계약과 달리 본문 어디에든 자유롭게 배치 가능).
+* **권한**: `@login_required`
+* **쿼리 파라미터**:
+  | 파라미터명 | 타입 | 필수여부 | 설명 |
+  | :--- | :--- | :--- | :--- |
+  | `type` | string | 선택 | DB 구분 (`general`/`adult`, 기본값: `general`) |
+  | `series_name` | string | 필수 | 기준 시리즈명 |
+  | `library_id` | integer | 선택 | 기준 시리즈가 속한 카테고리 ID (동일 시리즈명이 여러 카테고리에 있을 때 구분용) |
+* **응답 예시 (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "genre": [
+      {"id": 101, "series_name": "...", "library_id": 1, "file_format": "cbz", "cover_image": "...", "score": 4}
+    ],
+    "tags": [...],
+    "author": [...],
+    "genre_is_fallback": false,
+    "tags_is_fallback": false
+  }
+  ```
+* **비고**:
+  * `genre`/`tags`/`author` 각각 최대 20건, 겹침 개수(`score`) 내림차순 정렬.
+  * 기준 시리즈에 장르/태그 정보가 없으면 `genre_is_fallback`/`tags_is_fallback`이 `true`가 되고 대신 동일 카테고리 최신 등록 시리즈로 채워집니다. `author`는 폴백이 없으며 겹치는 작가가 없으면 빈 배열입니다.
+  * 결과에서 현재 세션 사용자가 이미 읽은 시리즈(읽기 이력)와 기준 시리즈 자기 자신은 항상 제외됩니다 - "이미 읽은 건 다시 추천하지 않는다"는 스마트 추천 탭의 의도가 그대로 적용되며, 별도로 끌 수 있는 옵션은 없습니다.
+  * 응답은 시리즈+카테고리 단위로 최대 1시간 캐시됩니다(같은 시리즈를 다시 요청하면 이후 조회 시각 기준 최신 읽기 이력이 즉시 반영되지 않을 수 있음).
+
+---
+
 ### `[GET]` `/api/media/detail-sidebar-widgets`
 * **설명**: 도서 상세 페이지 사이드바에 마운트할, `detail_sidebar_widget`을 선언한 활성화된 플러그인들의 위젯 데이터를 한 번에 반환합니다(목록 조회 + 데이터 조회를 한 호출로 통합). 여러 플러그인이 선언하면 `order` 오름차순으로 정렬되어 나란히 쌓입니다. 자세한 계약 설명은 [guide_plugins.md](./guide_plugins.md)의 "도서 상세 페이지 사이드바 위젯" 절 참고.
 * **권한**: `@login_required`
@@ -841,6 +871,37 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
   | `context` | object | 선택 | 플러그인에 그대로 전달되는 임의의 JSON 객체 |
 * **응답**: 플러그인의 `run_context_menu_action()` 반환값을 그대로 전달 (`{'success': True, 'message': ..., 'open_url': ...}` 또는 `{'success': False, 'error': ...}` 등 - 플러그인마다 자유). `success: false`면 HTTP 400으로 응답합니다.
 * **비고**: EPUB/TXT 하이라이트(주석) 컨텍스트 메뉴에는 동일한 구조의 `/api/media/context-menu/annotation/plugins`(목록)와 `/api/media/context-menu/annotation/plugins/action`(실행)이 있습니다 - `context`에 `annotation_id`/`book_id`/`quote`/`note` 등이 자동으로 채워져 전달된다는 점만 다릅니다.
+* **컨텍스트 메뉴 외 용도 재사용 예시**: 이 라우트는 이름과 달리 실제로는 "plugin_id + action_id + context를 그대로 플러그인에 전달"하는 범용 RPC라, 우클릭 메뉴가 아닌 용도(플러그인 자체 데이터 조회 등)에도 그대로 쓰입니다. [sample_plugins/metadata/series_official_relations](../sample_plugins/metadata/series_official_relations/)는 관리자용 동기화 트리거(`action_id: "sync_now"`/`"sync_status"`)뿐 아니라, 다른 플러그인이 이 플러그인의 전용 테이블(`plugin_series_official_relations`)을 직접 몰라도 되도록 `action_id: "get_relations"`(`context: {series_name, library_id}` → `relation_type`을 포함한 원본 관계 목록 반환)도 같은 경로로 제공합니다 - 코어에 새 라우트나 DB 접근을 추가하지 않고, 플러그인 전용 데이터를 다른 플러그인(예: 도서 상세 본문에 자체 "연관작" 그리드를 그리는 플러그인)이 재사용하고 싶을 때의 표준 패턴입니다.
+  * **호출 예시 (`get_relations`)**:
+    ```js
+    const res = await fetch('/api/media/context-menu/book/plugins/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: dbType,               // 'general' | 'adult'
+        plugin_id: 'series_official_relations',
+        action_id: 'get_relations',
+        context: { series_name: seriesName, library_id: libraryId },
+      }),
+    });
+    const data = await res.json();
+    // data.items: [{ book_id, series_name, library_id, cover, file_format, relation_type }, ...]
+    ```
+    ```json
+    {
+      "success": true,
+      "items": [
+        {
+          "book_id": 4821,
+          "series_name": "...",
+          "library_id": 1,
+          "cover": "/covers/....jpg",
+          "file_format": "cbz",
+          "relation_type": "spinoff"
+        }
+      ]
+    }
+    ```
 
 ---
 

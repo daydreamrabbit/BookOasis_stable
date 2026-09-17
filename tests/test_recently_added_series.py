@@ -54,7 +54,7 @@ def test_recently_added_uses_latest_added_volume_per_library(monkeypatch):
     # 같은 시리즈명이 다른 라이브러리에 있으면 별도 항목으로 유지한다.
     _insert_book(connection, 5, 2, 'Series Copy', 'Series', '2026-09-17 13:00:00')
     _insert_book(connection, 6, 1, 'Standalone', None, '2026-09-17 11:00:00')
-    monkeypatch.setattr(repository_module.database, 'get_connection', lambda _db_type: connection)
+    monkeypatch.setattr(repository_module.database, 'get_connection', lambda _db_type, **_kwargs: connection)
 
     rows = repository_module.ReadingProgressRepository.fetch_recently_added_all('general', user_id=1)
 
@@ -68,7 +68,7 @@ def test_recently_added_user_filter_does_not_hide_accessible_same_named_series(m
     connection.execute(
         'INSERT INTO user_category_permissions (user_id, library_id, has_access) VALUES (7, 1, 1)'
     )
-    monkeypatch.setattr(repository_module.database, 'get_connection', lambda _db_type: connection)
+    monkeypatch.setattr(repository_module.database, 'get_connection', lambda _db_type, **_kwargs: connection)
 
     rows = repository_module.ReadingProgressRepository.fetch_recently_added_by_user('general', user_id=7)
 

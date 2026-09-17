@@ -38,6 +38,35 @@ function isComicRtlActive() {
     : localStorage.getItem('comic_reading_direction') === 'rtl';
 }
 
+// 높이맞춤 + 1장 보기에서 너비가 화면보다 커져(좌우가 가려짐) 롱프레스+드래그로 팬이 가능한
+// 상태인지 확인한다. 팬 대상이 없으면(너비맞춤 모드, 스크롤 모드, 페이지가 이미 화면 안에
+// 다 들어오는 경우 등) null을 반환해 롱프레스가 그냥 평범한 탭/스와이프로 흘러가게 둔다.
+function getPannableComicImage() {
+  const isComicFormat = ['zip', 'cbz', 'imgdir'].includes((state.currentViewerFormat || '').toLowerCase());
+  if (!isComicFormat) return null;
+
+  const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
+  if (scrollMode !== 'page') return null;
+
+  const fitMode = (typeof window.Settings !== 'undefined' && typeof window.Settings.getFitMode === 'function')
+    ? window.Settings.getFitMode()
+    : 'height';
+  if (fitMode !== 'height') return null;
+
+  const pair = document.querySelector('.comic-image-wrapper .comic-page-pair.single-page');
+  if (!pair) return null;
+  const img = pair.querySelector('img');
+  const wrapper = document.querySelector('.comic-image-wrapper');
+  if (!img || !wrapper || !img.naturalWidth) return null;
+
+  const renderedWidth = img.getBoundingClientRect().width;
+  const wrapperWidth = wrapper.getBoundingClientRect().width;
+  const maxPan = (renderedWidth - wrapperWidth) / 2;
+  if (maxPan <= 1) return null; // 이미 화면 안에 다 들어와 있어 팬 할 여지가 없음
+
+  return { img, maxPan };
+}
+
 function handleViewerKeydown(e) {
   const viewerModal = document.getElementById('media-viewer-modal');
   if (!viewerModal || viewerModal.style.display !== 'flex') return;
@@ -403,12 +432,32 @@ export function initViewerClickToggle() {
   const TAP_THRESHOLD = 15;
   const SWIPE_MIN_DISTANCE = 40;
   const SWIPE_MAX_TIME = 600;
+  const LONG_PRESS_MS = 280;
+  const LONG_PRESS_JITTER = 10; // 이 문턱값을 넘게 움직이면 롱프레스 팬이 아니라 그냥 스와이프로 간주
 
   let touchStartX = null;
   let touchStartY = null;
   let touchStartTime = 0;
   let isMultiTouch = false;
   let lastTouchEndTime = 0;
+
+  // 높이맞춤 + 1장 보기에서 좌우로 가려진 부분을 롱프레스+드래그로 살짝씩 이동해서 보는 팬 상태
+  let longPressTimer = null;
+  let isPanning = false;
+  let panImg = null;
+  let panMaxOffset = 0;
+  let panStartClientX = 0;
+  let panStartOffset = 0;
+  let panMovedDuringGesture = false;
+
+  function cancelLongPressPan() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    isPanning = false;
+    panImg = null;
+  }
 
   document.addEventListener(
     'touchstart',
@@ -418,13 +467,63 @@ export function initViewerClickToggle() {
         touchStartY = e.touches[0].clientY;
         touchStartTime = Date.now();
         isMultiTouch = false;
+        panMovedDuringGesture = false;
+
+        cancelLongPressPan();
+
+        // 슬라이더/버튼/오버레이 컨트롤 위에서의 롱프레스는 팬으로 가로채지 않는다
+        // (예: 하단 페이지 슬라이더를 느리게 드래그하는 도중 280ms가 지나가는 경우).
+        const touchTarget = e.target;
+        const onControl = touchTarget && typeof touchTarget.closest === 'function' && (
+          touchTarget.closest('button') ||
+          touchTarget.closest('input') ||
+          touchTarget.closest('select') ||
+          touchTarget.closest('.viewer-controls') ||
+          touchTarget.closest('.floating-close-btn') ||
+          touchTarget.closest('#comic-fit-controls') ||
+          touchTarget.closest('#comic-overlay-menu') ||
+          touchTarget.closest('#epub-toc-container')
+        );
+
+        if (!onControl) {
+          const startX = touchStartX;
+          longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            const pannable = getPannableComicImage();
+            if (!pannable) return;
+            isPanning = true;
+            panImg = pannable.img;
+            panMaxOffset = pannable.maxPan;
+            panStartClientX = startX;
+            const existing = parseFloat(panImg.style.getPropertyValue('--comic-pan-x'));
+            panStartOffset = Number.isFinite(existing) ? existing : 0;
+          }, LONG_PRESS_MS);
+        }
       } else {
         isMultiTouch = true;
         touchStartX = null;
         touchStartY = null;
+        cancelLongPressPan();
       }
     },
     { passive: true }
+  );
+
+  // 팬이 실제로 시작된 뒤의 좌우 이동 처리 - preventDefault로 페이지 넘김/브라우저 스크롤을
+  // 막아야 해서 별도의 non-passive 리스너로 분리한다(기존 touchmove 리스너는 passive 유지).
+  document.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!isPanning || !panImg || e.touches.length !== 1) return;
+      panMovedDuringGesture = true;
+      const deltaX = e.touches[0].clientX - panStartClientX;
+      let next = panStartOffset + deltaX;
+      if (next > panMaxOffset) next = panMaxOffset;
+      if (next < -panMaxOffset) next = -panMaxOffset;
+      panImg.style.setProperty('--comic-pan-x', `${next}px`);
+      e.preventDefault();
+    },
+    { passive: false }
   );
 
   document.addEventListener(
@@ -432,6 +531,19 @@ export function initViewerClickToggle() {
     (e) => {
       if (e.touches.length > 1) {
         isMultiTouch = true;
+        cancelLongPressPan();
+        return;
+      }
+
+      // 롱프레스 타이머가 아직 대기 중인데 손가락이 문턱값 이상 움직이면 일반 스와이프로 간주하고
+      // 팬 진입을 취소한다(롱프레스로 "가만히 누르고" 있어야 팬 모드로 들어간다는 설계 의도).
+      if (longPressTimer && touchStartX !== null && touchStartY !== null) {
+        const dx = Math.abs(e.touches[0].clientX - touchStartX);
+        const dy = Math.abs(e.touches[0].clientY - touchStartY);
+        if (dx > LONG_PRESS_JITTER || dy > LONG_PRESS_JITTER) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
       }
     },
     { passive: true }
@@ -440,6 +552,28 @@ export function initViewerClickToggle() {
   document.addEventListener(
     'touchend',
     (e) => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+
+      if (isPanning) {
+        isPanning = false;
+        panImg = null;
+        const hadMoved = panMovedDuringGesture;
+        panMovedDuringGesture = false;
+        if (hadMoved) {
+          // 실제로 팬 이동이 있었다면 아래의 스와이프(페이지 넘김)/탭(오버레이 토글) 로직으로
+          // 이어지지 않게 여기서 끝낸다.
+          touchStartX = null;
+          touchStartY = null;
+          lastTouchEndTime = Date.now();
+          return;
+        }
+        // 팬 모드로 들어갔지만 실제로는 움직이지 않은 롱프레스는 그냥 탭으로 취급해
+        // 아래 일반 로직(중앙 탭 시 오버레이 토글 등)으로 흘러가게 둔다.
+      }
+
       if (touchStartX === null || isMultiTouch) return;
       if (!e.changedTouches || e.changedTouches.length === 0) return;
 

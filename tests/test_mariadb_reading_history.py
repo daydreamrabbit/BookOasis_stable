@@ -35,7 +35,7 @@ def test_mariadb_history_hides_completed_across_batches(monkeypatch):
     monkeypatch.setattr(
         repository_module.database,
         'get_connection',
-        lambda _db_type: connection,
+        lambda _db_type, **_kwargs: connection,
     )
 
     rows = repository_module.ReadingProgressRepository.fetch_reading_history(
@@ -58,7 +58,7 @@ def test_mariadb_history_without_filter_uses_single_limited_batch(monkeypatch):
     monkeypatch.setattr(
         repository_module.database,
         'get_connection',
-        lambda _db_type: connection,
+        lambda _db_type, **_kwargs: connection,
     )
 
     rows = repository_module.ReadingProgressRepository.fetch_reading_history(
