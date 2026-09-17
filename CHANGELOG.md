@@ -1,5 +1,10 @@
 # CHANGELOG
+## v2.7.0
+- (fix,Emergency) lazyscanner 버그 픽스 (이미지 축소 백필 한계 증량) | lazyscanner bug fix
+
+
 ## v2.6.9
+- (fix) 기존 커버 리사이즈 백필이 세션당 2,000장만 확인해 대량 라이브러리에서 Lazy-Scanner 전체 파이프라인이 수백 회 재기동되던 문제 완화 — 배치 크기를 20,000장으로 확대하고, 완료 로그 직후 실제로는 재기동되는 경우 이를 명시하는 로그 추가 | reduce excessive full-pipeline restarts of the Lazy-Scanner on large libraries by raising the existing-cover resize backfill's per-session batch size from 2,000 to 20,000, and log clearly when a session restarts despite the "completed" message
 - (feature) 라이브러리/선택 도서/시리즈 단위로 Lazy-Scanner를 수동 실행할 수 있는 메뉴와 큐 연동 추가 | add menus and queue integration to manually run the Lazy-Scanner for a whole library, selected books, or an entire series
 - (feature) 선택한 여러 도서를 백그라운드 큐로 일괄 재스캔하는 기능 추가 — 스캔 활동에서 진행률(현재/전체, 완료 도서명) 확인 가능 | add batch background rescanning for multiple selected books — progress (current/total, completed title) visible in scan activity
 - (fix) 원격 CBZ의 오프셋 수집 실패 시 재시도 로직 수정, 페이지 오프셋을 즉시 계산하지 않고 안전하게 폴백 저장하도록 변경 | fix offset-collection retry for remote CBZ files and store page offsets without eagerly resolving them, falling back safely

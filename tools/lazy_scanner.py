@@ -1223,14 +1223,17 @@ COVER_RESIZE_DONE_SENTINEL = '__DONE__'
 def _load_lazy_scan_cover_resize_batch_size():
     """세션당 리사이즈 여부를 확인할 커버 파일 수. 원격 마운트 I/O 없이 로컬 covers/
     디렉토리만 다루는 순수 CPU 작업이라 개수 기준으로 간단히 배치를 끊는다."""
-    batch_size = 2000
+    # 2000장/세션이면 30만 장대 백로그를 다 훑는 데 세션(=전체 파이프라인 재기동)을
+    # 백 수십~백 수십 회 반복해야 해서, 체감상 "무한 반복"처럼 보이는 원인이 됐다.
+    # 원격 I/O가 없는 순수 로컬 CPU 작업(실측 2000장 ≈ 1초)이라 여유 있게 키운다.
+    batch_size = 20000
     try:
         from repositories.settings_repository import SettingsRepository
         val = SettingsRepository.get_value('LAZY_SCAN_COVER_RESIZE_BATCH_SIZE')
         if val is not None:
-            batch_size = int(str(val).strip() or '2000')
+            batch_size = int(str(val).strip() or '20000')
     except Exception as _re:
-        print(f"[Lazy-Scanner] 커버 리사이즈 배치 크기 설정 로드 실패 (기본 2000장 적용): {_re}")
+        print(f"[Lazy-Scanner] 커버 리사이즈 배치 크기 설정 로드 실패 (기본 {batch_size:,}장 적용): {_re}")
     return max(1, batch_size)
 
 
@@ -1393,6 +1396,11 @@ if __name__ == '__main__':
         # 표지 추출은 이미 다 끝나서(exit 0) 스캐너 큐가 이 lazy 스캔 태스크를 끝내려 하더라도,
         # 커버 리사이즈 백필이 아직 안 끝났으면 exit(10)로 덮어써서 재기동을 계속 요청한다.
         if se.code == 0 and cover_resize_has_more_work:
+            # 위 run_lazy_cover_extraction()이 이미 "완료되었습니다 (Exit Code 0)"라고
+            # 로그를 찍은 뒤라, 그대로 두면 실제로는 세션이 재기동되는데도 로그만 보면
+            # 방금 다 끝난 것처럼 오해하게 된다 - 실제 종료 코드를 덮어쓴다는 걸 명시한다.
+            print("[Lazy-Scanner] ⚠️ 표지 스캔 자체는 완료됐지만, 기존 커버 리사이즈 백필이 아직 남아 있어 "
+                  "실제로는 Exit Code 10(세션 재기동)으로 전환합니다.")
             sys.exit(10)
         sys.exit(se.code)
     except Exception as main_err:
