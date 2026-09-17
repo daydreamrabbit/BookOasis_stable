@@ -1,4 +1,8 @@
 # CHANGELOG
+## v2.6.8
+- (fix) 코믹 뷰어 "높이맞춤" 모드가 실제로는 너비에 맞춰져 무의미하게 동작하던 문제 수정 — 이제 높이 기준으로 확대되며, 화면 밖으로 벗어난 좌우는 롱프레스 후 드래그로 이동해서 볼 수 있음 | fix comic viewer "fit height" mode silently behaving like fit-width — it now actually scales by height, and the resulting offscreen left/right edges can be revealed with a long-press-and-drag pan
+- (fix) EPUB 목차에서 하위 항목(예: "제2부 &gt; 강변에서")을 클릭해도 상위 챕터 시작 위치로만 이동하던 문제 수정 — nav.xhtml 목차 파서가 중첩 항목의 레벨을 인식하지 못하던 게 원인 | fix clicking a nested EPUB TOC sub-item (e.g. "Part 2 &gt; By the River") jumping to the parent chapter's start instead of its own position — caused by the nav.xhtml TOC parser not recognizing nested item levels
+
 ## v2.6.7
 - (fix) 코믹 뷰어 스크롤 모드에서 다음/이전 페이지 이동 시 페이지 단위 점프 대신, 화면 높이의 85%만큼 부드럽게 스크롤하도록 변경 (맨 끝에서 다음으로 넘기면 기존처럼 다음 화 이동) | change comic viewer scroll-mode next/previous navigation to smoothly scroll by 85% of the viewport height instead of jumping page-by-page (advancing past the last page still moves to the next episode, as before)
 - (fix) 전체보기에서 "최신 추가순"/"과거 추가순" 정렬이 라이브러리 전체를 매번 파이썬에서 정렬해 대형 서재에서 다른 요청까지 줄줄이 pending 되던 문제 수정 — 제목 정렬처럼 SQL에서 바로 정렬+페이지네이션하도록 변경 | fix "recently added"/"oldest added" sort in the all-books view re-sorting the entire library in Python on every request, which could stall unrelated requests behind it on large libraries — now sorts and paginates in SQL like the title sort already did

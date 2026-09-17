@@ -30,11 +30,10 @@ def _dynamic_insert(cursor, table, row, overrides=None, exclude=('id',)):
 class CategoryRepository:
     @staticmethod
     def get_library_groups(db_type):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name, icon, color, sort_order FROM library_groups ORDER BY sort_order ASC, name ASC")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, icon, color, sort_order FROM library_groups ORDER BY sort_order ASC, name ASC")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -105,11 +104,10 @@ class CategoryRepository:
 
     @staticmethod
     def get_plugin_group_assignments(db_type):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT plugin_id, group_id, sort_order FROM plugin_group_assignments")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT plugin_id, group_id, sort_order FROM plugin_group_assignments")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -136,28 +134,26 @@ class CategoryRepository:
 
     @staticmethod
     def get_all_libraries(db_type):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM libraries ORDER BY sort_order ASC, name ASC")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM libraries ORDER BY sort_order ASC, name ASC")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def get_libraries_by_user_permissions(db_type, user_id):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT l.* FROM libraries l
-            JOIN user_category_permissions p ON l.id = p.library_id
-            WHERE p.user_id = ? AND p.has_access = 1
-            ORDER BY l.sort_order ASC, l.name ASC
-            """,
-            (user_id,)
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT l.* FROM libraries l
+                JOIN user_category_permissions p ON l.id = p.library_id
+                WHERE p.user_id = ? AND p.has_access = 1
+                ORDER BY l.sort_order ASC, l.name ASC
+                """,
+                (user_id,)
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -299,20 +295,18 @@ class CategoryRepository:
 
     @staticmethod
     def get_library_by_id(db_type, library_id):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM libraries WHERE id = ?", (library_id,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM libraries WHERE id = ?", (library_id,))
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def check_duplicate_name(db_type, name):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM libraries WHERE name = ?", (name,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM libraries WHERE name = ?", (name,))
+            row = cursor.fetchone()
         return row['id'] if row else None
 
     @staticmethod
@@ -339,11 +333,10 @@ class CategoryRepository:
 
     @staticmethod
     def get_books_by_library_raw(db_type, library_id):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM books WHERE library_id = ?", (library_id,))
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM books WHERE library_id = ?", (library_id,))
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -419,11 +412,10 @@ class CategoryRepository:
     @staticmethod
     def get_libraries_name_and_path(db_type):
         """중복 경로 매핑을 위한 라이브러리 전체의 name, physical_path 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name, physical_path FROM libraries")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name, physical_path FROM libraries")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod

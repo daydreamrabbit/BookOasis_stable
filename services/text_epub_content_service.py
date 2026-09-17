@@ -148,7 +148,10 @@ class TextEpubContentService:
         if not os.path.exists(file_path):
             return None, 'File not found'
 
-        redis_cache_key = f"cache:epub:meta:book:{db_type}:{book_id}" if book_id else None
+        # v2: nav.xhtml 목차 파싱이 중첩 <ol> depth를 반영해 level을 제대로 매기도록 고쳐지면서
+        # (레벨이 전부 1로 고정되어 하위 목차 클릭 시 앵커 이동 없이 챕터 시작으로만 가던 버그 수정)
+        # 예전 버전으로 캐시된 toc(level 전부 1)를 그대로 재사용하지 않도록 키 버전을 올렸다.
+        redis_cache_key = f"cache:epub:meta:book:v2:{db_type}:{book_id}" if book_id else None
         if redis_cache_key:
             try:
                 from utils.redis_helper import redis_get
@@ -250,9 +253,19 @@ class TextEpubContentService:
                             soup = BeautifulSoup(nav_data, 'xml')
                         except Exception:
                             soup = BeautifulSoup(nav_data, 'html.parser')
-                        for nav in soup.find_all('nav'):
-                            if nav.get('epub:type') == 'toc' or nav.get('type') == 'toc' or not toc_list:
-                                for a in nav.find_all('a'):
+
+                        # EPUB3 nav.xhtml의 목차는 <ol><li><a>...</a><ol>하위항목</ol></li></ol> 형태로
+                        # 중첩되어 "제2부 -> 강변에서" 같은 부모/자식 관계를 표현한다. 예전엔 nav.find_all('a')로
+                        # 평탄화해서 모든 항목에 level:1을 고정 부여했는데, 그러면 프런트(txt_toc.js)가
+                        # level<=1을 "최상위 챕터"로 오인해 하위 항목 클릭 시에도 앵커 이동 없이 그냥
+                        # 챕터 시작(부모 항목 위치)으로만 이동하는 버그가 있었다. NCX 분기(parse_navpoint)는
+                        # 이미 중첩 depth를 따라 level을 늘려가므로, 같은 방식을 nav.xhtml에도 적용한다.
+                        def parse_nav_list(ol_element, level):
+                            if not ol_element:
+                                return
+                            for li in ol_element.find_all('li', recursive=False):
+                                a = li.find('a', recursive=False) or li.find('a')
+                                if a is not None:
                                     href = a.get('href')
                                     text = a.get_text().strip()
                                     idx, anchor = resolve_toc_item(href, nav_href)
@@ -262,8 +275,16 @@ class TextEpubContentService:
                                         'title': title_text,
                                         'chapter_idx': idx,
                                         'anchor': anchor,
-                                        'level': 1
+                                        'level': level
                                     })
+                                nested_ol = li.find('ol', recursive=False)
+                                if nested_ol:
+                                    parse_nav_list(nested_ol, level + 1)
+
+                        for nav in soup.find_all('nav'):
+                            if nav.get('epub:type') == 'toc' or nav.get('type') == 'toc' or not toc_list:
+                                top_ol = nav.find('ol', recursive=False) or nav.find('ol')
+                                parse_nav_list(top_ol, 1)
                     if not toc_list and ncx_href:
                         ncx_full_path = posixpath.join(opf_dir, ncx_href) if opf_dir else ncx_href
                         ncx_data = zf.read(ncx_full_path).decode('utf-8', errors='ignore')

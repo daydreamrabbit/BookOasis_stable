@@ -13,6 +13,11 @@ This document describes the current plugin standard for BookOasis metadata/dashb
 - The core only relies on shared contracts.
 - Plugin extension should be completed inside `plugins/metadata/` without core code forks.
 
+### License and Documentation Principle
+
+- BookOasis core is licensed under [AGPLv3](../LICENSE). Paid or closed-source plugin distribution is not supported — the current plugin architecture (subclassing a core base class and running in-process with the core) sits directly at odds with the openness AGPL requires, and more fundamentally, it goes against BookOasis's development philosophy. Plugins are expected to be open source, same as the core.
+- **"An undocumented feature is a dead feature"** — this is BookOasis's development philosophy, and plugins are no exception. We strongly recommend every plugin ship its own `README.md` and any guide docs it needs inside its own folder. A feature with no documentation is invisible to other developers, and eventually to your own future self — which makes it effectively nonexistent.
+
 ### Compatibility Matrix (Core ↔ Plugin Contract)
 
 | Core Version Range | Required Contract | Optional Contract | Notes |

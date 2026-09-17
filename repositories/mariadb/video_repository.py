@@ -9,14 +9,13 @@ import database
 class VideoRepository:
     @staticmethod
     def get_video_by_id(video_id):
-        conn = database.get_connection('video')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM videos WHERE id = %s AND COALESCE(is_deleted, 0) = 0",
-            (int(video_id),)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM videos WHERE id = %s AND COALESCE(is_deleted, 0) = 0",
+                (int(video_id),)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -39,27 +38,25 @@ class VideoRepository:
 
     @staticmethod
     def get_video_episodes(video_id):
-        conn = database.get_connection('video')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM video_episodes WHERE video_id = %s ORDER BY episode_number ASC",
-            (video_id,)
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM video_episodes WHERE video_id = %s ORDER BY episode_number ASC",
+                (video_id,)
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def get_episode_by_id_and_video_id(episode_id, video_id):
         """특정 에피소드 ID 및 강좌 ID 매칭 조회"""
-        conn = database.get_connection('video')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM video_episodes WHERE id = %s AND video_id = %s",
-            (episode_id, video_id)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM video_episodes WHERE id = %s AND video_id = %s",
+                (episode_id, video_id)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -86,14 +83,13 @@ class VideoRepository:
     @staticmethod
     def get_video_by_title_or_folder_name(name):
         """제목 또는 폴더명으로 강좌 조회 (series_name 폴백용)"""
-        conn = database.get_connection('video')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM videos WHERE (title = %s OR folder_name = %s) AND COALESCE(is_deleted, 0) = 0",
-            (name, name)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM videos WHERE (title = %s OR folder_name = %s) AND COALESCE(is_deleted, 0) = 0",
+                (name, name)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -116,31 +112,29 @@ class VideoRepository:
     @staticmethod
     def list_videos_by_library(library_id):
         """특정 라이브러리에 속한 강좌 카드 목록 조회 (제목순 정렬)"""
-        conn = database.get_connection('video')
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, title, poster, total_episodes, total_duration, COALESCE(is_favorite, 0) AS is_favorite
-            FROM videos
-            WHERE library_id = %s AND COALESCE(is_deleted, 0) = 0
-            ORDER BY title ASC
-            """,
-            (library_id,)
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, title, poster, total_episodes, total_duration, COALESCE(is_favorite, 0) AS is_favorite
+                FROM videos
+                WHERE library_id = %s AND COALESCE(is_deleted, 0) = 0
+                ORDER BY title ASC
+                """,
+                (library_id,)
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def get_video_progress(video_id, user_id):
-        conn = database.get_connection('video')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM video_progress WHERE video_id = %s AND user_id = %s",
-            (video_id, user_id)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM video_progress WHERE video_id = %s AND user_id = %s",
+                (video_id, user_id)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -183,32 +177,30 @@ class VideoRepository:
     @staticmethod
     def get_folder_paths(library_id=None):
         """저장된 강좌 폴더 경로 목록 조회"""
-        conn = database.get_connection('video')
-        cursor = conn.cursor()
-        if library_id is not None:
-            cursor.execute("SELECT folder_path FROM videos WHERE library_id = %s", (library_id,))
-        else:
-            cursor.execute("SELECT folder_path FROM videos")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            if library_id is not None:
+                cursor.execute("SELECT folder_path FROM videos WHERE library_id = %s", (library_id,))
+            else:
+                cursor.execute("SELECT folder_path FROM videos")
+            rows = cursor.fetchall()
         return [r['folder_path'] for r in rows if r and r['folder_path']]
 
     @staticmethod
     def get_by_folder_path(folder_path):
         """폴더 경로 기반 강좌 상세 메타 조회"""
-        conn = database.get_connection('video')
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, library_id, title, sort_title, web_id, genres, poster, backdrop,
-                   premiered, description, folder_name, total_duration, total_episodes
-            FROM videos
-            WHERE folder_path = %s
-            """,
-            (folder_path,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, library_id, title, sort_title, web_id, genres, poster, backdrop,
+                       premiered, description, folder_name, total_duration, total_episodes
+                FROM videos
+                WHERE folder_path = %s
+                """,
+                (folder_path,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod

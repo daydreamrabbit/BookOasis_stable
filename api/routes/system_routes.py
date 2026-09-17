@@ -155,6 +155,21 @@ def get_system_status():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@system_bp.route('/api/system/db-pool-status', methods=['GET'])
+@admin_required
+def get_db_pool_status():
+    """DB 커넥션 풀의 allocated/idle/in_use 스냅샷을 db_type별로 조회합니다.
+    스캔 중에만 로그로 찍히던 [DB-Pool] 정보(tools/scanner/engine.py)를 평상시에도
+    확인할 수 있게 하는 진단용 엔드포인트 - allocated가 idle/in_use 합보다 계속 커지며
+    내려오지 않는다면 커넥션 반납 누수를 의심할 수 있다."""
+    try:
+        pools = {}
+        for db_type in ('general', 'adult', 'audiobook', 'video'):
+            pools[db_type] = database.get_pool_stats(db_type)
+        return jsonify({'success': True, 'pools': pools})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @system_bp.route('/api/media/system/queue', methods=['GET'])
 @admin_required
 def get_system_queue_status():

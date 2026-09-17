@@ -157,7 +157,7 @@ class SeriesOfficialRelationsProvider(BaseMetadataProvider):
         )
         return dict(rows[0]) if rows and rows[0].get('id') is not None else None
 
-    def _build_items(self, db_type, series_name, library_id):
+    def _build_items(self, db_type, series_name, library_id, include_relation_type=False):
         if not series_name or library_id is None:
             return []
         relations = self._get_relations(db_type, library_id, series_name)
@@ -166,13 +166,16 @@ class SeriesOfficialRelationsProvider(BaseMetadataProvider):
             book = self._get_representative_book(db_type, rel['related_library_id'], rel['related_series_name'])
             if not book:
                 continue
-            items.append({
+            item = {
                 'book_id': book['id'],
                 'series_name': rel['related_series_name'],
                 'library_id': rel['related_library_id'],
                 'cover': self._resolve_cover_url(book.get('cover_image')),
                 'file_format': book.get('file_format'),
-            })
+            }
+            if include_relation_type:
+                item['relation_type'] = rel['relation_type']
+            items.append(item)
         return items
 
     def get_detail_sidebar_data(self, db_type, context):
@@ -185,8 +188,20 @@ class SeriesOfficialRelationsProvider(BaseMetadataProvider):
         library_id = (context or {}).get('library_id')
         return {'success': True, 'items': self._build_items(db_type, series_name, library_id)}
 
+    def _get_relations_raw(self, db_type, context):
+        """detail_sidebar_widget/smart_recommend_widget이 쓰는 _build_items()는 두 화면
+        공용 스키마에 맞추느라 relation_type을 뺀 채로 돌려준다. 다른 플러그인이 관계 종류별로
+        직접 배치를 구성하려면(예: 본문에 "시퀄"/"스핀오프"로 묶어 그리는 그리드) 그 정보가
+        필요하므로, 이 액션은 relation_type을 포함한 원본에 가까운 형태로 돌려준다."""
+        series_name = (context or {}).get('series_name') or ''
+        library_id = (context or {}).get('library_id')
+        items = self._build_items(db_type, series_name, library_id, include_relation_type=True)
+        return {'success': True, 'items': items}
+
     # ------------------------------------------------------------------
-    # 동기화 트리거 (settings.js -> 범용 컨텍스트메뉴 액션 RPC 경유)
+    # 동기화 트리거 / 원본 관계 데이터 조회 (settings.js, 외부 플러그인 -> 범용
+    # 컨텍스트메뉴 액션 RPC 경유. "컨텍스트 메뉴" 전용 라우트가 아니라 plugin_id+action_id+
+    # context를 그대로 플러그인에 전달하는 범용 RPC라 이런 용도로도 재사용된다)
     # ------------------------------------------------------------------
 
     def run_context_menu_action(self, db_type, action_id, context):
@@ -194,6 +209,8 @@ class SeriesOfficialRelationsProvider(BaseMetadataProvider):
             return self._start_sync(context)
         if action_id == 'sync_status':
             return self._get_sync_status()
+        if action_id == 'get_relations':
+            return self._get_relations_raw(db_type, context)
         return {'success': False, 'error': f'알 수 없는 액션: {action_id}'}
 
     @staticmethod

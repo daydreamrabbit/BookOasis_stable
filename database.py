@@ -5,6 +5,8 @@ import threading
 import queue
 import sys
 import re
+import weakref
+from contextlib import contextmanager
 
 # DB 파일이 저장될 경로 설정 (media_server/db/ 하위)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,10 +19,28 @@ DB_AUDIOBOOK_PATH = os.path.join(DB_DIR, 'media_audiobook.db')
 DB_VIDEO_PATH = os.path.join(DB_DIR, 'media_video.db')
 SQLITE_BUSY_TIMEOUT_MS = int(os.environ.get('SQLITE_BUSY_TIMEOUT_MS', '60000') or '60000')
 
+def _reclaim_leaked_slot(pool, returned_flag):
+    """호출부가 conn.close()를 한 번도 못 부르고(예외가 close() 도달 전에 터짐) 커넥션
+    객체가 GC되는 경우의 안전망. close()/명시적 폐기 경로를 거쳐 이미 반납·회수된
+    커넥션은 returned_flag[0]이 True라 여기서 아무 일도 하지 않는다 - 정상 반납분을
+    이중 차감하지 않기 위한 가드."""
+    if returned_flag and not returned_flag[0]:
+        returned_flag[0] = True
+        try:
+            with pool.lock:
+                pool.allocated = max(0, pool.allocated - 1)
+            print(f"[SQLiteConnectionPool] Reclaimed leaked connection slot (GC safety net): {pool.db_path}")
+        except Exception:
+            pass
+
 class PooledConnection(sqlite3.Connection):
     def init_pool(self, pool):
         self._pool = pool
         self._is_returned = False
+        # close()가 아예 호출되지 못하고(예외로 참조가 끊겨) 이 커넥션이 GC되는 경우를 대비한
+        # 최후의 안전망 - conn 자체가 아니라 이 list만 약한참조 콜백에 넘겨 순환참조를 피한다.
+        self._returned_flag = [False]
+        weakref.finalize(self, _reclaim_leaked_slot, pool, self._returned_flag)
 
     def close(self):
         """커넥션을 닫지 않고 풀로 반환합니다."""
@@ -33,6 +53,7 @@ class PooledConnection(sqlite3.Connection):
                 except (sqlite3.OperationalError, sqlite3.DatabaseError) as err:
                     # OperationalError/DatabaseError 가 터진 커넥션은 오염된 커넥션이므로 풀로 돌려보내지 않고 즉시 폐기
                     self._is_returned = True
+                    self._returned_flag[0] = True
                     try:
                         super().close()
                     except Exception:
@@ -42,6 +63,7 @@ class PooledConnection(sqlite3.Connection):
                             self._pool.allocated = max(0, self._pool.allocated - 1)
                     return
                 self._is_returned = True
+                self._returned_flag[0] = True
                 self._pool.release_connection(self)
         else:
             super().close()
@@ -74,6 +96,8 @@ class SQLiteConnectionPool:
                         conn.force_close()
                     except Exception:
                         pass
+                    conn._is_returned = True
+                    conn._returned_flag[0] = True  # 여기서 이미 수동으로 allocated를 차감하므로, GC 안전망이 나중에 이중 차감하지 않도록 마킹
                     with self.lock:
                         self.allocated = max(0, self.allocated - 1)
             except queue.Empty:
@@ -589,6 +613,19 @@ def get_connection(db_type='general', wait_timeout=30.0):
             pool.resize(pool_size)
             
     return pool.get_connection(wait_timeout=wait_timeout)
+
+@contextmanager
+def connection(db_type='general', wait_timeout=30.0):
+    """`conn = get_connection(...)` + 수동 close() 대신 쓰는 컨텍스트 매니저 버전.
+    호출부 코드에서 예외가 터져도 finally에서 conn.close()(=풀 반납)가 보장되므로,
+    conn.close()를 빼먹어 allocated 슬롯이 영구히 새는 문제를 구조적으로 막는다
+    (읽기 전용 리포지터리 함수들이 try/finally 없이 conn.close()를 마지막 평문으로
+    호출하던 패턴에서 이 문제가 실제로 발생했다)."""
+    conn = get_connection(db_type, wait_timeout=wait_timeout)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 def get_pool_stats(db_type='general'):
     """현재 커넥션 풀 상태 스냅샷을 반환합니다."""

@@ -237,6 +237,24 @@
     margin: 0;
 }
 
+/* 페이지 모드 높이맞춤 + 1장 보기: 너비를 화면 안에 가두지 않고 높이 기준으로만 확대한다.
+   세로가 긴 페이지를 억지로 너비에 맞추면(기존 동작) 페이지가 과하게 길어져 스크롤이 필요해지고
+   글자가 작아 눈에 부담이 크다는 피드백에 따라, 높이맞춤을 선택하면 실제로 높이만 기준으로
+   확대해 화면을 채우도록 한다 - 너비가 화면보다 커지는 것(좌우가 화면 밖으로 가려짐)이 의도된
+   동작이며, input_controller.js의 롱프레스+드래그 팬 로직이 --comic-pan-x를 갱신해 가려진
+   좌우를 볼 수 있게 한다. .single-page 기본 규칙(위쪽, max-width:100% !important)보다 이겨야
+   하므로 선택자 특이성을 더 높게 잡는다. */
+.comic-image-wrapper.fit-height .comic-page-pair.single-page img {
+    max-width: none !important;
+    max-height: 100% !important;
+    width: auto !important;
+    height: 100% !important;
+    position: absolute !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(calc(-50% + var(--comic-pan-x, 0px)), -50%) !important;
+}
+
 /* 페이지 모드 너비맞춤 2장 보기: auto로 발동하되 50% 제한 */
 .comic-image-wrapper.fit-width .comic-page-pair img {
     position: relative;
