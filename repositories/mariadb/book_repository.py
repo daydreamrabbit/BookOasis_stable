@@ -3,6 +3,7 @@
 book_repository.py – MariaDB 전용 도서(books), 즐겨찾기(user_favorites) 정보 데이터 액세스 레이어
 """
 import database
+from repositories.series_metadata_utils import merge_series_metadata_rows
 
 class BookRepository:
     @staticmethod
@@ -407,45 +408,21 @@ class BookRepository:
     def get_series_meta(db_type, series_name, library_id, perm_clause, perm_params):
         with database.connection(db_type) as conn:
             cursor = conn.cursor()
-        
+            columns = "author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, localized_series, COALESCE(metadata_locked, 0) AS metadata_locked"
+            where = ["series_name = %s", "COALESCE(is_deleted, 0) = 0"]
+            params = [series_name]
             if library_id and library_id not in ('all', 'history', 'favorite', 'home'):
-                query1 = f"""
-                    SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
-                    FROM books
-                    WHERE series_name = %s AND library_id = %s AND COALESCE(is_deleted, 0) = 0{perm_clause}
-                      AND (summary IS NOT NULL AND summary != '')
-                    LIMIT 1
-                """
-                cursor.execute(query1, (series_name, library_id, *perm_params))
-                row = cursor.fetchone()
-                if not row:
-                    query2 = f"""
-                        SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
-                        FROM books WHERE series_name = %s AND library_id = %s AND COALESCE(is_deleted, 0) = 0{perm_clause}
-                        LIMIT 1
-                    """
-                    cursor.execute(query2, (series_name, library_id, *perm_params))
-                    row = cursor.fetchone()
-            else:
-                query1 = f"""
-                    SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
-                    FROM books
-                    WHERE series_name = %s AND COALESCE(is_deleted, 0) = 0{perm_clause}
-                      AND (summary IS NOT NULL AND summary != '')
-                    LIMIT 1
-                """
-                cursor.execute(query1, (series_name, *perm_params))
-                row = cursor.fetchone()
-                if not row:
-                    query2 = f"""
-                        SELECT author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, COALESCE(metadata_locked, 0) AS metadata_locked
-                        FROM books WHERE series_name = %s AND COALESCE(is_deleted, 0) = 0{perm_clause}
-                        LIMIT 1
-                    """
-                    cursor.execute(query2, (series_name, *perm_params))
-                    row = cursor.fetchone()
-                
-        return dict(row) if row else None
+                where.append("library_id = %s")
+                params.append(library_id)
+            query = f"""
+                SELECT {columns}
+                FROM books
+                WHERE {' AND '.join(where)}{perm_clause}
+                ORDER BY CASE WHEN summary IS NOT NULL AND summary != '' THEN 0 ELSE 1 END, id
+            """
+            cursor.execute(query, (*params, *perm_params))
+            rows = cursor.fetchall()
+        return merge_series_metadata_rows(rows)
 
     @staticmethod
     def get_books_by_series_detail(db_type, series_name, library_id, user_id, perm_clause, perm_params):
@@ -455,7 +432,7 @@ class BookRepository:
             use_lib = library_id and library_id not in ('all', 'history', 'favorite', 'home')
             if use_lib:
                 query = f"""
-                    SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
+                    SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
                            b.banner_image, b.banner_updated_at,
                            b.file_path, p.pages_read, p.is_completed,
                            CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
@@ -469,7 +446,7 @@ class BookRepository:
                 cursor.execute(query, (user_id, user_id, series_name, library_id, *perm_params))
             else:
                 query = f"""
-                    SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
+                    SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
                            b.banner_image, b.banner_updated_at,
                            b.file_path, p.pages_read, p.is_completed,
                            CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,

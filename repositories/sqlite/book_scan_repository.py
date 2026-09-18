@@ -22,7 +22,7 @@ class BookScanRepository:
         return dict(row) if row else None
 
     @staticmethod
-    def update_book_scanned_metadata(db_type, book_id, series_name, cover_image, meta):
+    def update_book_scanned_metadata(db_type, book_id, series_name, cover_image, meta, banner_image=None):
         """스캐너 탐색 결과를 도서 메타데이터에 반영"""
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
@@ -33,19 +33,31 @@ class BookScanRepository:
                     series_name  = COALESCE(NULLIF(?, ''), series_name),
                     cover_image  = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND ? IS NOT NULL AND ? != '' THEN ? ELSE cover_image END,
                     cover_updated_at = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND ? != '' AND ? IS NOT NULL THEN CURRENT_TIMESTAMP ELSE cover_updated_at END,
+                    banner_image = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND ? IS NOT NULL AND ? != '' THEN ? ELSE banner_image END,
+                    banner_updated_at = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND ? IS NOT NULL AND ? != '' THEN CURRENT_TIMESTAMP ELSE banner_updated_at END,
                     author       = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), author) ELSE author END,
                     isbn         = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), isbn) ELSE isbn END,
                     publisher    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), publisher) ELSE publisher END,
                     link         = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), link) ELSE link END,
                     score        = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND ? != 0 THEN ? ELSE score END,
                     summary      = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), summary) ELSE summary END,
-                    release_date = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), release_date) ELSE release_date END
+                    release_date = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), release_date) ELSE release_date END,
+                    genre        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), genre) ELSE genre END,
+                    tags         = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), tags) ELSE tags END,
+                    books_lv     = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), books_lv) ELSE books_lv END,
+                    cover_artist = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), cover_artist) ELSE cover_artist END,
+                    teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), teams) ELSE teams END,
+                    locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), locations) ELSE locations END,
+                    characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), characters) ELSE characters END,
+                    localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), localized_series) ELSE localized_series END
                 WHERE id = ?
                 """,
                 (
                     series_name,
                     cover_image, cover_image, cover_image,
                     cover_image, cover_image,
+                    banner_image, banner_image, banner_image,
+                    banner_image, banner_image,
                     meta['author'],
                     meta.get('isbn', ''),
                     meta['publisher'],
@@ -53,6 +65,14 @@ class BookScanRepository:
                     meta['score'], meta['score'],
                     meta['summary'],
                     meta['release_date'],
+                    meta.get('genre', ''),
+                    meta.get('tags', ''),
+                    meta.get('books_lv', ''),
+                    meta.get('cover_artist', ''),
+                    meta.get('teams', ''),
+                    meta.get('locations', ''),
+                    meta.get('characters', ''),
+                    meta.get('localized_series', ''),
                     book_id
                 )
             )

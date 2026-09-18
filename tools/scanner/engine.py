@@ -24,9 +24,10 @@ from services.metadata_factory import MetadataFactory
 from utils.drive_helper import is_remote_path
 from tools.scanner.memory_helper import check_memory_exceeded
 from tools.scanner.path_utils import canonical_path, join_canonical
-from tools.scanner.db_writer import update_book_metadata, insert_new_book_v2, save_book_offsets, bulk_update_books, bulk_insert_books, bulk_save_book_offsets
+from tools.scanner.db_writer import update_book_metadata, insert_new_book_v2, save_book_offsets, bulk_update_books, clear_book_banners, bulk_insert_books, bulk_save_book_offsets
 from tools.scanner.tasks import process_folder_task, process_folder_covers, SUPPORTED_FORMATS, SUPPORTED_IMAGE_FORMATS, IMGDIR_VIRTUAL_FILENAME
 from tools.scanner.sync_detector import detect_and_handle_book_movement, handle_deleted_books
+from tools.scanner.cover import cleanup_unreferenced_generated_banners
 
 MAX_SCANNER_THREADS = 4
 DB_DIR = os.path.join(MEDIA_SERVER_DIR, 'db')
@@ -66,6 +67,7 @@ def _is_db_locked_error(exc):
 _METADATA_FIELD_MAX_LEN = {
     'title': 500,
     'series_name': 500,
+    'localized_series': 500,
     'author': 500,
     'isbn': 100,
     'publisher': 255,
@@ -168,6 +170,8 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
     db_meta_full = set()
     db_offsets_cached = set()
     db_files_cache = {}
+    db_banner_images = {}
+    banner_cache_cleanup_candidates = set()
     # 배너가 아직 없는 기존 도서 경로 집합 - 커버/메타데이터가 이미 다 채워져 있어 평소엔
     # "변경 없음"으로 스킵되는 파일이라도, 폴더에 새로 배너가 감지되면 이 집합을 근거로
     # 스킵을 풀어 배너만이라도 반영되게 한다(공유 드라이브 담당자가 나중에 배너만 추가하는
@@ -177,6 +181,9 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
         norm_path = canonical_path(row['file_path'])
         db_books[norm_path] = row['id']
         db_files_cache[norm_path] = (row['file_mtime'] or 0.0, row['file_size'] or 0)
+        db_banner_images[norm_path] = row['banner_image']
+        if row['banner_image']:
+            banner_cache_cleanup_candidates.add(row['banner_image'])
         if row['has_offsets'] == 1:
             db_offsets_cached.add(norm_path)
         if (row['cover_image'] and not row['cover_image'].startswith('series_') and
@@ -364,11 +371,20 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     _clamp_text(meta.get('teams', ''), _METADATA_FIELD_MAX_LEN['teams']),
                     _clamp_text(meta.get('locations', ''), _METADATA_FIELD_MAX_LEN['locations']),
                     _clamp_text(meta.get('characters', ''), _METADATA_FIELD_MAX_LEN['characters']),
+                    _clamp_text(meta.get('localized_series', ''), _METADATA_FIELD_MAX_LEN['localized_series']),
                     d.get('file_mtime', 0.0), d.get('file_size', 0),
                     canonical_path(d['full_path'])
                 ))
             if update_data:
                 bulk_update_books(cur, update_data, force=force)
+
+            clear_banner_paths = [
+                canonical_path(d['full_path'])
+                for d in upd_list
+                if d.get('clear_banner')
+            ]
+            if clear_banner_paths:
+                clear_book_banners(cur, library_id, clear_banner_paths)
             
         if ins_list:
             insert_data = []
@@ -399,6 +415,7 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     _clamp_text(meta.get('teams', ''), _METADATA_FIELD_MAX_LEN['teams']),
                     _clamp_text(meta.get('locations', ''), _METADATA_FIELD_MAX_LEN['locations']),
                     _clamp_text(meta.get('characters', ''), _METADATA_FIELD_MAX_LEN['characters']),
+                    _clamp_text(meta.get('localized_series', ''), _METADATA_FIELD_MAX_LEN['localized_series']),
                     d.get('file_mtime', 0.0), d.get('file_size', 0)
                 ))
             bulk_insert_books(cur, insert_data)
@@ -573,7 +590,7 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
 
     with ThreadPoolExecutor(max_workers=threads_to_use) as executor:
         futures = {
-            executor.submit(process_folder_task, root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote, library_id, db_files_cache, t_path, file_ids, db_type, db_books): root
+            executor.submit(process_folder_task, root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote, library_id, db_files_cache, t_path, file_ids, db_type, db_books, db_banner_missing, db_banner_images): root
             for root, files, t_path, file_ids in tasks
         }
         
@@ -600,10 +617,18 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                 batch_item_count = 0
                 for item in res['results']:
                     full_path = item['full_path']
-                    # 이 파일 자체(커버/오프셋/메타)는 변경이 없어 평소엔 건너뛰지만, 이번 스캔에서
-                    # 배너가 새로 감지됐고 DB에는 아직 배너가 없는 기존 도서라면 스킵을 풀어
-                    # 배너만이라도 반영한다.
-                    banner_only_update = bool(item.get('banner_image')) and full_path in db_banner_missing
+                    old_banner_image = db_banner_images.get(canonical_path(full_path))
+                    banner_image = item.get('banner_image')
+                    clear_banner = bool(item.get('clear_banner'))
+                    # 책 파일은 그대로여도 배너 원본이 변경/삭제됐으면 일반 스캔에서
+                    # 해당 책의 DB 배너만 갱신하거나 지운다.
+                    banner_only_update = bool(
+                        full_path in db_books
+                        and (
+                            clear_banner
+                            or (banner_image and banner_image != old_banner_image)
+                        )
+                    )
                     if item['skip'] and not banner_only_update:
                         continue
 
@@ -612,14 +637,24 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     series_name = item['series_name']
                     title = item.get('title')
                     cover_image = item['cover_image']
-                    banner_image = item.get('banner_image')
                     offsets_data = item['offsets_data']
                     is_offset_only = item.get('offset_only', False)
+                    item_meta = item.get('merged_meta')
+                    if not isinstance(item_meta, dict):
+                        item_meta = merged_meta
 
                     if full_path in db_books:
+                        if banner_only_update:
+                            if old_banner_image:
+                                banner_cache_cleanup_candidates.add(old_banner_image)
+                            if banner_image and banner_image != old_banner_image:
+                                # If metadata is locked, the DB writer will retain
+                                # the old reference; the final reference check will
+                                # safely remove this newly generated orphan.
+                                banner_cache_cleanup_candidates.add(banner_image)
                         pending_updates.append({
                             "action": "update", "library_id": library_id, "is_offset_only": is_offset_only, "full_path": full_path,
-                            "cover_image": cover_image, "banner_image": banner_image, "merged_meta": merged_meta, "offsets_data": offsets_data,
+                            "cover_image": cover_image, "banner_image": banner_image, "clear_banner": clear_banner, "merged_meta": item_meta, "offsets_data": offsets_data,
                             "filename": filename, "series_name": series_name, "file_mtime": item.get('file_mtime', 0.0), "file_size": item.get('file_size', 0)
                         })
                     else:
@@ -627,15 +662,15 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                             "action": "insert", "library_id": library_id, "full_path": full_path,
                             "filename": filename, "file_format": file_format, "series_name": series_name,
                             "title": title,
-                            "cover_image": cover_image, "banner_image": banner_image, "merged_meta": merged_meta, "offsets_data": offsets_data,
+                            "cover_image": cover_image, "banner_image": banner_image, "merged_meta": item_meta, "offsets_data": offsets_data,
                             "file_mtime": item.get('file_mtime', 0.0), "file_size": item.get('file_size', 0)
                         })
                         detected_new_books.append({
                             'title': title or os.path.splitext(filename)[0],
                             'file_path': full_path,
                             'series_name': series_name,
-                            'author': (merged_meta.get('author') if isinstance(merged_meta, dict) else '') or '',
-                            'publisher': (merged_meta.get('publisher') if isinstance(merged_meta, dict) else '') or '',
+                            'author': (item_meta.get('author') if isinstance(item_meta, dict) else '') or '',
+                            'publisher': (item_meta.get('publisher') if isinstance(item_meta, dict) else '') or '',
                             'format': file_format,
                         })
                         print(f"[Scanner-Process] Found new book: {filename} (Series: {series_name})")
@@ -776,6 +811,52 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
         conn.close()
         return
     print(f"[Scanner-DB] Deletion sync done db={db_type} library_id={library_id}")
+
+    # DB 변경을 확정한 뒤, 현재 어떤 도서에서도 참조하지 않는 배너 캐시만 제거한다.
+    # 다른 권이나 휴지통 항목이 같은 캐시를 참조하면 파일은 보존한다.
+    _commit_with_retry(conn, 'scan-deletion-sync')
+    if banner_cache_cleanup_candidates:
+        try:
+            referenced_banner_images = set()
+            reference_check_complete = True
+            # The cover directory is shared by general/adult libraries, whose
+            # numeric library IDs can overlap. Check both DBs before unlinking.
+            for reference_db_type in ('general', 'adult'):
+                reference_conn = None
+                reference_cursor = cursor
+                try:
+                    if reference_db_type != db_type:
+                        reference_conn = database.get_connection(reference_db_type)
+                        reference_cursor = reference_conn.cursor()
+                    reference_cursor.execute("""
+                        SELECT banner_image FROM books
+                        WHERE library_id = ? AND banner_image IS NOT NULL AND banner_image != ''
+                    """, (library_id,))
+                    referenced_banner_images.update(
+                        row['banner_image'] for row in reference_cursor.fetchall()
+                        if row['banner_image']
+                    )
+                except Exception as reference_err:
+                    # Fail closed: if either book DB cannot be checked, keep all
+                    # candidates rather than risk removing a file still in use.
+                    reference_check_complete = False
+                    print(f"[Scanner-Cleanup WARNING] Could not verify {reference_db_type} banner references: {reference_err}")
+                    break
+                finally:
+                    if reference_conn:
+                        try:
+                            reference_conn.close()
+                        except Exception:
+                            pass
+
+            if reference_check_complete:
+                cleanup_unreferenced_generated_banners(
+                    banner_cache_cleanup_candidates,
+                    referenced_banner_images,
+                    library_id,
+                )
+        except Exception as cleanup_err:
+            print(f"[Scanner-Cleanup WARNING] Banner cache cleanup skipped: {cleanup_err}")
 
     # Initialize checkpoint of library upon successful completion
     # path_scope가 있는 부분 스캔(scan-path)은 전체 라이브러리의 scanner_progress/scan_status를
@@ -925,4 +1006,3 @@ def _scan_library_covers_only_internal(conn, db_path, library_id, physical_path,
             
     _commit_with_retry(conn, 'cover-only-scan')
     print(f"[Scanner-Covers] Cover-only scan finally completed! (total {processed_count} covers updated)")
-

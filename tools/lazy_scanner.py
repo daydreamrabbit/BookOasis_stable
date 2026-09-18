@@ -830,7 +830,7 @@ def get_series_cover_fallback_single(series_name, parent_dir, filename, file_pat
     # 파싱이나 zip/pdf 직접 열기 같은 "실제 바이트가 필요한" 단계 직전에 조용히 포기한다.
     # 커버/메타데이터가 꼭 필요하면 정석은 "Drive에서 복사해오기"로 내 드라이브에 옮긴
     # 뒤 그 로컬 사본을 다시 스캔하는 것이다.
-    from utils.drive_helper import is_gdrive_url
+    from utils.drive_helper import is_gdrive_url, is_remote_path
 
     # 미리 파싱된 메타데이터가 없으면 여기서 직접 파싱 (단독 호출 시 하위 호환)
     if b64_keys_lower is None:
@@ -885,8 +885,11 @@ def get_series_cover_fallback_single(series_name, parent_dir, filename, file_pat
     if file_path.lower().endswith(('.zip', '.cbz')):
         try:
             from tools.scanner.metadata import parse_comicinfo_from_cbz
-            comicinfo_meta = parse_comicinfo_from_cbz(file_path)
-            if any(comicinfo_meta.get(k) for k in ('author', 'summary', 'publisher')):
+            comicinfo_meta = parse_comicinfo_from_cbz(
+                file_path,
+                is_remote=is_remote_path(file_path)
+            )
+            if any(comicinfo_meta.get(k) for k in ('author', 'summary', 'publisher', 'books_lv')):
                 print(f"[Lazy-Scanner] ComicInfo.xml 메타데이터 추출 성공: {filename}")
         except Exception as e:
             print(f"[Lazy-Scanner] ComicInfo.xml 파싱 중 예외 무시: {e}")

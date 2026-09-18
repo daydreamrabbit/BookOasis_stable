@@ -112,7 +112,7 @@ KNOWN_KAVITA_KEYS = {
 # services/content_rating_service.py의 _BOOKS_LV_LEVEL_MAP이 이미 인식하는 어휘로
 # 매핑한다(대소문자 무시). -1/0/1(NotApplicable/Unknown/RatingPending)은 의도적으로
 # 매핑하지 않고 'Unknown' 문자열을 그대로 저장 - 그 서비스가 "등급을 실제로 알 수
-# 없는 값"을 안전 기본값(18세)으로 처리하도록 설계돼 있어, 빈 문자열(전체이용가로
+# 없는 값"을 안전 기본값(최고 등급)으로 처리하도록 설계돼 있어, 빈 문자열(전체이용가로
 # 오인됨)을 저장하면 안 된다.
 KAVITA_AGE_RATING_MAP = {
     2: 'Early Childhood',
@@ -368,7 +368,7 @@ def parse_kavita_yaml(folder_path, files=None, is_remote=False):
         def _parse_age_rating(val):
             """Kavita AgeRating 정수 코드(문자열로 내려옴, 예: '3')를 books_lv 어휘로
             변환. 파싱 실패(빈 값/숫자 아님)나 인식 못 하는 코드는 'Unknown'을 반환해
-            content_rating_service.py가 안전 기본값(18세)으로 처리하게 한다."""
+            content_rating_service.py가 안전 기본값(최고 등급)으로 처리하게 한다."""
             if val is None or str(val).strip() == '':
                 return ''
             try:

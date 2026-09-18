@@ -6,8 +6,28 @@ from tools.scanner import (
     merge_local_metadata,
     extract_cover_from_b64,
     get_series_cover_fallback,
-    collect_zip_offsets_data
+    get_folder_banner,
+    collect_zip_offsets_data,
+    parse_comicinfo_from_cbz
 )
+from tools.scanner.metadata import merge_metadata_links
+
+_COMICINFO_SINGLE_BOOK_FIELDS = (
+    'author', 'localized_series', 'cover_artist', 'teams', 'locations', 'characters',
+    'publisher', 'summary', 'release_date', 'genre', 'tags', 'books_lv', 'link'
+)
+
+
+def _merge_comicinfo_metadata(target, comicinfo):
+    """Use archive metadata only for fields not supplied by a folder sidecar."""
+    if not isinstance(comicinfo, dict):
+        return
+    for key in _COMICINFO_SINGLE_BOOK_FIELDS:
+        if key == 'link' and comicinfo.get(key):
+            target[key] = merge_metadata_links(target.get(key, ''), comicinfo[key])
+        elif comicinfo.get(key) and not target.get(key):
+            target[key] = comicinfo[key]
+
 
 class BookScanService:
     @staticmethod
@@ -34,7 +54,7 @@ class BookScanService:
             original_file_path = file_path  # 시리즈명 등 "폴더 구조" 유도용 — gdrive면 아래에서 file_path만 로컬 캐시로 치환됨
             is_imgdir = (file_format == 'imgdir') or file_path.lower().endswith('.imgdir')
 
-            from utils.drive_helper import is_gdrive_url
+            from utils.drive_helper import is_gdrive_url, is_remote_path
             if is_gdrive_url(file_path):
                 from utils.drive_helper import resolve_gdrive_local_path
                 resolved = resolve_gdrive_local_path(file_path)
@@ -82,11 +102,41 @@ class BookScanService:
             print(f"[BookScanService] 부모 폴더 디렉토리 수색: '{parent_dir}'")
             
             # 2. 로컬 메타데이터 파일 탐색
-            merged_meta = merge_local_metadata(parent_dir)
+            is_remote_file = is_remote_path(file_path)
+            merged_meta = merge_local_metadata(parent_dir, is_remote=is_remote_file)
+
+            # 단일 도서 재스캔도 CBZ/ZIP 내부 ComicInfo.xml을 반영한다.
+            # rclone/FUSE 경로는 parser의 제한 시간 안에서만 읽는다.
+            if (file_format or '').lower() in ('cbz', 'zip'):
+                try:
+                    comicinfo = parse_comicinfo_from_cbz(file_path, is_remote=is_remote_file)
+                    _merge_comicinfo_metadata(merged_meta, comicinfo)
+                    if any(comicinfo.get(key) for key in _COMICINFO_SINGLE_BOOK_FIELDS):
+                        print(f"[BookScanService] ComicInfo.xml 메타데이터 추출 성공: {filename}")
+                except Exception as comicinfo_err:
+                    print(f"[BookScanService WARNING] ComicInfo.xml 파싱 실패(무시): {comicinfo_err}")
+
             # cover_b64_map은 파일별 Base64 커버 원본을 통째로 담고 있어 그대로 출력하면
             # 로그 파일 용량을 불필요하게 낭비하므로, 개수만 요약해서 남긴다.
             meta_summary = {k: (f"<{len(v)} items>" if k == 'cover_b64_map' else v) for k, v in merged_meta.items()}
             print(f"[BookScanService] 파싱된 로컬 메타데이터: {meta_summary}")
+
+            # 단일 도서 즉시 스캔도 일반 라이브러리 스캔과 같이 폴더 배너를 갱신한다.
+            # gdrive://는 실제 폴더가 아닌 가상 경로라 sidecar를 직접 읽지 않는다.
+            banner_image = None
+            if not (is_gdrive_url(original_file_path) or original_file_path.startswith(('gdrive:', 'gdrive://'))):
+                try:
+                    banner_image = get_folder_banner(
+                        file_path,
+                        parent_dir,
+                        banner_b64=merged_meta.get('banner_b64'),
+                        force=True,
+                        library_id=library_id
+                    )
+                    if banner_image:
+                        print(f"[BookScanService] 폴더 배너 확인 및 변환 완료: {banner_image}")
+                except Exception as banner_err:
+                    print(f"[BookScanService WARNING] 폴더 배너 처리 실패(무시): {banner_err}")
             
             # 3. 커버 이미지 결정 (Force 재추출 강제 지정)
             cover_image = None
@@ -126,7 +176,8 @@ class BookScanService:
                 book_id,
                 real_series_name,
                 cover_image,
-                merged_meta
+                merged_meta,
+                banner_image=banner_image
             )
             
             if offsets_data:
