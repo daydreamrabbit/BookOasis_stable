@@ -1096,7 +1096,7 @@ MCP 서버(`tools/mcp_server.py`)의 Tier B 쓰기 도구(`propose_bulk_book_met
 * **캐시 정책**: `no-store`, `no-cache`
 * **쿼리 파라미터**:
   * `type` (string, 선택): DB 스코프 (`general` / `adult` / `audiobook`, 기본값: `general`)
-* **갱신 주기**: 기본 웹 UI에서 2초마다 조회합니다. 기존 카테고리 스피너와 스캔 활동 패널이 같은 응답을 공유하므로 추가 폴링은 발생하지 않습니다.
+* **갱신 주기**: 페이지 진입 시 한 번 확인하고, 실행 중인 작업이 있을 때만 2초마다 조회합니다. 대기 상태에서는 반복 조회하지 않습니다. 기존 카테고리 스피너와 스캔 활동 패널이 같은 응답을 공유하므로 별도 폴링은 발생하지 않습니다.
 * **응답 예시 (200 OK)**:
   ```json
   {
@@ -1399,6 +1399,5 @@ MCP 서버(`tools/mcp_server.py`)의 Tier B 쓰기 도구(`propose_bulk_book_met
 * `DELETE /api/v1/collections/<int:collection_id>`: 컬렉션 삭제 (담긴 아이템도 함께 삭제)
 * `POST /api/v1/collections/<int:collection_id>/items`: 아이템 추가 (`book_id` / `series_name` / `audiobook_id` / `video_id` 중 하나)
 * `DELETE /api/v1/collections/<int:collection_id>/items/<int:item_id>`: 아이템 제거
-
 
 
