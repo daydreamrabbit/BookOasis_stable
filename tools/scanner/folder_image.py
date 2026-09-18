@@ -48,8 +48,21 @@ def find_common_banner(folder_path):
     if not folder_path:
         return None
 
+    try:
+        existing_names = {}
+        for filename in os.listdir(folder_path):
+            existing_names.setdefault(filename.lower(), filename)
+    except OSError:
+        return None
+
     for cand in COMMON_BANNER_NAMES:
-        cand_path = os.path.join(folder_path, cand)
-        if os.path.exists(cand_path) and os.path.getsize(cand_path) > 0:
-            return cand_path
+        actual_name = existing_names.get(cand.lower())
+        if not actual_name:
+            continue
+        cand_path = os.path.join(folder_path, actual_name)
+        try:
+            if os.path.isfile(cand_path) and os.path.getsize(cand_path) > 0:
+                return cand_path
+        except OSError:
+            continue
     return None

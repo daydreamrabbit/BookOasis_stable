@@ -4,6 +4,18 @@ db_writer_sqlite.py – SQLite 전용 스캐너 DB 업서트/배치 라이터
 """
 import os
 
+def clear_book_banners(cursor, library_id, full_paths):
+    """Clear scanner-owned banner references after their source disappears."""
+    paths = list(dict.fromkeys(path for path in full_paths if path))
+    if not paths:
+        return
+    cursor.executemany("""
+        UPDATE books
+        SET banner_image = NULL, banner_updated_at = CURRENT_TIMESTAMP
+        WHERE library_id = ? AND file_path = ? AND COALESCE(metadata_locked, 0) = 0
+    """, [(library_id, path) for path in paths])
+
+
 def update_book_metadata(cursor, full_path, cover_image, merged_meta, series_name='', force=False, banner_image=None):
     """Execute merge update for existing book info and local metadata in SQLite"""
     common_args = (
@@ -137,6 +149,7 @@ def bulk_update_books(cursor, update_data_list, force=False):
                 teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), teams) ELSE teams END,
                 locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), locations) ELSE locations END,
                 characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), characters) ELSE characters END,
+                localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), localized_series) ELSE localized_series END,
                 file_mtime   = ?,
                 file_size    = ?
             WHERE file_path = ?
@@ -168,6 +181,7 @@ def bulk_update_books(cursor, update_data_list, force=False):
                 teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), teams) ELSE teams END,
                 locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), locations) ELSE locations END,
                 characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), characters) ELSE characters END,
+                localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), localized_series) ELSE localized_series END,
                 file_mtime   = ?,
                 file_size    = ?
             WHERE file_path = ?
@@ -180,8 +194,8 @@ def bulk_insert_books(cursor, insert_data_list):
     if not insert_data_list: return
     cursor.executemany("""
         INSERT INTO books
-        (library_id, title, series_name, author, isbn, file_path, file_format, total_pages, cover_image, banner_image, publisher, link, score, summary, release_date, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, file_mtime, file_size, is_deleted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        (library_id, title, series_name, author, isbn, file_path, file_format, total_pages, cover_image, banner_image, publisher, link, score, summary, release_date, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, localized_series, file_mtime, file_size, is_deleted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(file_path) DO UPDATE SET
             library_id   = EXCLUDED.library_id,
             is_deleted   = 0,
@@ -189,6 +203,7 @@ def bulk_insert_books(cursor, insert_data_list):
             series_name  = EXCLUDED.series_name,
             cover_image  = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(NULLIF(EXCLUDED.cover_image, ''), books.cover_image) ELSE books.cover_image END,
             banner_image = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(NULLIF(EXCLUDED.banner_image, ''), books.banner_image) ELSE books.banner_image END,
+            localized_series = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(NULLIF(EXCLUDED.localized_series, ''), books.localized_series) ELSE books.localized_series END,
             file_mtime   = EXCLUDED.file_mtime,
             file_size    = EXCLUDED.file_size
     """, insert_data_list)

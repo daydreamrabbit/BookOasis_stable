@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Helpers for presenting per-book metadata as series-level detail metadata."""
+import re
 
 
 def book_metadata_exists_sql(book_alias='b'):
@@ -14,6 +15,7 @@ def book_metadata_exists_sql(book_alias='b'):
         'author', 'isbn', 'publisher', 'link', 'release_date', 'summary',
         'genre', 'tags', 'books_lv', 'publication_status', 'cover_artist',
         'teams', 'locations', 'characters', 'series_alias', 'title_alias',
+        'localized_series',
     )
     conditions = []
     for field in populated_fields:
@@ -35,3 +37,55 @@ def book_metadata_exists_sql(book_alias='b'):
           AND ({metadata_book}.is_deleted = 0 OR {metadata_book}.is_deleted IS NULL)
           AND ({' OR '.join(conditions)})
     )"""
+
+
+def merge_series_metadata_rows(rows):
+    """Merge metadata stored on different volumes of one series.
+
+    The first row is expected to be the deterministic, summary-preferred row
+    selected by the repository. Singular fields fall back to the first volume
+    that has a value; ratings use the most restrictive explicit value; links
+    are collected from every volume so detail renderers can show all sources.
+    """
+    normalized_rows = [dict(row) for row in (rows or []) if row]
+    if not normalized_rows:
+        return None
+
+    result = dict(normalized_rows[0])
+    fallback_fields = (
+        'author', 'isbn', 'publisher', 'score', 'summary', 'genre', 'tags',
+        'publication_status', 'cover_artist', 'teams', 'locations',
+        'characters', 'series_alias', 'localized_series',
+    )
+    for field in fallback_fields:
+        if result.get(field) not in (None, ''):
+            continue
+        result[field] = next(
+            (row.get(field) for row in normalized_rows if row.get(field) not in (None, '')),
+            result.get(field),
+        )
+
+    links = []
+    seen_links = set()
+    for row in normalized_rows:
+        for link in re.split(r'[,;\r\n]+', str(row.get('link') or '')):
+            link = link.strip()
+            key = link.casefold()
+            if link and key not in seen_links:
+                seen_links.add(key)
+                links.append(link)
+    result['link'] = '\n'.join(links)
+
+    # A series may contain mixed ratings. Do not let the representative row
+    # hide a more restrictive rating from another volume.
+    rated_rows = [row for row in normalized_rows if row.get('books_lv') not in (None, '')]
+    if rated_rows:
+        from services.content_rating_service import ContentRatingService
+
+        highest_rated_row = max(
+            rated_rows,
+            key=lambda row: ContentRatingService.normalize_books_lv(row.get('books_lv')),
+        )
+        result['books_lv'] = highest_rated_row['books_lv']
+
+    return result

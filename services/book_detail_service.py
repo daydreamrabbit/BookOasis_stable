@@ -286,6 +286,7 @@ class BookDetailService:
         meta = {
             'series_name': series_name,
             'series_alias': _val(meta_row, 'series_alias', ''),
+            'localized_series': next((b.get('localized_series') for b in books_rows if b.get('localized_series')), ''),
             'author'   : _val(meta_row, 'author',    '-'),
             'isbn'     : _val(meta_row, 'isbn',      ''),
             'web_id'   : '',

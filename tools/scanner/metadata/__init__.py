@@ -85,6 +85,20 @@ def normalize_metadata_list_field(value):
     return ', '.join(normalized)
 
 
+def merge_metadata_links(*values):
+    """Combine URL fields from metadata sources, preserving order and removing duplicates."""
+    links = []
+    seen = set()
+    for value in values:
+        for link in re.split(r'[,;\r\n]+', str(value or '')):
+            link = link.strip()
+            key = link.casefold()
+            if link and key not in seen:
+                seen.add(key)
+                links.append(link)
+    return '\n'.join(links)
+
+
 def is_consonant_folder(foldername):
     """Determine if folder name is initial consonant/index folder (Korean, English, numeric, etc.)"""
     foldername = foldername.strip()
@@ -117,6 +131,10 @@ def _merge_value(target, key, value):
     if key == 'cover_b64_map':
         if isinstance(value, dict) and value:
             target[key].update(value)
+        return
+
+    if key == 'link':
+        target[key] = merge_metadata_links(target.get(key, ''), value)
         return
 
     if key == 'score':
