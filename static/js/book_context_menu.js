@@ -6,7 +6,7 @@ import { loadBooksList, loadReadingHistory } from './book_list.js';
 import { loadDashboardData } from './dashboard.js?v=20260917-home-widget-plugin-ui-v1';
 import { hideFloatingMenu, isFloatingMenuOpen, positionMenuAtPoint } from './context_menu_manager.js';
 import { clearBookSelection, getSelectedBookTargets, isBookCardSelected } from './book_selection.js';
-import { refreshSystemStatus } from './scan_activity_status.js';
+import { refreshSystemStatus } from './scan_activity_status.js?v=20260918-active-only-scan-poll-v1';
 
 let currentTargetBook = null;
 let contextMenuSuppressUntil = 0;

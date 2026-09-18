@@ -2,7 +2,9 @@
 import { state } from './state.js';
 import { parseServerDateTime } from './utils/time.js';
 
-let statusIntervalId = null;
+let statusTimerId = null;
+let statusRequestInFlight = false;
+let statusRefreshPending = false;
 let wasScanningPrevious = false;
 let lastActiveLibIds = new Set();
 let lastIsHeaderScanning = false;
@@ -265,24 +267,49 @@ window.addEventListener('library:categories-rendered', () => {
 });
 
 export function startSystemStatusPolling() {
-  if (statusIntervalId) return;
+  if (refreshStatusPoll) return;
 
   const poll = async () => {
+    if (statusTimerId) {
+      clearTimeout(statusTimerId);
+      statusTimerId = null;
+    }
+    if (statusRequestInFlight) {
+      statusRefreshPending = true;
+      return;
+    }
+
+    statusRequestInFlight = true;
+    let keepPolling = wasScanningPrevious;
     try {
       const res = await fetch(`/api/system/status?type=${state.currentLibraryType}`);
       const data = await res.json();
+      keepPolling = Boolean(data?.success && data?.is_active);
       updateCategoryScanSpinners(data);
       renderScanActivity(data);
     } catch (err) {
       console.error('[ScanSpinner] 상태 조회 실패:', err);
+    } finally {
+      statusRequestInFlight = false;
+      if (statusRefreshPending) {
+        statusRefreshPending = false;
+        poll();
+      } else if (keepPolling) {
+        statusTimerId = setTimeout(poll, 2000);
+      }
     }
   };
 
   refreshStatusPoll = poll;
-  // 최초 1회 즉시 실행 후 2초 주기 반응형 폴링
+  // 페이지 진입 시 진행 중인 작업이 있는지만 한 번 확인한다. 작업 중일 때만 2초마다 조회한다.
   poll();
-  statusIntervalId = setInterval(poll, 2000);
 }
+
+window.addEventListener('bookoasis:scan-queued', () => refreshStatusPoll?.());
+window.addEventListener('focus', () => refreshStatusPoll?.());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshStatusPoll?.();
+});
 
 // 스크립트 로드 시 즉시 시작
 if (document.readyState === 'loading') {

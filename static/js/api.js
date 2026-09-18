@@ -11,6 +11,12 @@ async function safeFetch(url, options = {}) {
   return res;
 }
 
+async function finishScanRequest(res) {
+  const data = await res.json();
+  if (data?.success) window.dispatchEvent(new Event('bookoasis:scan-queued'));
+  return data;
+}
+
 export async function fetchLibraries(type) {
   const res = await safeFetch(`/api/media/libraries?type=${type}&_=${Date.now()}`, {cache: 'no-store'});
   return res.json();
@@ -367,7 +373,7 @@ export async function triggerLibraryScan(type, libraryId, force = false) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function triggerAllLibrariesScan(type, force = false, groupId = null) {
@@ -381,7 +387,7 @@ export async function triggerAllLibrariesScan(type, force = false, groupId = nul
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function triggerLibraryCoversScan(type, libraryId) {
@@ -391,7 +397,7 @@ export async function triggerLibraryCoversScan(type, libraryId) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function triggerLibraryLazyScan(type, libraryId) {
@@ -401,7 +407,7 @@ export async function triggerLibraryLazyScan(type, libraryId) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function triggerBooksLazyScan(type, bookIds) {
@@ -410,7 +416,7 @@ export async function triggerBooksLazyScan(type, bookIds) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, book_ids: bookIds })
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function triggerSeriesLazyScan(type, libraryId, seriesName) {
@@ -419,7 +425,7 @@ export async function triggerSeriesLazyScan(type, libraryId, seriesName) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, library_id: libraryId, series_name: seriesName })
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function cancelLibraryScan(type, libraryId) {
@@ -429,7 +435,7 @@ export async function cancelLibraryScan(type, libraryId) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function updateLibrarySchedule(type, libraryId, cronSchedule, vfsRefresh = 'false', rcloneRcUrl = '') {
@@ -646,7 +652,7 @@ export async function triggerLazyScan() {
   const res = await fetch('/api/media/settings/trigger-lazy-scan', {
     method: 'POST'
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 // "스마트 추천" 화면에 플러그인이 덧붙이는 섹션 데이터 조회 (smart_recommend_widget 계약).

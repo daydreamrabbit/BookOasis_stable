@@ -7,7 +7,7 @@ import { buildFallbackCoverUrl, getBookCoverSrc, buildTextCoverDataUri, coverAli
 import { stripLeadingBracketTags, middleTruncateTitle } from './series_display.js';
 import { initGridPruning, resetGridPruning, notifyCardsAppended, notifyCardsPrepended } from './grid_pruning.js';
 import { clearBookSelection, syncBookSelectionCard } from './book_selection.js';
-import './scan_activity_status.js';
+import './scan_activity_status.js?v=20260918-active-only-scan-poll-v1';
 import './account_menu.js';
 import './category_info_popover.js';
 
