@@ -306,6 +306,22 @@ class BookDetailService:
             'banner_image': get_cover_image_with_t(final_banner, banner_updated) if final_banner else ''
         }
 
+        # 그리드 카드 대신 상세화면 헤더에서만 "메타데이터 미연결"을 표시하기로 했으므로
+        # (그리드에서는 카드 개수가 많아 시각적 잡음이 컸음), 시리즈 목록 조회의
+        # book_metadata_exists_sql()과 동일한 판정 기준(제목/경로/커버/잠금 필드 제외)을
+        # 여기서도 그대로 따른다 - 이미 로드된 meta_row 하나만 보면 된다(대표 메타 행이
+        # summary 채워진 쪽을 우선 선택하므로, 그 행에 값이 하나도 없으면 시리즈 전체에
+        # 실제 메타데이터가 없다고 봐도 무방하다).
+        _metadata_fields = (
+            'author', 'isbn', 'publisher', 'link', 'summary', 'genre', 'tags',
+            'books_lv', 'publication_status', 'cover_artist', 'teams', 'locations',
+            'characters', 'series_alias',
+        )
+        meta['has_metadata'] = 1 if meta_row and (
+            any(str(meta_row.get(field) or '').strip() not in ('', '등록된 설명이 없습니다.') for field in _metadata_fields)
+            or float(meta_row.get('score') or 0) != 0
+        ) else 0
+
         from services.content_rating_service import ContentRatingService
         effective_level = ContentRatingService.compute_effective_level(meta['books_lv'], meta['genre'], meta['tags'])
         meta['content_rating_level'] = effective_level

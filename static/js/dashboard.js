@@ -182,6 +182,55 @@ export function refreshHomeWidgetDividers() {
 }
 window.refreshHomeWidgetDividers = refreshHomeWidgetDividers;
 
+// 모바일에서 위젯 카드 전체가 Sortable 드래그 대상이라(plugin-card-header가
+// pointer-events:none인 이유 참고) 손가락 스크롤 제스처가 그대로 드래그 시작으로 잡혀
+// 스크롤이 안 되는 문제가 있었다 - 기본을 "잠금"으로 두고 명시적으로 해제해야만
+// Sortable이 활성화되게 한다. 기기별 UI 편집 상태일 뿐 서버 동기화 대상이 아니므로
+// localStorage에만 남긴다(HOME_WIDGET_LAYOUT처럼 기기 간 동기화가 필요한 데이터가 아님).
+const HOME_WIDGET_LOCK_STORAGE_KEY = 'bookoasis:homeWidgetsLocked';
+
+function isHomeWidgetsLocked() {
+  try {
+    const raw = localStorage.getItem(HOME_WIDGET_LOCK_STORAGE_KEY);
+    return raw === null ? true : raw === '1';
+  } catch (e) {
+    return true;
+  }
+}
+
+function applyHomeWidgetLockUi(locked) {
+  const btn = document.getElementById('home-widget-lock-toggle');
+  if (!btn) return;
+  btn.setAttribute('data-locked', locked ? '1' : '0');
+  btn.classList.toggle('home-widget-lock-toggle--unlocked', !locked);
+  btn.innerHTML = locked
+    ? '<i class="fa-solid fa-lock"></i> <span>배치 잠금</span>'
+    : '<i class="fa-solid fa-lock-open"></i> <span>배치 편집 중</span>';
+}
+
+function setHomeWidgetsLocked(locked) {
+  try {
+    localStorage.setItem(HOME_WIDGET_LOCK_STORAGE_KEY, locked ? '1' : '0');
+  } catch (e) {
+    // localStorage 접근 불가(프라이빗 모드 등) - 이번 세션 동안만 UI에 반영
+  }
+  applyHomeWidgetLockUi(locked);
+  const stack = document.getElementById('home-widget-stack');
+  if (stack && stack.__homeSortable) {
+    stack.__homeSortable.option('disabled', locked);
+  }
+}
+
+if (!window.__homeWidgetLockDelegationBound) {
+  document.addEventListener('click', (event) => {
+    const toggleBtn = event.target.closest('#home-widget-lock-toggle');
+    if (!toggleBtn) return;
+    event.preventDefault();
+    setHomeWidgetsLocked(!isHomeWidgetsLocked());
+  });
+  window.__homeWidgetLockDelegationBound = true;
+}
+
 // 서버가 이미 렌더해둔 순서를 그대로 인정하고, fetch/DOM 재배치 없이 상호작용(Sortable,
 // 위젯 데이터 fetch)만 붙인다. 플러그인 카드는 서버가 껍데기(제목/아이콘/자리)까지는
 // 그려뒀지만 콘텐츠(get_dashboard_data)는 아직 없으므로 그것만 병렬로 채운다.
@@ -207,6 +256,7 @@ function consumeSsrHomeLayout(stack, requestToken) {
     stack.__homeSortable = Sortable.create(stack, {
       animation: 180,
       ghostClass: 'dragging',
+      disabled: isHomeWidgetsLocked(),
       onEnd: function () {
         const order = getPresentWidgetOrder(stack);
         lastHomeWidgetOrder = order;
@@ -217,6 +267,7 @@ function consumeSsrHomeLayout(stack, requestToken) {
       }
     });
   }
+  applyHomeWidgetLockUi(isHomeWidgetsLocked());
 
   const dataFetchPromises = [];
   stack.querySelectorAll('.home-widget-slot[data-widget-kind="plugin"]').forEach((el) => {
@@ -365,6 +416,7 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
     stack.__homeSortable = Sortable.create(stack, {
       animation: 180,
       ghostClass: 'dragging',
+      disabled: isHomeWidgetsLocked(),
       onEnd: function () {
         const order = getPresentWidgetOrder(stack);
         lastHomeWidgetOrder = order;
@@ -375,6 +427,7 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
       }
     });
   }
+  applyHomeWidgetLockUi(isHomeWidgetsLocked());
 
   renderHomeWidgetCatalog(data.catalog || []);
   stack.classList.remove('home-widget-stack--loading');

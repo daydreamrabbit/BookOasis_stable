@@ -3467,6 +3467,20 @@ body {
     margin-left: auto;
 }
 
+.detail-metadata-missing-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.55rem;
+    border: 1px solid rgba(248, 113, 113, 0.55);
+    border-radius: 999px;
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
 .book-card-audiobook-completed {
     position: absolute;
     top: 8px;
@@ -3516,30 +3530,6 @@ body {
 
 .book-card-locked-badge i {
     font-size: 0.7rem;
-}
-
-.book-card-metadata-missing {
-    position: absolute;
-    right: 8px;
-    bottom: 8px;
-    z-index: 6;
-    box-sizing: border-box;
-    width: 24px;
-    height: 24px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(248, 113, 113, 0.55);
-    border-radius: 50%;
-    color: #f87171;
-    background: rgba(var(--app-panel-rgb), 0.78);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(4px);
-    pointer-events: none;
-}
-
-.book-card-metadata-missing i {
-    font-size: 0.72rem;
 }
 
 /* 카드 하단 메타 텍스트: 오디오북 챕터/이어읽기 진행률 */
@@ -4562,6 +4552,42 @@ body {
   opacity: 0.45;
   border: 1px dashed var(--app-accent) !important;
   background: color-mix(in srgb, var(--app-accent) 5%, transparent) !important;
+}
+
+/* 홈 화면 위젯 배치 잠금 토글 - 플러그인 배치 모드일 때만 보인다 (아래 인접 형제 선택자로
+   #home-widget-stack의 --plugin-mode 클래스에 자동 연동). 모바일에서 위젯 카드 전체가
+   Sortable 드래그 대상이라 잠금 없이는 스크롤 제스처가 드래그로 오인되는 문제를 막는다. */
+#home-widget-lock-bar {
+  display: none;
+}
+
+.home-widget-stack--plugin-mode + #home-widget-lock-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.6rem;
+}
+
+.home-widget-lock-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--app-text-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.home-widget-lock-toggle:hover {
+  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
+}
+
+.home-widget-lock-toggle--unlocked {
+  border-color: color-mix(in srgb, var(--app-accent) 55%, transparent);
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 10%, transparent);
 }
 
 /* 홈 화면 플러그인 배치 모드 - "+ 위젯 추가" 카탈로그 (아직 레이아웃에 없는 home_widget 플러그인) */

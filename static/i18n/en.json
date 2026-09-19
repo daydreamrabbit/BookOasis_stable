@@ -371,6 +371,7 @@
     "toggle_fav_series": "Toggle Favorite Series",
     "edit_info": "Edit Info",
     "no_description": "No description available.",
+    "metadata_missing": "No metadata",
     "btn_recommend_match": "Auto Match",
     "btn_search_meta": "Search Metadata",
     "edit_title": "Edit Book Info",
@@ -440,7 +441,9 @@
     "add_to_collection": "Add to Collection",
     "add_series_to_collection": "Add This Series to Collection",
     "mark_as_unread": "Mark as Unread (0%)",
-    "mark_series_as_unread": "Mark Entire Series as Unread (0%)"
+    "mark_series_as_unread": "Mark Entire Series as Unread (0%)",
+    "mark_as_read": "Mark as Read (Completed)",
+    "mark_series_as_read": "Mark Entire Series as Read (Completed)"
   },
   "viewer": {
     "tab_nav": "Nav",

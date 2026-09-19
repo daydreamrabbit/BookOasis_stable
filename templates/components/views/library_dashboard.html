@@ -103,6 +103,18 @@
 {% endif %}
     </div>
 
+    <!-- 위젯 배치 잠금 토글 - 모바일에서 위젯 전체가 Sortable 드래그 핸들이라(plugin-card-header
+         참고) 손가락으로 스크롤하려던 제스처가 그대로 드래그 시작으로 잡혀버리는 문제가 있었다.
+         기본을 "잠금"으로 두고 명시적으로 해제해야만 재배치가 가능하게 해서, 평소 스크롤은
+         절대 드래그로 오인되지 않도록 한다. 가시성은 #home-widget-stack의
+         home-widget-stack--plugin-mode 클래스에 연동된 CSS 인접 형제 선택자로만 제어한다
+         (JS가 모드 전환 시 그 클래스만 토글하면 이 바도 자동으로 같이 보이고/숨는다). -->
+    <div id="home-widget-lock-bar" class="home-widget-lock-bar">
+        <button type="button" id="home-widget-lock-toggle" class="home-widget-lock-toggle" data-locked="1" title="위젯 배치 잠금/해제">
+            <i class="fa-solid fa-lock"></i> <span>배치 잠금</span>
+        </button>
+    </div>
+
     <!-- 홈 화면 플러그인 배치 모드에서, 아직 추가하지 않은 home_widget 플러그인을 고르는 UI.
          서버가 최초 렌더 시 이미 채워두고(catalog), 이후 세션 전환/추가/제거 시에는
          dashboard.js의 renderHomeWidgetCatalog()가 /api/media/home-layout 결과로 다시 그린다. -->

@@ -265,13 +265,36 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
     coverAlignItem.style.display = (!isMultiSelection && isVolumeDetail) ? '' : 'none';
   }
 
-  const unreadLabel = document.querySelector('#ctx-unread-book span');
-  if (unreadLabel) {
-    unreadLabel.textContent = isMultiSelection
-      ? `선택한 ${selectedBooks.length}개 작품을 읽지 않은 상태로 변경 (0%)`
-      : context.markUnreadScope === 'series'
-      ? (window.i18n?.t('context_menu.mark_series_as_unread') || '이 시리즈 전체를 읽지 않은 상태로 변경 (0%)')
-      : (window.i18n?.t('context_menu.mark_as_unread') || '읽지 않은 상태로 변경 (0%)');
+  const readToggleItem = document.getElementById('ctx-unread-book');
+  const readToggleLabel = readToggleItem?.querySelector('span');
+  const readToggleIcon = readToggleItem?.querySelector('i');
+  if (readToggleItem && readToggleLabel) {
+    // 다중 선택이거나 영상 강좌(완독 처리 인프라 없음)일 때는 기존처럼 항상 "읽지 않음" 액션만 노출.
+    // 그 외 단일 대상은 현재 읽음 진행 여부(card.dataset.hasProgress)를 보고 "읽음/읽지 않음"을 토글.
+    const isVideoLibrary = state.currentLibraryType === 'video';
+    const showMarkAsRead = !isMultiSelection && !isVideoLibrary && context.hasProgress === false;
+
+    if (showMarkAsRead) {
+      readToggleItem.setAttribute('data-action', 'mark-read');
+      if (readToggleIcon) {
+        readToggleIcon.className = 'fa-solid fa-eye';
+        readToggleIcon.style.color = '#22c55e';
+      }
+      readToggleLabel.textContent = context.markUnreadScope === 'series'
+        ? (window.i18n?.t('context_menu.mark_series_as_read') || '이 시리즈 전체를 읽은 상태로 변경 (완독)')
+        : (window.i18n?.t('context_menu.mark_as_read') || '읽은 상태로 변경 (완독)');
+    } else {
+      readToggleItem.setAttribute('data-action', 'mark-unread');
+      if (readToggleIcon) {
+        readToggleIcon.className = 'fa-solid fa-eye-slash';
+        readToggleIcon.style.color = '#ef4444';
+      }
+      readToggleLabel.textContent = isMultiSelection
+        ? `선택한 ${selectedBooks.length}개 작품을 읽지 않은 상태로 변경 (0%)`
+        : context.markUnreadScope === 'series'
+        ? (window.i18n?.t('context_menu.mark_series_as_unread') || '이 시리즈 전체를 읽지 않은 상태로 변경 (0%)')
+        : (window.i18n?.t('context_menu.mark_as_unread') || '읽지 않은 상태로 변경 (0%)');
+    }
   }
   
   // 메타정보 검색 메뉴의 플러그인 활성 상태 동적 검사
@@ -595,6 +618,53 @@ export async function triggerMarkAsUnreadAction() {
 }
 
 window.triggerMarkAsUnreadAction = triggerMarkAsUnreadAction;
+
+// "읽지 않은 상태로 변경"의 대칭 액션. 다중 선택 시에는 상태가 혼재될 수 있어(일부만 완독 등)
+// 토글 자체를 노출하지 않으므로(showBookContextMenu 참고) 단일 대상만 처리한다.
+export async function triggerMarkAsReadAction() {
+  if (!currentTargetBook || !currentTargetBook.id) return;
+  const { id, title, markUnreadScope, seriesName, libraryId } = currentTargetBook;
+  const isSeriesScope = markUnreadScope === 'series';
+
+  import('./view_manager.js').then(async (vm) => {
+    try {
+      const res = await api.markBookAsRead(state.currentLibraryType, id, {
+        scope: isSeriesScope ? 'series' : 'book',
+        seriesName,
+        libraryId,
+      });
+      if (res.success) {
+        const targetLabel = isSeriesScope ? '시리즈 전체가' : '도서가';
+        vm.showToast(`"${title}" ${targetLabel} 읽은 상태(완독)로 변경되었습니다.`, 'success');
+        closeBookContextMenu();
+
+        if (state.currentLibraryId === 'home') {
+          await loadDashboardData();
+        } else if (state.currentLibraryId === 'history') {
+          await loadReadingHistory();
+        } else {
+          const detailView = document.getElementById('book-detail-view');
+          const isDetailViewOpen = !!detailView && detailView.style.display !== 'none';
+          if (isDetailViewOpen) {
+            const currentSeriesName = String(state.detailSeriesName || '').trim();
+            if (currentSeriesName) {
+              openBookDetail(null, currentSeriesName, libraryId || state.currentLibraryId);
+            }
+          } else {
+            await loadBooksList();
+          }
+        }
+      } else {
+        vm.showToast(`변경 실패: ${res.error}`, 'error');
+      }
+    } catch (err) {
+      console.error('도서 읽음 처리 API 에러:', err);
+      vm.showToast('서버 통신 중 오류가 발생했습니다.', 'error');
+    }
+  });
+}
+window.triggerMarkAsReadAction = triggerMarkAsReadAction;
+
 window.triggerBookContextPluginAction = triggerBookContextPluginAction;
 export { triggerSearchMetadataAction as triggerSearchAladinMetadataAction };
 
@@ -622,7 +692,12 @@ function resolveBookContextTarget(event) {
   const libraryId = Number.isFinite(parsedLibraryId) ? parsedLibraryId : null;
   const coverAlign = card.dataset?.coverAlign || 'center';
   const fileFormat = (card.dataset?.fileFormat || '').toLowerCase();
-  return { id: parsedId, title, isVolumeDetail, markUnreadScope, seriesName, libraryId, coverAlign, fileFormat };
+  // .book-card(ui.js)는 data-has-progress를 직접 갖고 있지만, 상세뷰의 .vol-grid-card/.volume-card는
+  // data-pages-read/data-is-completed만 있으므로 그걸로 동일하게 계산한다.
+  const hasProgress = card.dataset?.hasProgress !== undefined
+    ? card.dataset.hasProgress === '1'
+    : (card.dataset?.isCompleted === '1' || Number(card.dataset?.pagesRead || 0) > 0);
+  return { id: parsedId, title, isVolumeDetail, markUnreadScope, seriesName, libraryId, coverAlign, fileFormat, hasProgress };
 }
 
 // 카드별 개별 바인딩 누락/재렌더 타이밍 이슈가 있어도 우클릭 메뉴를 보장한다.
@@ -653,6 +728,7 @@ document.addEventListener('contextmenu', (event) => {
     libraryId: target.libraryId,
     coverAlign: target.coverAlign,
     fileFormat: target.fileFormat,
+    hasProgress: target.hasProgress,
     selectedBooks,
   });
 }, true);
@@ -888,6 +964,7 @@ if (!window.__bookContextActionBound) {
     if (action === 'add-series-to-collection') return window.triggerAddSeriesToCollectionAction?.();
     if (action === 'page-turn') return window.triggerPageTurnAction?.();
     if (action === 'mark-unread') return window.triggerMarkAsUnreadAction?.();
+    if (action === 'mark-read') return window.triggerMarkAsReadAction?.();
     if (action === 'cover-align') {
       const bookId = currentTargetBook?.id;
       const coverAlign = currentTargetBook?.coverAlign;

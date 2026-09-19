@@ -630,6 +630,42 @@ def mark_book_as_unread():
         print(f"[Unread API Error] {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@stream_bp.route('/api/media/read', methods=['POST'])
+@login_required
+def mark_book_as_read():
+    """도서를 읽은(완독) 상태로 변경 - /api/media/unread의 대칭 엔드포인트"""
+    try:
+        data = request.json or {}
+        db_type = data.get('db_type', 'general')
+        if not check_adult_permission(db_type):
+            return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
+        if db_type == 'video':
+            return jsonify({'success': False, 'error': '영상 강좌는 아직 완독 처리를 지원하지 않습니다.'}), 400
+        book_id = data.get('book_id')
+        scope = data.get('scope', 'book')
+        series_name = str(data.get('series_name') or '').strip()
+        library_id = data.get('library_id')
+        user_id = session.get('user_id', 1)
+
+        if book_id is None:
+            return jsonify({'success': False, 'error': 'book_id가 누락되었습니다.'}), 400
+        if scope not in ('book', 'series'):
+            return jsonify({'success': False, 'error': '지원하지 않는 완독 처리 범위입니다.'}), 400
+        if scope == 'series' and (not series_name or library_id is None):
+            return jsonify({'success': False, 'error': '시리즈명 또는 라이브러리 ID가 누락되었습니다.'}), 400
+
+        affected_count = ReadingProgressService.mark_read(
+            db_type,
+            book_id,
+            user_id=user_id,
+            series_name=series_name if scope == 'series' else None,
+            library_id=library_id if scope == 'series' else None,
+        )
+        return jsonify({'success': True, 'affected_count': affected_count, 'scope': scope})
+    except Exception as e:
+        print(f"[Read API Error] {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @stream_bp.route('/api/media/series/complete', methods=['POST'])
 @login_required
 def mark_series_as_completed():

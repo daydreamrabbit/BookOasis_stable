@@ -136,29 +136,105 @@ def get_permissions():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+def _apply_single_permission_change(change):
+    """change 1건({user_id, library_id, has_access, target_db})을 실제로 반영한다.
+    plugin_ 접두사 카테고리는 settings 키-값 저장소로, 나머지는 실제 라이브러리 권한 테이블로 간다
+    (기존 /update 엔드포인트의 분기를 그대로 옮긴 것 - bulk-update/copy-from-user와 공유)."""
+    user_id = change.get('user_id')
+    library_id = change.get('library_id')
+    has_access = 1 if change.get('has_access') else 0
+    target_db = change.get('target_db', 'general')
+
+    if user_id is None or library_id is None or str(library_id).strip() == '':
+        raise ValueError('user_id와 library_id는 필수 항목입니다.')
+
+    if target_db == 'plugin' or str(library_id).startswith('plugin_'):
+        safe_library_id = str(library_id).strip()
+        key_perm = f"PERM_CATEGORY_{user_id}_{safe_library_id}"
+        SettingsRepository.set_value(key_perm, str(has_access))
+    else:
+        UserRepository.update_category_permission(target_db, user_id, library_id, has_access)
+
+
+def _apply_permission_changes_bulk(changes):
+    """change 목록을 순차 적용하고 (applied_count, errors) 반환. DB가 general/audiobook/video/
+    plugin(설정 테이블)로 갈라져 있어 진짜 단일 트랜잭션은 못 묶으므로 best-effort 루프 +
+    실패 항목 개별 보고 방식을 쓴다 - 기존 열 전체선택이 암묵적으로 하던 것과 같은 의미론이다."""
+    applied = 0
+    errors = []
+    for idx, change in enumerate(changes or []):
+        try:
+            _apply_single_permission_change(change)
+            applied += 1
+        except Exception as e:
+            errors.append({'index': idx, 'error': str(e)})
+    return applied, errors
+
+
 @permission_bp.route('/api/admin/permissions/update', methods=['POST'])
 @admin_required
 def update_permission():
     """사용자별 특정 카테고리 접근 권한 토글 업데이트"""
     data = request.get_json() or {}
-    user_id = data.get('user_id')
-    library_id = data.get('library_id')
-    has_access = 1 if data.get('has_access') else 0
-    target_db = data.get('target_db', 'general') # 'general' or 'plugin'
-
-    if user_id is None or library_id is None or str(library_id).strip() == '':
-        return jsonify({'success': False, 'error': 'user_id와 library_id는 필수 항목입니다.'}), 400
 
     try:
-        if target_db == 'plugin' or str(library_id).startswith('plugin_'):
-            safe_library_id = str(library_id).strip()
-            key_perm = f"PERM_CATEGORY_{user_id}_{safe_library_id}"
-            SettingsRepository.set_value(key_perm, str(has_access))
-        else:
-            UserRepository.update_category_permission(target_db, user_id, library_id, has_access)
+        _apply_single_permission_change(data)
         return jsonify({'success': True, 'message': '권한 정보가 업데이트되었습니다.'})
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@permission_bp.route('/api/admin/permissions/bulk-update', methods=['POST'])
+@admin_required
+def bulk_update_permissions():
+    """여러 카테고리 권한 변경을 한 번의 요청으로 반영 (행/열 전체선택, 권한 복사 등에서 사용).
+    changes: [{user_id, library_id, has_access, target_db}, ...]"""
+    data = request.get_json() or {}
+    changes = data.get('changes')
+    if not isinstance(changes, list) or not changes:
+        return jsonify({'success': False, 'error': 'changes는 비어있지 않은 배열이어야 합니다.'}), 400
+
+    applied, errors = _apply_permission_changes_bulk(changes)
+    return jsonify({'success': True, 'applied': applied, 'errors': errors})
+
+
+@permission_bp.route('/api/admin/permissions/copy-from-user', methods=['POST'])
+@admin_required
+def copy_permissions_from_user():
+    """source_user_id의 현재 카테고리 권한 상태를 target_user_ids 각각에 그대로 복사한다."""
+    data = request.get_json() or {}
+    source_user_id = data.get('source_user_id')
+    target_user_ids = data.get('target_user_ids')
+    target_db = data.get('target_db', 'general')
+
+    if not source_user_id or not isinstance(target_user_ids, list) or not target_user_ids:
+        return jsonify({'success': False, 'error': 'source_user_id와 target_user_ids는 필수 항목입니다.'}), 400
+
+    try:
+        categories, permissions = _fetch_library_permissions(target_db, include_plugins=(target_db == 'general'))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    source_perms = permissions.get(str(source_user_id), {})
+    changes = []
+    for cat in categories:
+        key = f"{target_db}_{cat['id']}"
+        has_access = source_perms.get(key, True)
+        cat_target_db = cat.get('db_type') or target_db
+        for target_user_id in target_user_ids:
+            if str(target_user_id) == str(source_user_id):
+                continue
+            changes.append({
+                'user_id': target_user_id,
+                'library_id': cat['id'],
+                'has_access': has_access,
+                'target_db': cat_target_db,
+            })
+
+    applied, errors = _apply_permission_changes_bulk(changes)
+    return jsonify({'success': True, 'applied': applied, 'errors': errors})
 
 @permission_bp.route('/api/admin/permissions/update-adult', methods=['POST'])
 @admin_required

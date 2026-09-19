@@ -413,6 +413,26 @@ class ReadingProgressService:
         return len(book_ids)
 
     @staticmethod
+    def mark_read(db_type: str, book_id, user_id=1, series_name=None, library_id=None):
+        """도서(또는 시리즈 전체)를 현재 사용자 기준 완독(100%) 처리 - mark_unread의 대칭 동작.
+        video는 완독 처리 인프라가 아직 없어 지원하지 않는다 (호출측에서 사전에 걸러야 함)."""
+        if series_name and library_id is not None:
+            book_ids = ReadingProgressRepository.get_book_ids_by_series(db_type, series_name, library_id)
+        else:
+            book_ids = [book_id]
+
+        if not book_ids:
+            return 0
+
+        if db_type == 'audiobook':
+            total = 0
+            for target_id in book_ids:
+                total += ReadingProgressService.mark_audiobook_completed(target_id, user_id=user_id, track_ids=[])
+            return total
+
+        return ReadingProgressService.mark_books_completed(db_type, book_ids, user_id=user_id)
+
+    @staticmethod
     def mark_books_completed(db_type: str, book_ids, user_id=1):
         """여러 권을 현재 사용자 기준 완독 처리합니다."""
         if not book_ids:

@@ -115,11 +115,24 @@ class SeriesRepository:
                 except (ValueError, TypeError):
                     pass
             if role != 'admin' and user_id:
-                where.append(
-                    "EXISTS (SELECT 1 FROM user_category_permissions p "
-                    "WHERE p.library_id = s.library_id AND p.user_id = %s AND p.has_access = 1)"
+                # 커뮤니티에서 EXPLAIN으로 짚어준 문제: library_id마다 상관관계를 갖는
+                # EXISTS 서브쿼리를 두면 옵티마이저가 series_summary의
+                # (library_id, sort_series_name, representative_book_id) 인덱스를 ORDER BY용
+                # 정렬 스캔으로 못 쓰고 user_category_permissions를 드라이빙 테이블로 삼아
+                # 조합 전체를 훑은 뒤 Using temporary/filesort를 태운다 - 권한 있는
+                # library_id 목록은 보통 몇 개 안 되니 미리 뽑아서 정적인 IN 목록으로 넘기면
+                # library_id가 다시 인덱스 선두 컬럼에 대한 단순 조건이 되어 LIMIT과 함께
+                # 인덱스 정렬 순서를 그대로 쓸 수 있다.
+                cursor.execute(
+                    "SELECT library_id FROM user_category_permissions WHERE user_id = %s AND has_access = 1",
+                    (user_id,)
                 )
-                params.append(user_id)
+                allowed_library_ids = [int(row['library_id']) for row in cursor.fetchall()]
+                if not allowed_library_ids:
+                    return []
+                placeholders = ','.join(['%s'] * len(allowed_library_ids))
+                where.append(f"s.library_id IN ({placeholders})")
+                params.extend(allowed_library_ids)
 
             sql = f"""
                 SELECT b.id, b.series_name, b.series_alias, b.title, b.title_alias,
@@ -183,11 +196,17 @@ class SeriesRepository:
                 except (ValueError, TypeError):
                     pass
             if role != 'admin' and user_id:
-                where.append(
-                    "EXISTS (SELECT 1 FROM user_category_permissions p "
-                    "WHERE p.library_id = s.library_id AND p.user_id = %s AND p.has_access = 1)"
+                # _fetch_summary_rows와 동일한 이유로 상관관계 EXISTS 대신 정적 IN 목록 사용.
+                cursor.execute(
+                    "SELECT library_id FROM user_category_permissions WHERE user_id = %s AND has_access = 1",
+                    (user_id,)
                 )
-                params.append(user_id)
+                allowed_library_ids = [int(row['library_id']) for row in cursor.fetchall()]
+                if not allowed_library_ids:
+                    return {'total_series_count': 0, 'total_book_count': 0}
+                placeholders = ','.join(['%s'] * len(allowed_library_ids))
+                where.append(f"s.library_id IN ({placeholders})")
+                params.extend(allowed_library_ids)
 
             sql = """
                 SELECT COUNT(*) AS total_series_count,

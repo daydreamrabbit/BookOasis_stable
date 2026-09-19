@@ -183,17 +183,29 @@ class OpdsRepository:
             )
             params.extend([like_query, like_query, like_query])
 
-        if role != 'admin' and user_id is not None:
-            where.append(
-                "(NOT EXISTS (SELECT 1 FROM user_category_permissions p WHERE p.user_id = %s) "
-                "OR EXISTS (SELECT 1 FROM user_category_permissions p WHERE p.library_id = b.library_id AND p.user_id = %s AND p.has_access = 1))"
-            )
-            params.extend([int(user_id), int(user_id)])
-
         where_sql = ' AND '.join(where)
         conn = database.get_connection(db_type)
         try:
             cursor = conn.cursor()
+
+            if role != 'admin' and user_id is not None:
+                # library_id에 상관관계를 건 EXISTS는 series_repository의 _fetch_summary_rows에서
+                # 확인된 것과 동일하게 옵티마이저가 ORDER BY 인덱스 기반 조기 LIMIT을 못 쓰게 만들
+                # 수 있다 - 권한 행을 먼저 조회해 정적 IN 목록으로 바꾼다. 권한 테이블에 해당
+                # 사용자 행이 아예 없으면(과거 NOT EXISTS 분기와 동일하게) 제한 없이 전체 허용.
+                cursor.execute(
+                    "SELECT library_id, has_access FROM user_category_permissions WHERE user_id = %s",
+                    (int(user_id),)
+                )
+                perm_rows = cursor.fetchall()
+                if perm_rows:
+                    allowed_library_ids = [int(row['library_id']) for row in perm_rows if int(row['has_access'] or 0) == 1]
+                    if not allowed_library_ids:
+                        return [], 0
+                    placeholders = ','.join(['%s'] * len(allowed_library_ids))
+                    where_sql += f" AND b.library_id IN ({placeholders})"
+                    params.extend(allowed_library_ids)
+
             cursor.execute(
                 f"SELECT COUNT(*) AS total FROM books b WHERE {where_sql}",
                 tuple(params)

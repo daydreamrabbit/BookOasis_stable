@@ -181,11 +181,14 @@ export function bindDetailInteractions() {
     const bookId = Number.parseInt(card.getAttribute('data-book-id') || '', 10);
     const coverAlign = card.getAttribute('data-cover-align') || 'center';
     const fileFormat = (card.getAttribute('data-file-format') || '').toLowerCase();
+    const isCompleted = card.getAttribute('data-is-completed') === '1';
+    const pagesRead = Number(card.getAttribute('data-pages-read') || 0);
+    const hasProgress = isCompleted || pagesRead > 0;
     if (!Number.isFinite(bookId) || bookId <= 0) return;
     if (typeof window.handleLongPressTouchStart === 'function') {
       window.handleLongPressTouchStart(event, (x, y) => {
         if (typeof window.showBookContextMenu === 'function') {
-          window.showBookContextMenu(x, y, bookId, title, true, { coverAlign, fileFormat });
+          window.showBookContextMenu(x, y, bookId, title, true, { coverAlign, fileFormat, hasProgress });
         }
       });
     }

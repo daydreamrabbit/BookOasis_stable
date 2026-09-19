@@ -412,6 +412,13 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
       <i class="fa-solid fa-lock-open"></i> 잠금해제
     </button>
   ` : '';
+  // 그리드 카드에서 이 표시를 없애고(카드가 많을 때 잡음이 심했음) 상세화면에서만
+  // 보여주기로 함 - has_metadata는 book_detail_service.py가 계산해서 내려준다.
+  const metadataMissingBadgeHtml = Number(meta && meta.has_metadata) === 0 ? `
+    <span class="detail-metadata-missing-badge" title="메타데이터 정보 없음" aria-label="메타데이터 정보 없음">
+      <i class="fa-solid fa-link-slash" aria-hidden="true"></i> ${i18n.t('detail.metadata_missing') || '메타데이터 없음'}
+    </span>
+  ` : '';
 
   const seriesFavBtnHtml = `
           <button class="btn-fav-toggle" data-role="detail-series-favorite" data-series-name="${safeSeriesName.replace(/"/g, '&quot;')}" data-library-id="${actualLibraryId}" data-next-status="${isSeriesFav ? 1 : 0}" style="background:none; border:none; color:${seriesFavIconColor}; cursor:pointer; font-size:1.4rem; display:inline-flex; align-items:center;" title="${i18n.t('detail.toggle_fav_series')}">
@@ -454,6 +461,7 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
           ${escapeHtml(meta.series_alias || visibleTitle)}
           ${meta.series_alias ? `<span style="font-size: 0.85rem; color: var(--app-text-muted); font-weight: normal;">(${escapeHtml(visibleTitle)})</span>` : ''}
           ${audiobookCompletedBadgeHtml}
+          ${metadataMissingBadgeHtml}
           ${seriesFavBtnHtml}
           ${editToggleBtnHtml}
           ${unlockBtnHtml}

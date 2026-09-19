@@ -964,24 +964,22 @@ def _backfill_library_group_default_color(conn, cursor):
 
 
 def _rebuild_series_summary_if_needed(conn, db_type):
-    """MariaDB 환경에서 시리즈 요약 테이블이 아직 준비 안 됐으면 최초 1회 생성한다.
+    """시리즈 요약 테이블(series_summary)이 아직 준비 안 됐으면 최초 1회 생성한다.
 
-    주의: is_remote 는 운영자가 UI에서 관리하는 의도값이다. 과거에는 서버 기동 시
-    physical_path 기반 자동 판별로 0 -> 1 보정을 수행했지만, SMB/CIFS/NFS 같은 NAS
-    마운트나 사용자가 수동 해제한 라이브러리까지 다시 체크되는 부작용이 있어 더 이상
-    startup 단계에서 덮어쓰지 않는다.
+    SQLite/MariaDB 둘 다 series_summary/series_summary_state 테이블을 쓴다 - 이게 없으면
+    도서 목록 조회(특히 최신순/과거순 정렬)가 매 요청마다 books 테이블 전체를 실시간
+    GROUP BY로 재집계해야 해서 대형 라이브러리(수만 권)에서 요청당 수 초가 걸린다.
     """
-    # 주의: is_remote 는 운영자가 UI에서 관리하는 의도값이다.
-    # 과거에는 서버 기동 시 physical_path 기반 자동 판별로 0 -> 1 보정을 수행했지만,
-    # SMB/CIFS/NFS 같은 NAS 마운트나 사용자가 수동 해제한 라이브러리까지 다시 체크되는
-    # 부작용이 있어 더 이상 startup 단계에서 덮어쓰지 않는다.
-
+    if db_type == 'audiobook':
+        return
     try:
-        is_mariadb = hasattr(conn, '_conn') or type(conn).__name__.startswith(('Mariadb', 'PooledMariaDB'))
-        if is_mariadb and db_type != 'audiobook':
+        import database
+        if database.is_mariadb_mode():
             from repositories.mariadb.series_repository import SeriesRepository
-            if SeriesRepository.rebuild_summary(db_type, only_if_unready=True):
-                print(f"[DB-Migration] {db_type} DB - initial series summary created")
+        else:
+            from repositories.sqlite.series_repository import SeriesRepository
+        if SeriesRepository.rebuild_summary(db_type, only_if_unready=True):
+            print(f"[DB-Migration] {db_type} DB - initial series summary created")
     except Exception as summary_err:
         print(f"[DB-Migration ERROR] {db_type} series summary initialization failed: {summary_err}")
 

@@ -535,6 +535,29 @@ class ReadingProgressRepository:
             conn.close()
 
     @staticmethod
+    def get_book_ids_by_series(db_type, series_name, library_id):
+        """특정 시리즈에 속한 ID 목록 조회 (읽기 전용 - mark_read의 시리즈 범위 완독 처리용).
+        delete_user_progress_by_series와 동일한 조회 조건이지만 삭제는 하지 않는다."""
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            if db_type == 'audiobook':
+                cursor.execute(
+                    "SELECT id FROM audiobooks WHERE title = %s AND library_id = %s AND COALESCE(is_deleted, 0) = 0",
+                    (series_name, library_id)
+                )
+            elif db_type == 'video':
+                cursor.execute(
+                    "SELECT id FROM videos WHERE title = %s AND library_id = %s AND COALESCE(is_deleted, 0) = 0",
+                    (series_name, library_id)
+                )
+            else:
+                cursor.execute(
+                    "SELECT id FROM books WHERE series_name = %s AND library_id = %s AND COALESCE(is_deleted, 0) = 0",
+                    (series_name, library_id)
+                )
+            return [row['id'] for row in cursor.fetchall()]
+
+    @staticmethod
     def get_distinct_read_dates(db_type, user_id):
         with database.connection(db_type) as conn:
             cursor = conn.cursor()

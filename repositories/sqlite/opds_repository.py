@@ -194,17 +194,25 @@ class OpdsRepository:
             )
             params.extend([like_query, like_query, like_query])
 
-        if role != 'admin' and user_id is not None:
-            where.append(
-                "(NOT EXISTS (SELECT 1 FROM user_category_permissions p WHERE p.user_id = ?) "
-                "OR EXISTS (SELECT 1 FROM user_category_permissions p WHERE p.library_id = b.library_id AND p.user_id = ? AND p.has_access = 1))"
-            )
-            params.extend([int(user_id), int(user_id)])
-
         where_sql = ' AND '.join(where)
         conn = database.get_connection(db_type)
         try:
             cursor = conn.cursor()
+
+            if role != 'admin' and user_id is not None:
+                cursor.execute(
+                    "SELECT library_id, has_access FROM user_category_permissions WHERE user_id = ?",
+                    (int(user_id),)
+                )
+                perm_rows = cursor.fetchall()
+                if perm_rows:
+                    allowed_library_ids = [int(row['library_id']) for row in perm_rows if int(row['has_access'] or 0) == 1]
+                    if not allowed_library_ids:
+                        return [], 0
+                    placeholders = ','.join(['?'] * len(allowed_library_ids))
+                    where_sql += f" AND b.library_id IN ({placeholders})"
+                    params.extend(allowed_library_ids)
+
             cursor.execute(
                 f"SELECT COUNT(*) AS total FROM books b WHERE {where_sql}",
                 tuple(params)

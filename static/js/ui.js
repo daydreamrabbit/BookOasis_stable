@@ -239,6 +239,8 @@ export function createBookCard(item, options = {}) {
   const displayTitle = resolveCardDisplayTitle(item, options.showVolumeCount);
   card.dataset.title = displayTitle;
   card.dataset.markUnreadScope = options.markUnreadScope || 'book';
+  // 도서 메뉴에서 "읽지 않은 상태로 변경"/"읽은 상태로 변경" 라벨을 토글하는 데 사용
+  card.dataset.hasProgress = (readingIsComplete || pagesRead > 0) ? '1' : '0';
   card.dataset.seriesName = rawSeriesName;
   card.dataset.libraryId = item.library_id ?? '';
   card.dataset.bookCount = parseInt(item.book_count, 10) || 1;
@@ -351,14 +353,8 @@ export function createBookCard(item, options = {}) {
     `;
   }
 
-  const hasMetadataFlag = item.has_metadata;
-  const metadataMissingBadgeHtml = !item.is_author_group
-    && hasMetadataFlag !== undefined
-    && hasMetadataFlag !== null
-    && Number(hasMetadataFlag) === 0
-    ? `<span class="book-card-metadata-missing" title="메타데이터 정보 없음" aria-label="메타데이터 정보 없음"><i class="fa-solid fa-link-slash" aria-hidden="true"></i></span>`
-    : '';
-
+  // 그리드 카드의 메타데이터 미연결 표시는 v2.7.0에서 제거됨 - 카드가 빽빽하게
+  // 늘어선 그리드에서는 시각적 잡음이 너무 컸다. 상세화면 헤더(detail/header_view.js)에서만 표시.
   const audiobookCompletedDotHtml = (isAudiobook || isVideo) && Number(item.is_completed) === 1
     ? `<span class="book-card-audiobook-completed" title="${i18n.t('detail.audiobook_completed')}" aria-label="${i18n.t('detail.audiobook_completed')}"></span>`
     : '';
@@ -380,7 +376,6 @@ export function createBookCard(item, options = {}) {
       ${badgeHtml}
       ${favBtnHtml}
       ${lockedBadgeHtml}
-      ${metadataMissingBadgeHtml}
       ${audiobookCompletedDotHtml}
       ${resumeButtonHtml}
     </div>
@@ -471,6 +466,7 @@ export function createBookCard(item, options = {}) {
         seriesName: item.series_name || '',
         libraryId: item.library_id ?? null,
         fileFormat: fmt,
+        hasProgress: readingIsComplete || pagesRead > 0,
       });
     }
   };
@@ -496,6 +492,7 @@ export function createBookCard(item, options = {}) {
             seriesName: item.series_name || '',
             libraryId: item.library_id ?? null,
             fileFormat: fmt,
+            hasProgress: readingIsComplete || pagesRead > 0,
           });
         }
       });
