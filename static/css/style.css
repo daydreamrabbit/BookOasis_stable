@@ -1158,6 +1158,9 @@ body {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
+    /* 오른쪽 초성 바로가기의 표시 여부와 관계없이 같은 폭을 예약해
+       정렬 변경 시 헤더와 그리드가 좌우로 흔들리지 않게 한다. */
+    padding-right: 40px;
     padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
     box-sizing: border-box;
     /* grid_pruning.js가 뷰포트 위쪽에서 카드를 정리/복원할 때 scrollTop을 직접 정확히
@@ -1463,11 +1466,16 @@ body {
 
 /* 필터/정렬 아이콘 전용 버튼 - 텍스트 라벨이 숨겨지므로 정사각형 아이콘 버튼으로 압축 */
 #btn-open-filter,
-#btn-lib-sort {
+#btn-lib-sort,
+#btn-toggle-library-types {
     width: 34px;
     height: 34px;
     padding: 0 !important;
     justify-content: center;
+}
+
+#btn-toggle-library-types {
+    display: none;
 }
 
 .scan-activity-wrap {
@@ -3530,6 +3538,30 @@ body {
 
 .book-card-locked-badge i {
     font-size: 0.7rem;
+}
+
+.book-card-metadata-missing {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 6;
+    box-sizing: border-box;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(248, 113, 113, 0.55);
+    border-radius: 50%;
+    color: #f87171;
+    background: rgba(var(--app-panel-rgb), 0.78);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    pointer-events: none;
+}
+
+.book-card-metadata-missing i {
+    font-size: 0.72rem;
 }
 
 /* 카드 하단 메타 텍스트: 오디오북 챕터/이어읽기 진행률 */

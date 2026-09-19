@@ -151,6 +151,7 @@ def add_media_library():
     is_remote = parse_remote_flag(is_remote_val, target_paths)
     hide_cover = 1 if request.form.get('hide_cover', '0') in ('1', 'true', 'True', 'on') else 0
     hide_title = 1 if request.form.get('hide_title', '0') in ('1', 'true', 'True', 'on') else 0
+    use_folder_cover = 1 if request.form.get('use_folder_cover', '0') in ('1', 'true', 'True', 'on') else 0
     cover_aspect_ratio = request.form.get('cover_aspect_ratio', '4:3').strip()
     if cover_aspect_ratio not in ('4:3', '16:9'):
         cover_aspect_ratio = '4:3'
@@ -159,13 +160,14 @@ def add_media_library():
     color = request.form.get('color', '#94a3b8').strip() or '#94a3b8'
     gdrive_copy_remote = request.form.get('gdrive_copy_remote', '').strip() or None
     gdrive_view_local_mirror_path = request.form.get('gdrive_view_local_mirror_path', '').strip() or None
+    content_kind = request.form.get('content_kind', '').strip().lower()
     try:
         group_id = _parse_group_id(request.form.get('group_id'))
     except ValueError as error:
         return jsonify({'success': False, 'error': str(error)}), 400
 
     try:
-        library_id = CategoryService.add_library(db_type, name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title)
+        library_id = CategoryService.add_library(db_type, name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, use_folder_cover, content_kind)
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except sqlite3.IntegrityError:
@@ -224,6 +226,7 @@ def edit_media_library():
     
     hide_cover = 1 if request.form.get('hide_cover', '0') in ('1', 'true', 'True', 'on') else 0
     hide_title = 1 if request.form.get('hide_title', '0') in ('1', 'true', 'True', 'on') else 0
+    use_folder_cover = 1 if request.form.get('use_folder_cover', '0') in ('1', 'true', 'True', 'on') else 0
     cover_aspect_ratio = request.form.get('cover_aspect_ratio', '4:3').strip()
     if cover_aspect_ratio not in ('4:3', '16:9'):
         cover_aspect_ratio = '4:3'
@@ -232,6 +235,7 @@ def edit_media_library():
     color = request.form.get('color', '#94a3b8').strip() or '#94a3b8'
     gdrive_copy_remote = request.form.get('gdrive_copy_remote', '').strip() or None
     gdrive_view_local_mirror_path = request.form.get('gdrive_view_local_mirror_path', '').strip() or None
+    raw_content_kind = request.form.get('content_kind')
     try:
         group_id = _parse_group_id(request.form.get('group_id'))
     except ValueError as error:
@@ -244,8 +248,18 @@ def edit_media_library():
         old_library = None
         print(f"[API Warning] Failed to fetch old library: {e}")
 
+    if raw_content_kind is None:
+        content_kind = (old_library or {}).get('content_kind') or 'unspecified'
+    else:
+        content_kind = raw_content_kind.strip().lower()
+
     try:
-        CategoryService.edit_library(db_type, int(library_id), name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title)
+        old_folder_cover_value = int((old_library or {}).get('use_folder_cover') or 0)
+    except (AttributeError, TypeError, ValueError):
+        old_folder_cover_value = 0
+
+    try:
+        CategoryService.edit_library(db_type, int(library_id), name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, use_folder_cover, content_kind)
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except sqlite3.IntegrityError:
@@ -263,7 +277,8 @@ def edit_media_library():
         new_path = CategoryService._clean_physical_path(physical_path)
         is_path_changed = (old_path != new_path)
         
-        if is_path_changed:
+        folder_cover_just_enabled = bool(use_folder_cover and not old_folder_cover_value)
+        if is_path_changed or folder_cover_just_enabled:
             db_path = get_db_path_for_scan(db_type)
             from services.scanner_queue import scanner_queue
             scanner_queue.enqueue('library_scan', db_type=db_type, db_path=db_path, 
@@ -416,4 +431,3 @@ def move_media_library():
     except Exception as e:
         print(f"[API ERROR] 카테고리 이관 실패: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
-

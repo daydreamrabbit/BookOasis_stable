@@ -11,9 +11,14 @@
     if (!scrollEl || !header) return;
 
     let lastScrollTop = scrollEl.scrollTop;
-    const moveThreshold = 8;    // 이 정도 미만의 미세한 스크롤 변화는 무시(떨림 방지)
+    const isMobile = window.matchMedia('(max-width: 1200px)').matches;
+    const moveThreshold = 8;    // 데스크톱의 미세한 스크롤 변화 무시(떨림 방지)
+    const mobileHideDistance = 16;
+    const mobileRevealDistance = 80;
     const revealNearTop = 60;   // 맨 위에서 이 거리 이내면 방향과 무관하게 항상 보여줌
     const elevateAfter = 4;     // 이 거리를 넘어서 스크롤되면 그림자를 진하게(입체감)
+    let downwardDistance = 0;
+    let upwardDistance = 0;
     let ticking = false;
 
     function onScroll() {
@@ -25,10 +30,24 @@
 
         if (st <= revealNearTop) {
           header.classList.remove('library-header--hidden');
-        } else if (delta > moveThreshold) {
-          header.classList.add('library-header--hidden');
-        } else if (delta < -moveThreshold) {
-          header.classList.remove('library-header--hidden');
+          downwardDistance = 0;
+          upwardDistance = 0;
+        } else if (delta > 0) {
+          downwardDistance += delta;
+          upwardDistance = 0;
+          if ((!isMobile && downwardDistance >= moveThreshold)
+              || (isMobile && downwardDistance >= mobileHideDistance)) {
+            header.classList.add('library-header--hidden');
+          }
+        } else if (delta < 0) {
+          upwardDistance += -delta;
+          downwardDistance = 0;
+          // 모바일에서는 살짝 위로 튕기는 동작만으로 검색바가 다시 내려오지 않게 한다.
+          // 충분히 위로 이동했거나 최상단에 가까워졌을 때만 헤더를 복원한다.
+          if ((!isMobile && upwardDistance >= moveThreshold)
+              || (isMobile && upwardDistance >= mobileRevealDistance)) {
+            header.classList.remove('library-header--hidden');
+          }
         }
 
         header.classList.toggle('library-header--elevated', st > elevateAfter);

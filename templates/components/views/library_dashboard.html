@@ -1,5 +1,6 @@
 <!-- templates/components/views/library_dashboard.html -->
 {% set home_layout = home_layout|default({'mode': 'classic', 'widgets': [], 'catalog': []}) %}
+{% set home_widget_initial_data = home_widget_initial_data|default({}) %}
 
 {% macro core_reading_insights_slot(hidden=False) %}
 <div class="home-widget-slot home-widget-slot--full" id="home-widget-core.reading_insights" data-widget-id="core.reading_insights"{% if hidden %} style="display:none;"{% endif %}>
@@ -61,6 +62,9 @@
     {% if w.subtitle %}<div class="plugin-widget-subtitle">{{ w.subtitle }}</div>{% endif %}
     <div id="home-widget-content-{{ w.id }}" class="plugin-widget-body">
         <div class="loading-spinner loading-spinner--widget"><i class="fa-solid fa-circle-notch fa-spin"></i> 위젯 데이터를 불러오는 중...</div>
+        {% if w.initial_data and w.id in home_widget_initial_data %}
+        <script type="application/json" class="home-widget-initial-data">{{ home_widget_initial_data[w.id]|tojson }}</script>
+        {% endif %}
     </div>
 </div>
 {% endmacro %}

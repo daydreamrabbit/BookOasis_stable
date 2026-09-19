@@ -19,6 +19,17 @@
                     </select>
                 </div>
             </div>
+            <div id="library-form-content-kind-row" class="library-form-group" style="margin-top: 0.8rem;">
+                <label for="library-form-content-kind" data-i18n="modal.content_kind_label">작품 유형</label>
+                <select id="library-form-content-kind" name="content_kind" required>
+                    <option value="" selected disabled data-i18n="modal.content_kind_placeholder">유형을 선택하세요</option>
+                    <option value="manga" data-i18n="modal.content_kind_manga">만화</option>
+                    <option value="novel" data-i18n="modal.content_kind_novel">소설</option>
+                    <option value="book" data-i18n="modal.content_kind_book">도서</option>
+                    <option value="unspecified" data-legacy-content-kind hidden data-i18n="modal.content_kind_unspecified">미지정 (기존 라이브러리)</option>
+                </select>
+                <small style="display: block; margin-top: 0.25rem; color: var(--app-text-muted);" data-i18n="modal.content_kind_help">일반/성인 구분과는 별개인 라이브러리 작품 종류입니다.</small>
+            </div>
             <div class="library-form-group">
                 <label for="library-form-path" id="library-form-path-label">서버 물리 경로{% if develop_mode %} / 구글 드라이브 공유 링크{% endif %} (엔터로 여러 개 입력 가능{% if develop_mode %}, 혼합 가능{% endif %})</label>
                 <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
@@ -217,6 +228,11 @@
                     <div id="library-form-hide-title-row" class="library-form-group-row" style="margin-top: 0.4rem;">
                         <input type="checkbox" id="library-form-hide-title" name="hide_title">
                         <label for="library-form-hide-title">제목 감추기 (썸네일만 표시, 넷플릭스 스타일)</label>
+                    </div>
+
+                    <div id="library-form-folder-cover-row" class="library-form-group-row" style="margin-top: 0.4rem;">
+                        <input type="checkbox" id="library-form-use-folder-cover" name="use_folder_cover">
+                        <label for="library-form-use-folder-cover">폴더 내 cover.jpg를 해당 폴더의 모든 도서 표지로 사용</label>
                     </div>
 
                     <div id="library-form-cover-ratio-row" class="library-form-group-row" style="margin-top: 0.6rem;">

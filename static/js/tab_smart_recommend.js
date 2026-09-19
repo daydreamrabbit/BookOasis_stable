@@ -1,7 +1,7 @@
 /* tab_smart_recommend.js - 최근 읽은 시리즈 기준 장르/태그 겹침 "스마트 추천" UI 렌더러 */
 import { state } from './state.js';
 import * as api from './api.js';
-import { createBookCard } from './ui.js';
+import { createBookCard } from './ui.js?v=20260918-library-scan-progress-v1';
 import { openBookDetail } from './modal.js';
 import { getBookCoverSrc } from './cover_fallback.js';
 import { buildRowNavButtonsHtml } from './scrollable_row_nav.js';

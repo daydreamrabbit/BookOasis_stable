@@ -7,7 +7,7 @@ import { updateCurrentCategoryIndicator } from '../category_indicator.js';
 import { detailVolumeViewState } from './volume_controller.js';
 import { encodeDetailParams } from '../url_obfuscator.js';
 import { bindDetailInteractions } from './interactions.js';
-import { createBookCard } from '../ui.js';
+import { createBookCard } from '../ui.js?v=20260918-library-scan-progress-v1';
 import './volume_context_menu.js';
 
 bindDetailInteractions();
@@ -74,6 +74,7 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
       state.detailSeriesName = safeSeriesName;
       state.detailLibraryId = actualLibraryId;
       state.detailRepresentativeBookId = representativeBookId || (books.length > 0 ? books[0].id : null);
+      state.detailBookIds = books.map(book => Number(book.id)).filter(Number.isFinite);
       state.detailDisplayTitle = safeDisplayTitle;
       state.detailMeta = meta;
       updateCurrentCategoryIndicator(actualLibraryId);
@@ -538,6 +539,11 @@ export function goBackToList(triggerBack = true) {
     } catch (e) {
       console.warn('[goBackToList] failed to restore scroll', e);
     }
+  }
+
+  if (state.currentLibraryId !== 'home'
+      && typeof window.refreshBooksListIfStale === 'function') {
+    window.refreshBooksListIfStale();
   }
 
   // 상세 뷰 해시(#detail)가 남아있는 경우 브라우저 외부/홈으로 튕김(history.back) 없이 해시만 안전하게 제거

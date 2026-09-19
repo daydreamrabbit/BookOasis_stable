@@ -49,6 +49,12 @@
     <div class="library-header-actions">
     <!-- 필터/스캔활동/정렬: 도서 목록 화면에서만 의미가 있어 뷰에 따라 숨김(view_manager.js) -->
     <div class="library-controls">
+        <button id="btn-toggle-library-types" data-role="library-type-collapse" class="btn-toggle library-type-collapse-toggle"
+            type="button" aria-expanded="false" aria-controls="library-type-toggle-group"
+            data-i18n-title="header.library_types_expand" title="미디어 종류 펼치기">
+            <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+            <span data-i18n="header.library_types_expand" class="sr-only">미디어 종류 펼치기</span>
+        </button>
         <button id="btn-open-filter" data-role="library-open-filter" class="btn-toggle"
             style="display: flex; align-items: center; gap: 0.3rem;"
             data-i18n-title="header.filter_title" title="장르/태그 필터 열기">

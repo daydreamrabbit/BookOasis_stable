@@ -117,6 +117,44 @@ class ScannerQueueRepository:
         return dict(row) if row else None
 
     @staticmethod
+    def get_task_kwargs(task_id):
+        cursor = None
+        conn = database.get_connection('general')
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT kwargs FROM scanner_tasks WHERE id = %s", (task_id,))
+            row = cursor.fetchone()
+            if not row or not row['kwargs']:
+                return {}
+            try:
+                value = json.loads(row['kwargs'])
+                return value if isinstance(value, dict) else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return {}
+        finally:
+            if cursor:
+                cursor.close()
+            conn.close()
+
+    @staticmethod
+    def update_task_kwargs(task_id, kwargs):
+        conn = database.get_connection('general')
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE scanner_tasks SET kwargs = %s WHERE id = %s AND status IN ('running', 'exit_pending')",
+                (json.dumps(kwargs, ensure_ascii=False), task_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
+
+    @staticmethod
     def insert_task(task_type, task_key, kwargs_json, now_str):
         conn = database.get_connection('general')
         cursor = conn.cursor()

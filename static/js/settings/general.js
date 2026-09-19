@@ -10,7 +10,7 @@ import { changeDashboardTheme, populateCustomThemeOptions, rescanCustomThemesUi,
 import { startCoverStorageMigration } from './cover_storage_settings.js';
 import { getTempShortcut, setTempShortcut, initShortcutRecorderEvents } from './shortcut_recorder.js';
 import { runVaapiCheck, triggerLazyScanNow } from './system_actions.js';
-import { loadHomeDashboardLayout } from '../dashboard.js?v=20260917-home-widget-plugin-ui-v1';
+import { loadHomeDashboardLayout } from '../dashboard.js?v=20260918-home-return-cache-v1';
 
 function initGeneralDelegation() {
   if (window.__generalDelegationBound) return;
@@ -174,6 +174,9 @@ export function applySettingsToUI(settings) {
   if (settings.SHOW_CONTENT_RATING_BADGE !== undefined) {
     state.showContentRatingBadge = (settings.SHOW_CONTENT_RATING_BADGE === '1');
   }
+  if (settings.SHOW_METADATA_CONNECTION_STATUS !== undefined) {
+    state.showMetadataConnectionStatus = (settings.SHOW_METADATA_CONNECTION_STATUS === '1');
+  }
   if (settings.SMART_RECOMMEND_ENABLED !== undefined) {
     state.smartRecommendEnabled = (settings.SMART_RECOMMEND_ENABLED !== '0');
   }
@@ -214,7 +217,8 @@ export async function loadInitialSystemSettings() {
     console.error('[Settings] 최초 시스템 설정 로딩 실패:', e);
   }
 
-  migrateLocalOnlyUserSettingsOnce();
+  // 기존 localStorage 설정을 서버에 옮기는 작업은 홈 화면 초기화를 막지 않는다.
+  void migrateLocalOnlyUserSettingsOnce();
 }
 
 // DASHBOARD_THEME / SHOW_DASHBOARD_INSIGHTS는 예전엔 localStorage에만 저장됐다.
@@ -536,6 +540,9 @@ export async function loadMySettings() {
     const showContentRatingBadgeEl = document.getElementById('my-setting-show-content-rating-badge');
     if (showContentRatingBadgeEl) showContentRatingBadgeEl.checked = (s.SHOW_CONTENT_RATING_BADGE === '1');
 
+    const showMetadataConnectionStatusEl = document.getElementById('my-setting-show-metadata-connection-status');
+    if (showMetadataConnectionStatusEl) showMetadataConnectionStatusEl.checked = (s.SHOW_METADATA_CONNECTION_STATUS === '1');
+
     const showCategoryAllEl = document.getElementById('my-setting-show-sidebar-category-all');
     if (showCategoryAllEl) showCategoryAllEl.checked = (s.SHOW_SIDEBAR_CATEGORY_ALL !== '0');
 
@@ -579,6 +586,7 @@ export async function submitMySettings(event) {
   const detailVolumeGridView = document.getElementById('my-setting-detail-volume-grid-view')?.checked ? '1' : '0';
   const collapseDetailGenreTags = document.getElementById('my-setting-collapse-detail-genre-tags')?.checked ? '1' : '0';
   const showContentRatingBadge = document.getElementById('my-setting-show-content-rating-badge')?.checked ? '1' : '0';
+  const showMetadataConnectionStatus = document.getElementById('my-setting-show-metadata-connection-status')?.checked ? '1' : '0';
   const showSidebarCategoryAll = document.getElementById('my-setting-show-sidebar-category-all')?.checked ? '1' : '0';
   const hideCompleted = document.getElementById('my-setting-hide-completed-in-history')?.checked ? '1' : '0';
   const tagFilterScopeAll = document.getElementById('my-setting-tag-filter-scope-all')?.checked ? '1' : '0';
@@ -604,6 +612,7 @@ export async function submitMySettings(event) {
       api.updateUserSetting('DETAIL_VOLUME_GRID_VIEW', detailVolumeGridView),
       api.updateUserSetting('COLLAPSE_DETAIL_GENRE_TAGS', collapseDetailGenreTags),
       api.updateUserSetting('SHOW_CONTENT_RATING_BADGE', showContentRatingBadge),
+      api.updateUserSetting('SHOW_METADATA_CONNECTION_STATUS', showMetadataConnectionStatus),
       api.updateUserSetting('SHOW_SIDEBAR_CATEGORY_ALL', showSidebarCategoryAll),
       api.updateUserSetting('HIDE_COMPLETED_IN_HISTORY', hideCompleted),
       api.updateUserSetting('TAG_FILTER_SEARCH_SCOPE_ALL', tagFilterScopeAll),
@@ -629,6 +638,7 @@ export async function submitMySettings(event) {
         DETAIL_VOLUME_GRID_VIEW: detailVolumeGridView,
         COLLAPSE_DETAIL_GENRE_TAGS: collapseDetailGenreTags,
         SHOW_CONTENT_RATING_BADGE: showContentRatingBadge,
+        SHOW_METADATA_CONNECTION_STATUS: showMetadataConnectionStatus,
         SHOW_SIDEBAR_CATEGORY_ALL: showSidebarCategoryAll,
         HIDE_COMPLETED_IN_HISTORY: hideCompleted,
         TAG_FILTER_SEARCH_SCOPE_ALL: tagFilterScopeAll,

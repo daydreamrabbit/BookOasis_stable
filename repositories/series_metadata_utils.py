@@ -2,6 +2,54 @@
 """Helpers for presenting per-book metadata as series-level detail metadata."""
 import re
 
+_VOLUME_PATTERNS = (
+    re.compile(r'(?:제\s*)?(\d+(?:\.\d+)?)\s*(?:권|巻)', re.IGNORECASE),
+    re.compile(r'\bvol(?:ume)?\.?\s*(\d+(?:\.\d+)?)\b|\bv\s*(\d+(?:\.\d+)?)\b', re.IGNORECASE),
+    re.compile(r'(?:^|[\s._#-])(\d+(?:\.\d+)?)(?:권|巻)?\s*$', re.IGNORECASE),
+)
+
+
+def _volume_number(row):
+    for key in ('_volume_title', 'title', '_volume_path', 'file_path'):
+        value = row.get(key)
+        name = str(value or '').replace('\\', '/').rsplit('/', 1)[-1]
+        if key in ('_volume_path', 'file_path'):
+            name = re.sub(r'\.[^.]+$', '', name)
+        for pattern in _VOLUME_PATTERNS:
+            match = pattern.search(name)
+            if match:
+                number = next((group for group in match.groups() if group is not None), None)
+                if number is not None:
+                    try:
+                        return float(number)
+                    except ValueError:
+                        pass
+    return None
+
+
+def _ordered_volume_rows(rows):
+    numbered_rows = [(_volume_number(row), index, row) for index, row in enumerate(rows)]
+    numbered_rows.sort(key=lambda item: (
+        item[0] is None,
+        item[0] if item[0] is not None else item[1],
+        int(item[2].get('id') or item[1]),
+    ))
+    return numbered_rows
+
+
+def select_series_cover_row(rows):
+    """Prefer volume 1's cover; otherwise use the earliest numbered available cover."""
+    ordered_rows = _ordered_volume_rows([dict(row) for row in (rows or []) if row])
+    for volume_number, _index, row in ordered_rows:
+        cover = str(row.get('cover_image') or '').strip()
+        if volume_number == 1 and cover and cover.upper() != 'NO_COVER':
+            return row
+    for _volume_number_value, _index, row in ordered_rows:
+        cover = str(row.get('cover_image') or '').strip()
+        if cover and cover.upper() != 'NO_COVER':
+            return row
+    return None
+
 
 def book_metadata_exists_sql(book_alias='b'):
     """Return a correlated SQL predicate for real metadata on any volume in a series.
@@ -64,7 +112,7 @@ def merge_series_metadata_rows(rows):
     The first row is expected to be the deterministic, summary-preferred row
     selected by the repository. Singular fields fall back to the first volume
     that has a value; ratings use the most restrictive explicit value; links
-    are collected from every volume so detail renderers can show all sources.
+    use volume 1 when it has any, otherwise the first available volume link.
     """
     normalized_rows = [dict(row) for row in (rows or []) if row]
     if not normalized_rows:
@@ -84,16 +132,31 @@ def merge_series_metadata_rows(rows):
             result.get(field),
         )
 
-    links = []
-    seen_links = set()
-    for row in normalized_rows:
+    def row_links(row):
+        links = []
+        seen = set()
         for link in re.split(r'[,;\r\n]+', str(row.get('link') or '')):
             link = link.strip()
             key = link.casefold()
-            if link and key not in seen_links:
-                seen_links.add(key)
+            if link and key not in seen:
+                seen.add(key)
                 links.append(link)
-    result['link'] = '\n'.join(links)
+        return links
+
+    volume_one_links = []
+    fallback_links = []
+    for volume_number, _, row in _ordered_volume_rows(normalized_rows):
+        links = row_links(row)
+        if not links:
+            continue
+        if not fallback_links:
+            fallback_links = links
+        if volume_number == 1:
+            volume_one_links = links
+            break
+    result['link'] = '\n'.join(volume_one_links or fallback_links)
+    result.pop('_volume_title', None)
+    result.pop('_volume_path', None)
 
     # A series may contain mixed ratings. Do not let the representative row
     # hide a more restrictive rating from another volume.

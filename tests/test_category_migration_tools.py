@@ -21,7 +21,8 @@ CREATE TABLE libraries (
     is_remote INTEGER DEFAULT 0, vfs_refresh_before_scan INTEGER DEFAULT 0,
     rclone_rc_url TEXT, icon TEXT, color TEXT, hide_cover INTEGER DEFAULT 0,
     group_id INTEGER DEFAULT NULL, sort_order INTEGER DEFAULT 0,
-    cover_aspect_ratio TEXT DEFAULT '4:3', hide_title INTEGER DEFAULT 0
+    cover_aspect_ratio TEXT DEFAULT '4:3', hide_title INTEGER DEFAULT 0,
+    content_kind TEXT NOT NULL DEFAULT 'unspecified'
 );
 CREATE TABLE books (
     id INTEGER PRIMARY KEY AUTOINCREMENT, library_id INTEGER, title TEXT,
@@ -134,8 +135,8 @@ class CategoryMigrationToolsTest(unittest.TestCase):
             INSERT INTO libraries (
                 name, physical_path, scan_status, is_remote,
                 vfs_refresh_before_scan, rclone_rc_url, icon, color, hide_cover,
-                group_id, sort_order
-            ) VALUES ('Source', ?, 'ready', 1, 1, 'http://localhost:5572', 'fa-book', '#123456', 1, 7, 3)
+                group_id, sort_order, content_kind
+            ) VALUES ('Source', ?, 'ready', 1, 1, 'http://localhost:5572', 'fa-book', '#123456', 1, 7, 3, 'manga')
             """,
             (str(tmp_path / "source_media"),),
         )
@@ -204,7 +205,7 @@ class CategoryMigrationToolsTest(unittest.TestCase):
             "SELECT is_ready FROM series_summary_state WHERE id = 1"
         ).fetchone()[0]
         imported_library = result.execute(
-            "SELECT group_id, sort_order FROM libraries WHERE name = 'Imported'"
+            "SELECT group_id, sort_order, content_kind FROM libraries WHERE name = 'Imported'"
         ).fetchone()
         result.close()
 
@@ -212,7 +213,7 @@ class CategoryMigrationToolsTest(unittest.TestCase):
         self.assertEqual(tuple(progress), (95, 1))
         self.assertEqual(favorite_count, 1)
         self.assertEqual(summary_state, 0)
-        self.assertEqual(tuple(imported_library), (7, 3))
+        self.assertEqual(tuple(imported_library), (7, 3, 'manga'))
 
     def test_audiobook_category_v2_round_trip(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -167,6 +167,98 @@ def _build_series_entries(db_type, rows):
     return entries
 
 
+def _build_series_jump_entries(rows):
+    """초성 바로가기용 경량 시리즈 인덱스를 만든다.
+
+    초성 위치를 계산할 때 카드에 필요한 표지 경로, 등급, 즐겨찾기 등의 정보를
+    만들 필요는 없다. 이 단계에서는 정렬에 필요한 제목과 실제 목적 페이지를
+    나중에 완성할 원본 행만 보관한다.
+    """
+    groups = {}
+    order = []
+    for row in rows:
+        series_name = row.get('series_name') or '기타 단행본'
+        comp_dir = _comparison_dir_for_book(row.get('file_path'), row.get('file_format'))
+        key = (row.get('library_id'), series_name, comp_dir)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    entries = []
+    for library_id, series_name, comp_dir in order:
+        books = groups[(library_id, series_name, comp_dir)]
+        representative = min(books, key=lambda row: row.get('id') or 0)
+        entries.append({
+            'series_name': series_name,
+            'representative_title': representative.get('title_alias') or representative.get('title') or '',
+            '_representative_id': representative.get('id'),
+            '_source_rows': books,
+        })
+    return entries
+
+
+def _rows_for_jump_entries(entries):
+    rows = []
+    for entry in entries:
+        rows.extend(entry.get('_source_rows') or [])
+    return rows
+
+
+def _build_jump_page_entries(db_type, entries, library_id, search_query, genre_filters,
+                             tag_filters, favorite_only, user_id, role):
+    """초성 이동 대상 페이지의 카드 데이터만 저장소에서 보강한다."""
+    representative_ids = [
+        entry.get('_representative_id')
+        for entry in entries
+        if entry.get('_representative_id') is not None
+    ]
+    full_rows = []
+    fetch_by_ids = getattr(SeriesRepository, 'fetch_books_by_ids', None)
+    if fetch_by_ids and representative_ids:
+        full_rows = fetch_by_ids(
+            db_type,
+            representative_ids,
+            user_id=user_id,
+            role=role,
+        ) or []
+
+    rows_by_id = {row.get('id'): row for row in full_rows}
+    missing_ids = [book_id for book_id in representative_ids if book_id not in rows_by_id]
+    if missing_ids:
+        # 검색/장르/태그 필터가 걸린 경우에는 필터 결과의 대표 행이 전역
+        # series_summary 대표 행과 다를 수 있다. 이 경우에만 기존 필터 조회로
+        # 누락된 카드 정보를 보충한다.
+        filtered_rows = SeriesRepository.fetch_books_for_grouping(
+            db_type,
+            library_id,
+            search_query=search_query or '',
+            favorite_only=favorite_only,
+            genre_filters=genre_filters,
+            tag_filters=tag_filters,
+            user_id=user_id,
+            role=role,
+            limit=None,
+            offset=None,
+        ) or []
+        rows_by_id.update({row.get('id'): row for row in filtered_rows})
+
+    ordered_rows = []
+    for entry in entries:
+        representative_id = entry.get('_representative_id')
+        row = rows_by_id.get(representative_id)
+        if row is None:
+            source_rows = entry.get('_source_rows') or []
+            row = next((candidate for candidate in source_rows if candidate.get('id') == representative_id), None)
+        if row is not None:
+            ordered_rows.append(row)
+
+    # 저장소가 대표 ID 조회를 제공하지 않는 특수 구현에서도 기존 동작을 유지한다.
+    if not ordered_rows and entries:
+        ordered_rows = _rows_for_jump_entries(entries)
+    return _build_series_entries(db_type, ordered_rows)
+
+
 def _build_author_entries(db_type, rows):
     """작가별 모음 그리드용 엔트리 생성. 정규화된 작가명(normalize_author_key)으로 묶고,
     카드 렌더링은 기존 시리즈 카드(createBookCard)를 그대로 재사용할 수 있도록
@@ -257,6 +349,7 @@ _ALL_BOOKS_CACHE = {}
 _ALL_BOOKS_CACHE_TTL = 60.0  # 60초 인메모리 캐싱
 _LIST_QUERY_CACHE = {}
 _LIST_QUERY_CACHE_TTL = 120.0
+_JUMP_INDEX_CACHE = {}
 _TOTALS_CACHE = {}
 _TOTALS_CACHE_TTL = 30.0
 _TOTALS_REDIS_TTL = 300
@@ -328,6 +421,7 @@ def _sync_local_books_cache_with_shared_epoch(db_type):
     if seen_epoch is not None and seen_epoch != current_epoch:
         _ALL_BOOKS_CACHE.clear()
         _LIST_QUERY_CACHE.clear()
+        _JUMP_INDEX_CACHE.clear()
         _TOTALS_CACHE.clear()
     _local_epoch_seen[db_type] = current_epoch
 
@@ -337,9 +431,10 @@ class SeriesService:
     def invalidate_all_books_cache(db_type=None):
         """도서 목록 캐시를 비운다. db_type을 넘기면 다른 프로세스(스캐너 워커 등)에도
         전달되도록 공유 epoch를 갱신한다 - 위 "크로스 프로세스 캐시 무효화 신호" 참고."""
-        global _ALL_BOOKS_CACHE, _LIST_QUERY_CACHE, _TOTALS_CACHE
+        global _ALL_BOOKS_CACHE, _LIST_QUERY_CACHE, _JUMP_INDEX_CACHE, _TOTALS_CACHE
         _ALL_BOOKS_CACHE.clear()
         _LIST_QUERY_CACHE.clear()
+        _JUMP_INDEX_CACHE.clear()
         _TOTALS_CACHE.clear()
         try:
             from utils.redis_helper import redis_delete_pattern
@@ -394,6 +489,24 @@ class SeriesService:
             if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
                 entries = cached[1]
                 return entries[offset:offset + limit + 1]
+
+            # 초성 이동이 먼저 실행된 경우에는 전체 카드 데이터를 다시 만들지 않고,
+            # 초성용 경량 인덱스에서 요청 페이지의 원본 행만 카드 데이터로 완성한다.
+            jump_cached = _JUMP_INDEX_CACHE.get(cache_key)
+            if jump_cached and (now - jump_cached[0] < _LIST_QUERY_CACHE_TTL):
+                index_entries = jump_cached[1]
+                page_entries = index_entries[offset:offset + limit + 1]
+                return _build_jump_page_entries(
+                    db_type,
+                    page_entries,
+                    library_id,
+                    search_query,
+                    normalized_genres,
+                    normalized_tags,
+                    favorite_only,
+                    user_id,
+                    role,
+                )
         else:
             cached = _LIST_QUERY_CACHE.get(cache_key)
             if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
@@ -499,36 +612,60 @@ class SeriesService:
             tuple(normalized_tags),
             int(user_id) if user_id else 0,
             str(role or ''),
+            '',  # group_by: 초성 인덱스는 시리즈 기본 목록 기준
+            '',  # author_key: 작가 드릴다운 목록은 초성 인덱스를 사용하지 않음
+            False,  # include_has_metadata: 초성 인덱스/일반 목록 모두 기본 미계산
         )
         cached = _LIST_QUERY_CACHE.get(cache_key)
         if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
             entries = cached[1]
+            lightweight = False
         else:
-            rows = SeriesRepository.fetch_books_for_grouping(
-                db_type,
-                library_id,
-                search_query=search_query or '',
-                favorite_only=favorite_only,
-                genre_filters=normalized_genres,
-                tag_filters=normalized_tags,
-                user_id=user_id,
-                role=role,
-                limit=None,
-                offset=None
-            )
-            entries = _build_series_entries(db_type, rows)
-            _sort_entries(entries, sort=sort_key)
-            _LIST_QUERY_CACHE[cache_key] = (now, entries)
+            jump_cached = _JUMP_INDEX_CACHE.get(cache_key)
+            if jump_cached and (now - jump_cached[0] < _LIST_QUERY_CACHE_TTL):
+                index_entries = jump_cached[1]
+                lightweight = True
+            else:
+                t_fetch = time.perf_counter()
+                rows = SeriesRepository.fetch_books_for_grouping(
+                    db_type,
+                    library_id,
+                    search_query=search_query or '',
+                    favorite_only=favorite_only,
+                    genre_filters=normalized_genres,
+                    tag_filters=normalized_tags,
+                    user_id=user_id,
+                    role=role,
+                    limit=None,
+                    offset=None,
+                    lightweight=True
+                )
+                index_entries = _build_series_jump_entries(rows)
+                _sort_entries(index_entries, sort=sort_key)
+                _JUMP_INDEX_CACHE[cache_key] = (now, index_entries)
+                lightweight = True
+                print(
+                    f"[PERF-PROFILE] GET /api/media/list/jump index-build "
+                    f"rows={len(rows)} entries={len(index_entries)} "
+                    f"total={(time.perf_counter() - t_fetch) * 1000:.1f}ms"
+                )
+
+        if lightweight:
+            entries = index_entries
+        else:
+            index_entries = None
+
+        if lightweight:
+            total = len(entries)
+        else:
+            total = len(entries)
 
         target = str(target_char or '').strip()
-        total = len(entries)
         found_index = -1
         for idx, entry in enumerate(entries):
             # _sort_entries()가 대괄호 태그를 뗀 제목 기준으로 정렬하므로, 여기서도 반드시
             # 같은 기준(뗀 제목)으로 초성을 판정해야 한다. 판정 기준이 정렬 기준과 어긋나면
-            # 계산된 page/offset이 실제 그리드가 보여주는 위치와 어긋나서 "엉뚱한 곳으로
-            # 점프"하게 된다 ([태그] 접두사가 흔한 영상 강좌 제목에서 특히 두드러짐 - '['는
-            # 유니코드에서 영문 Z와 한글 사이에 끼어들어 정렬 순서를 깨뜨린다).
+            # 계산된 page/offset이 실제 그리드가 보여주는 위치와 어긋난다.
             title = _strip_leading_bracket_tags(entry.get('series_name') or entry.get('representative_title') or '')
             if _get_initial(title) == target:
                 found_index = idx
@@ -538,12 +675,31 @@ class SeriesService:
             return {'found': False, 'total': total}
 
         safe_limit = max(1, int(limit or 1))
+        page_start = (found_index // safe_limit) * safe_limit
+        page_end = page_start + safe_limit
+        if lightweight:
+            page_series = _build_jump_page_entries(
+                db_type,
+                entries[page_start:page_end],
+                library_id,
+                search_query,
+                normalized_genres,
+                normalized_tags,
+                favorite_only,
+                user_id,
+                role,
+            )
+        else:
+            page_series = entries[page_start:page_end]
         return {
             'found': True,
             'index': found_index,
             'page': (found_index // safe_limit) + 1,
             'offset_in_page': found_index % safe_limit,
             'total': total,
+            # 초성 위치 계산 후 실제 목적 페이지 카드만 반환한다.
+            'series': page_series,
+            'has_more': total > page_end,
         }
 
     @staticmethod

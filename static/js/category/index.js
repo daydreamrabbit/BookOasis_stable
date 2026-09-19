@@ -1,10 +1,11 @@
 // index.js – 사이드바 카테고리 목록 로드 및 순서 드래그 앤 드롭 오케스트레이터
 import { state } from '../state.js';
 import * as api from '../api.js';
-import { selectCategory } from '../tab_media_library.js';
+import { selectCategory } from '../category_navigation.js?rev=20260919-library-content-kind-v1';
 import { updateCurrentCategoryIndicator } from '../category_indicator.js';
-import { bindSidebarContextMenu } from './context_menu.js';
-import { triggerAddLibrary, triggerAddLibraryGroup } from './crud_controller.js';
+import { bindSidebarContextMenu } from './context_menu.js?rev=20260919-library-content-kind-v1';
+import { triggerAddLibrary, triggerAddLibraryGroup } from './crud_controller.js?rev=20260919-library-content-kind-v1';
+import { runAfterMobileSidebarClose } from '../sidebar_manager.js';
 
 // 고정 포함 전체 15개 이상부터 "더 보기" 버튼 노출
 const SIDEBAR_MORE_THRESHOLD = 15;
@@ -124,8 +125,11 @@ function renderLibraryItem(lib, isPinned) {
   const safeRclone = escapeHtml(lib.rclone_rc_url || '');
   const safeIcon = escapeHtml(lib.icon || 'fa-book');
   const safeColor = escapeHtml(lib.color || '#94a3b8');
+  const contentKind = escapeHtml(lib.content_kind || 'unspecified');
+  const libraryType = escapeHtml(state.currentLibraryType || 'general');
   const hideCover = Number(lib.hide_cover || 0) ? 1 : 0;
   const hideTitle = Number(lib.hide_title || 0) ? 1 : 0;
+  const useFolderCover = Number(lib.use_folder_cover || 0) ? 1 : 0;
   const coverAspectRatio = lib.cover_aspect_ratio === '16:9' ? '16:9' : '4:3';
   const groupId = lib.group_id == null ? '' : String(lib.group_id);
   const safeGdriveCopyRemote = escapeHtml(lib.gdrive_copy_remote || '');
@@ -134,7 +138,7 @@ function renderLibraryItem(lib, isPinned) {
   const countBadgeHtml = bookCount > 0
     ? `<span class="category-count-badge" title="${bookCount.toLocaleString()}">${formatCompactCount(bookCount)}</span>`
     : '';
-  return `<li class="menu-item ${isActive}" data-type="custom" data-role="sidebar-category-dynamic" data-id="${lib.id}" data-category-id="${lib.id}" data-name="${safeName}" data-path="${safePath}" data-remote="${lib.is_remote || 0}" data-rclone-url="${safeRclone}" data-icon="${safeIcon}" data-color="${safeColor}" data-hide-cover="${hideCover}" data-hide-title="${hideTitle}" data-cover-aspect-ratio="${coverAspectRatio}" data-group-id="${groupId}" data-gdrive-copy-remote="${safeGdriveCopyRemote}" data-gdrive-view-local-mirror-path="${safeGdriveViewMirrorPath}" ${draggableAttr} style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;"><span style="display: inline-flex; align-items: center; gap: 0.6rem; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"><i class="fa-solid ${safeIcon}" style="color: ${safeColor}; flex-shrink: 0;"></i><span class="sidebar-bare-label" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</span></span><div style="display: inline-flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">${countBadgeHtml}<i class="fa-solid fa-circle-notch fa-spin category-scan-spinner" style="display:none; color:var(--app-accent-hover); font-size:0.75rem;" title="스캔 진행 중"></i></div></li>`;
+  return `<li class="menu-item ${isActive}" data-type="custom" data-role="sidebar-category-dynamic" data-library-type="${libraryType}" data-id="${lib.id}" data-category-id="${lib.id}" data-name="${safeName}" data-path="${safePath}" data-remote="${lib.is_remote || 0}" data-rclone-url="${safeRclone}" data-icon="${safeIcon}" data-color="${safeColor}" data-hide-cover="${hideCover}" data-hide-title="${hideTitle}" data-use-folder-cover="${useFolderCover}" data-content-kind="${contentKind}" data-cover-aspect-ratio="${coverAspectRatio}" data-group-id="${groupId}" data-gdrive-copy-remote="${safeGdriveCopyRemote}" data-gdrive-view-local-mirror-path="${safeGdriveViewMirrorPath}" ${draggableAttr} style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;"><span style="display: inline-flex; align-items: center; gap: 0.6rem; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"><i class="fa-solid ${safeIcon}" style="color: ${safeColor}; flex-shrink: 0;"></i><span class="sidebar-bare-label" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</span></span><div style="display: inline-flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">${countBadgeHtml}<i class="fa-solid fa-circle-notch fa-spin category-scan-spinner" style="display:none; color:var(--app-accent-hover); font-size:0.75rem;" title="스캔 진행 중"></i></div></li>`;
 }
 
 function renderPluginItem(cp) {
@@ -448,7 +452,7 @@ function initDynamicSidebarDelegation() {
       // 버블 단계 클릭 리스너(openSidebarGroupFlyout 참고)까지 이벤트가 도달하지 못해 닫히지
       // 않던 버그 - 카테고리 전환이 확정된 시점(여기)에서 직접 닫아준다.
       closeSidebarGroupFlyout();
-      selectCategory(catId);
+      runAfterMobileSidebarClose(() => selectCategory(catId));
       return;
     }
   }, true);

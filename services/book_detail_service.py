@@ -9,6 +9,22 @@ from utils.cover_helper import get_cover_image_with_t, resolve_series_cover, inv
 from utils.redis_helper import redis_delete_pattern
 from utils.permission_clause import build_library_permission_clause
 from services.cover_storage_service import get_covers_dir
+from repositories.series_metadata_utils import select_series_cover_row
+
+
+def _series_book_display_title(book):
+    title = (book.get('metadata_title') or '').strip()
+    if title:
+        return title
+
+    title = book['title']
+    file_path = book.get('file_path') or ''
+    if (book.get('file_format') or '').lower() == 'imgdir' and file_path:
+        return os.path.basename(os.path.dirname(file_path)) or title
+    if file_path:
+        return os.path.splitext(os.path.basename(file_path))[0]
+    return title
+
 
 class BookDetailService:
     @staticmethod
@@ -264,14 +280,17 @@ class BookDetailService:
                     lib_id = b['library_id']
                     break
 
+        # 대표 커버는 권 번호가 1인 책을 우선하고, 없으면 가장 앞선 권의 표지를 사용한다.
+        cover_row = select_series_cover_row(books_rows)
+
         # 대표 커버 이미지 매핑 및 실존 여부 확인 (Fallback 적용)
         final_cover = resolve_series_cover(
             series_name=series_name,
             lib_id=lib_id,
-            db_cover=books_rows[0]['cover_image'] if books_rows else None,
+            db_cover=cover_row.get('cover_image') if cover_row else None,
             covers_dir=covers_dir,
             conn=None,
-            candidates_rows=books_rows
+            candidates_rows=books_rows,
         )
 
         # 배너는 표지처럼 대체 후보를 뒤지지 않는다(공유 드라이브 도서관리 담당자 합의 범위 -
@@ -334,13 +353,8 @@ class BookDetailService:
 
         books_list = []
         for b in books_rows:
-            clean_title = b['title']
+            clean_title = _series_book_display_title(b)
             file_format = (b['file_format'] or '').lower()
-            if file_format == 'imgdir' and b['file_path']:
-                clean_title = os.path.basename(os.path.dirname(b['file_path'])) or clean_title
-            elif b['file_path']:
-                filename_with_ext = os.path.basename(b['file_path'])
-                clean_title, _ = os.path.splitext(filename_with_ext)
                 
             total_pages = b['total_pages'] or 0
             has_offsets_val = b.get('has_offsets', 0)

@@ -1,13 +1,41 @@
 // dashboard.js – 대시보드 데이터 로드 및 수평 휠/버튼 스크롤 제어
 import { state } from './state.js';
 import * as api from './api.js';
-import { renderDashboardHistory, renderDashboardRecentlyAdded } from './ui.js';
+import { renderDashboardHistory, renderDashboardRecentlyAdded } from './ui.js?v=20260918-library-scan-progress-v1';
 import { updateLibraryTotalCount } from './book_list.js';
 import { loadPluginHealthPanel } from './plugin_health_panel.js';
+import { isDashboardDataReusable } from './dashboard_cache.js';
 
 let dashboardLoadToken = 0;
 let pluginsLoadToken = 0;
 let dashboardRowLastType = null;
+const dashboardDataCacheByType = new Map();
+const dashboardInFlightByType = new Map();
+const homeLayoutModeByType = new Map();
+
+function hasDashboardContent(row) {
+  return !!row && (row.__dashboardReady === true || !!row.querySelector('.book-card'));
+}
+
+function renderDashboardRowIfChanged(row, targetType, books, render) {
+  if (!row) return;
+  const signature = `${targetType}:${JSON.stringify(books)}`;
+  if (row.__dashboardReady === true && row.__dashboardSignature === signature) return;
+  render(books);
+  row.__dashboardSignature = signature;
+  row.__dashboardReady = true;
+}
+
+function showDashboardErrorIfEmpty(row, message) {
+  if (!row || hasDashboardContent(row)) return;
+  row.innerHTML = `<div class="loading-spinner">${message}</div>`;
+  row.__dashboardSignature = '';
+}
+
+export function invalidateDashboardData(libraryType = null) {
+  if (libraryType) dashboardDataCacheByType.delete(libraryType);
+  else dashboardDataCacheByType.clear();
+}
 
 // 대시보드 섹션 제목("최근 읽은 도서"/"신규 추가 도서")은 오디오북/영상 강좌 세션에서도
 // "도서" 문구를 그대로 쓰고 있었다 - 상단 총계 배지(book_list.js::updateLibraryTotalCount)와
@@ -36,29 +64,87 @@ function updateDashboardSectionLabels(targetType) {
   if (recentSuffixEl) recentSuffixEl.textContent = i18n.t(suffixKey);
 }
 
-export async function loadDashboardData() {
-  const requestToken = ++dashboardLoadToken;
+export function loadDashboardData(options = {}) {
   const targetType = state.currentLibraryType || 'general';
-  state.isLoading = true;
+  const forceRefresh = options && options.force === true;
+  const context = `${state.hideCompletedInHistory ? 'hide-completed' : 'show-completed'}:${state.homeDashboardPluginMode ? 'plugin-layout' : 'classic-layout'}`;
+  const historyRow = document.getElementById('dashboard-history-row');
+  const newRow = document.getElementById('dashboard-new-row');
+  const isTypeSwitched = dashboardRowLastType !== targetType;
+  const cached = dashboardDataCacheByType.get(targetType);
+
+  // 강제 갱신 요청이 실패했을 때 이전 스냅샷을 새 데이터인 것처럼 재사용하지 않는다.
+  if (forceRefresh) dashboardDataCacheByType.delete(targetType);
+
+  updateDashboardSectionLabels(targetType);
+  if (isDashboardDataReusable({
+    forceRefresh,
+    typeSwitched: isTypeSwitched,
+    historyReady: hasDashboardContent(historyRow),
+    recentlyAddedReady: hasDashboardContent(newRow),
+    cached,
+    context,
+  })) {
+    // 목록/컬렉션 화면 진입 시 공용 카운트 배지가 비워질 수 있으므로,
+    // 캐시 복귀 때 홈의 전체 권수도 함께 복구한다.
+    updateLibraryTotalCount([], cached.totals);
+    return Promise.resolve({ cached: true });
+  }
+
+  const inFlight = dashboardInFlightByType.get(targetType);
+  if (!forceRefresh && inFlight && inFlight.token === dashboardLoadToken) {
+    return inFlight.promise;
+  }
+
+  const request = refreshDashboardData(targetType, context);
+  const token = dashboardLoadToken;
+  let trackedRequest;
+  trackedRequest = request.finally(() => {
+    if (dashboardInFlightByType.get(targetType)?.promise === trackedRequest) {
+      dashboardInFlightByType.delete(targetType);
+    }
+  });
+  dashboardInFlightByType.set(targetType, { token, promise: trackedRequest });
+  return trackedRequest;
+}
+window.loadDashboardData = loadDashboardData;
+window.invalidateDashboardData = invalidateDashboardData;
+
+async function refreshDashboardData(targetType, context) {
+  const requestToken = ++dashboardLoadToken;
 
   updateDashboardSectionLabels(targetType);
 
   const historyRow = document.getElementById('dashboard-history-row');
   const newRow = document.getElementById('dashboard-new-row');
   const countSpan = document.getElementById('library-total-count');
-  if (countSpan) countSpan.innerText = '';
-
   const isTypeSwitched = dashboardRowLastType !== targetType;
+  const hasExistingRows = hasDashboardContent(historyRow) || hasDashboardContent(newRow);
+  if (countSpan && (isTypeSwitched || (!dashboardDataCacheByType.has(targetType) && !hasExistingRows))) {
+    countSpan.innerText = '';
+  }
+
   dashboardRowLastType = targetType;
 
   // 탭 타입 전환 시 이전 탭의 카드를 즉시 지우고 로딩 스피너로 초기화 (1~2초 잔상 현상 방지)
-  if (isTypeSwitched || (historyRow && !historyRow.children.length)) {
+  if (isTypeSwitched || !hasDashboardContent(historyRow)) {
+    if (historyRow) {
+      historyRow.__dashboardReady = false;
+      historyRow.__dashboardSignature = '';
+    }
     if (historyRow) historyRow.innerHTML = '<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> 최근 항목을 불러오는 중...</div>';
   }
-  if (isTypeSwitched || (newRow && !newRow.children.length)) {
+  if (isTypeSwitched || !hasDashboardContent(newRow)) {
+    if (newRow) {
+      newRow.__dashboardReady = false;
+      newRow.__dashboardSignature = '';
+    }
     if (newRow) newRow.innerHTML = '<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> 신규 항목을 불러오는 중...</div>';
   }
-  
+
+  let allCoreDataLoaded = true;
+  let dashboardTotals = null;
+
   try {
     // 0. 독서 동기부여 위젯 로드
     if (typeof window.loadDashboardInsights === 'function') {
@@ -68,13 +154,12 @@ export async function loadDashboardData() {
     // 0-1. 플러그인 로드 상태 패널 (관리자 전용, 나머지 대시보드 로딩을 막지 않도록 별도 실행)
     loadPluginHealthPanel();
 
-    // 0-2. 홈 화면 플러그인 배치 모드 레이아웃. 코어 3섹션은 정적 HTML에 항상 이미 존재해서
-    // fetch를 아무리 빨리 해도 "기본 배치로 먼저 페인트된 뒤 → 재배치/카드 삽입"이라는 2단계
-    // 자체가 눈에 보이는 리플로우로 남는다(fetch 타이밍 문제가 아니었음). 그래서 레이아웃이
-    // 확정되기 전까지 스택 전체를 미리 숨겨두고, loadHomeDashboardLayout()이 배치를 다 끝낸
-    // 뒤 한 번에 드러낸다 - 타입 전환 시 historyRow/newRow에 스피너를 넣는 것과 같은 원리.
+    // 0-2. 홈 화면 플러그인 배치 모드 레이아웃. 순서와 위젯 카드 자리만 먼저 확정해
+    // 화면에 보여주고, 플러그인 데이터는 각 카드에서 따로 로드한다. 위젯 서버 응답이
+    // 느려도 홈의 코어 섹션까지 숨겨지지 않게 한다.
     const homeWidgetStackEl = document.getElementById('home-widget-stack');
-    if (state.homeDashboardPluginMode) {
+    const expectedLayoutMode = state.homeDashboardPluginMode ? 'plugin' : 'classic';
+    if (homeLayoutModeByType.get(targetType) !== expectedLayoutMode) {
       if (homeWidgetStackEl) homeWidgetStackEl.classList.add('home-widget-stack--loading');
       loadHomeDashboardLayout(targetType, { allowSsr: true }).catch((e) => {
         console.error('[Dashboard] 홈 위젯 레이아웃 적용 실패:', e);
@@ -82,74 +167,93 @@ export async function loadDashboardData() {
       });
     }
 
-    // 1. 전체 보관함 합계, 최근 읽은 도서, 신규 추가 도서를 동시에 요청
+    // 1. 세 요청은 병렬로 시작하고, 각 영역은 자기 응답이 도착하는 즉시 그린다.
+    // Promise.all로 묶어두면 느린 한 요청이 최근 읽은 도서와 신규 도서 표시까지 지연시킨다.
+    const isCurrentDashboard = () => requestToken === dashboardLoadToken
+      && state.currentLibraryId === 'home'
+      && state.currentLibraryType === targetType;
+
     const totalsPromise = api.fetchBooksTotals({type: targetType, libraryId: 'all'})
-      .catch(err => ({ success: false, error: String(err) }));
-    const historyPromise = api.fetchReadingHistory(targetType);
+      .then((data) => {
+        if (!data || !data.success) {
+          allCoreDataLoaded = false;
+          return;
+        }
+        dashboardTotals = data;
+        if (isCurrentDashboard()) updateLibraryTotalCount([], data);
+      })
+      .catch((err) => {
+        allCoreDataLoaded = false;
+        console.error('[Dashboard] 보관함 합계 로드 실패:', err);
+      });
+
+    const historyPromise = api.fetchReadingHistory(targetType)
+      .then((data) => {
+        if (!isCurrentDashboard()) return;
+        if (!data || !data.success) {
+          allCoreDataLoaded = false;
+          if (data && data.error) console.error('[Dashboard] 히스토리 로드 실패:', data.error);
+          showDashboardErrorIfEmpty(historyRow, i18n.t('dashboard.history_load_fail') || '히스토리를 불러오지 못했습니다.');
+          return;
+        }
+        if (!isCurrentDashboard()) return;
+
+        let books = data.books || [];
+        if (state.hideCompletedInHistory) {
+          books = books.filter(b => {
+            const fmt = String(b.file_format || '').toLowerCase();
+            const isAudiobook = fmt === 'audiobook' || fmt === 'audio';
+            return isAudiobook
+              ? (b.is_completed !== 1)
+              : !(b.is_completed === 1 || (b.total_pages > 0 && b.pages_read >= b.total_pages));
+          });
+        }
+        renderDashboardRowIfChanged(historyRow, targetType, books, renderDashboardHistory);
+      })
+      .catch((err) => {
+        allCoreDataLoaded = false;
+        if (!isCurrentDashboard()) return;
+        console.error('[Dashboard] 히스토리 로드 실패:', err);
+        showDashboardErrorIfEmpty(historyRow, i18n.t('dashboard.history_load_fail') || '히스토리를 불러오지 못했습니다.');
+      });
+
     const recentlyAddedPromise = fetch(`/api/media/recently-added?type=${targetType}&_=${Date.now()}`, {cache: 'no-store'})
       .then(res => res.json())
-      .catch(err => ({ success: false, error: String(err) }));
+      .then((data) => {
+        if (!isCurrentDashboard()) return;
+        if (data && data.success) {
+          renderDashboardRowIfChanged(newRow, targetType, data.books || [], renderDashboardRecentlyAdded);
+        } else {
+          allCoreDataLoaded = false;
+          if (data && data.error) console.error('[Dashboard] 신규 도서 로드 실패:', data.error);
+          showDashboardErrorIfEmpty(newRow, i18n.t('dashboard.new_books_load_fail') || '신규 도서를 불러오지 못했습니다.');
+        }
+      })
+      .catch((err) => {
+        allCoreDataLoaded = false;
+        if (!isCurrentDashboard()) return;
+        console.error('[Dashboard] 신규 도서 로드 실패:', err);
+        showDashboardErrorIfEmpty(newRow, i18n.t('dashboard.new_books_load_fail') || '신규 도서를 불러오지 못했습니다.');
+      });
 
-    const [totalsData, historyData, newData] = await Promise.all([totalsPromise, historyPromise, recentlyAddedPromise]);
-    if (requestToken !== dashboardLoadToken) return;
-    if (state.currentLibraryId !== 'home' || state.currentLibraryType !== targetType) return;
-
-    if (totalsData && totalsData.success) {
-      updateLibraryTotalCount([], totalsData);
-    }
-
-    // 최근 읽은 도서 렌더링
-    if (historyData && historyData.success) {
-      let books = historyData.books || [];
-      if (state.hideCompletedInHistory) {
-        books = books.filter(b => {
-          const fmt = String(b.file_format || '').toLowerCase();
-          const isAudiobook = fmt === 'audiobook' || fmt === 'audio';
-          return isAudiobook
-            ? (b.is_completed !== 1)
-            : !(b.is_completed === 1 || (b.total_pages > 0 && b.pages_read >= b.total_pages));
-        });
-      }
-      renderDashboardHistory(books);
-    } else {
-      // 서버 예외 원문(DB 엔진/테이블명 등 내부 정보 포함 가능)을 화면에 그대로 노출하지 않고
-      // 콘솔에만 남긴다 - 사용자에게는 일반적인 실패 메시지만 보여준다.
-      if (historyData && historyData.error) console.error('[Dashboard] 히스토리 로드 실패:', historyData.error);
-      if (historyRow) historyRow.innerHTML = `<div class="loading-spinner">${i18n.t('dashboard.history_load_fail') || '히스토리를 불러오지 못했습니다.'}</div>`;
-    }
-
-    // 신규 추가 도서 렌더링
-    if (newData && newData.success) {
-      renderDashboardRecentlyAdded(newData.books);
-    } else {
-      if (newData && newData.error) console.error('[Dashboard] 신규 도서 로드 실패:', newData.error);
-      if (newRow) newRow.innerHTML = `<div class="loading-spinner">${i18n.t('dashboard.new_books_load_fail') || '신규 도서를 불러오지 못했습니다.'}</div>`;
+    await Promise.all([totalsPromise, historyPromise, recentlyAddedPromise]);
+    if (allCoreDataLoaded && isCurrentDashboard()) {
+      dashboardDataCacheByType.set(targetType, { loadedAt: Date.now(), context, totals: dashboardTotals });
     }
 
   } catch (e) {
     if (requestToken !== dashboardLoadToken) return;
     console.error('대시보드 데이터 로드 오류:', e);
-    if (historyRow) historyRow.innerHTML = '<div class="loading-spinner">서버 연결 오류</div>';
-    if (newRow) newRow.innerHTML = '<div class="loading-spinner">서버 연결 오류</div>';
-  } finally {
-    if (requestToken === dashboardLoadToken) {
-      state.isLoading = false;
-    }
+    showDashboardErrorIfEmpty(historyRow, '서버 연결 오류');
+    showDashboardErrorIfEmpty(newRow, '서버 연결 오류');
   }
 }
 
 
 let homeLayoutLoadToken = 0;
 
-// 최초 페이지 로드 시 서버(services/home_dashboard_service.py)가 이미 db_type='general' 기준
-// 최종 순서로 #home-widget-stack을 렌더링해뒀다(data-ssr-* 속성 참고). 그 순서를 딱 한 번
-// "소비"할 기회를 이 플래그로 표시한다 - 세션 타입이 일치하면 재조회 없이 이미 그려진 DOM을
-// 그대로 인정하고 상호작용(Sortable/위젯 데이터)만 붙인다. 코어 위젯이 기본 배치로 먼저
-// 그려졌다가 JS가 재배치하며 생기던 리플로우를 근본적으로 없애기 위함
-// (docs/plan_home_dashboard_pluginization.md 참고). 세션이 안 맞거나 이미 한 번 썼으면 그
-// 뒤로는 항상 기존 fetch 경로를 탄다.
-let homeLayoutSsrChecked = false;
-
+// 최초 페이지 로드 때 서버가 렌더한 레이아웃과 이후 JS가 갱신한 레이아웃을 기억한다.
+// 같은 타입으로 홈에 다시 들어오면 배치 API를 다시 호출하지 않고 현재 DOM을 재사용한다.
 // 서버가 마지막으로 내려준 "현재 레이아웃에 실제로 포함된" 위젯 id 목록. 코어 3섹션의
 // DOM 래퍼는 제거해도 항상 #home-widget-stack에 남아있고 display:none으로만 숨겨지기
 // 때문에, 드래그 재정렬/위젯 추가·제거 시 DOM을 그대로 스캔하면 이미 뺀 코어 섹션이
@@ -266,6 +370,7 @@ function consumeSsrHomeLayout(stack, requestToken) {
         refreshHomeWidgetDividers();
       }
     });
+    applyHomeWidgetLockUi(isHomeWidgetsLocked());
   }
   applyHomeWidgetLockUi(isHomeWidgetsLocked());
 
@@ -299,9 +404,9 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
   // 위젯 추가/제거, 순서 변경, 설정 화면에서 모드를 방금 켠 뒤의 명시적 재조회처럼 "지금 막
   // 바뀐 걸 반영해야 하는" 호출에서 SSR을 쓰면, 페이지가 그려질 때의 낡은 스냅샷을 최신
   // 상태로 착각해 방금의 변경이 반영 안 된 것처럼 보일 수 있다.
-  if (allowSsr && !homeLayoutSsrChecked) {
-    homeLayoutSsrChecked = true;
+  if (allowSsr) {
     if (stack.dataset.ssrType === targetType && stack.dataset.ssrMode) {
+      homeLayoutModeByType.set(targetType, stack.dataset.ssrMode);
       consumeSsrHomeLayout(stack, requestToken);
       return;
     }
@@ -315,6 +420,13 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
     return;
   }
   if (requestToken !== homeLayoutLoadToken) return;
+
+  // 이후 같은 타입으로 홈에 재진입할 때 이 DOM을 바로 재사용할 수 있게 현재 배치를 기록한다.
+  stack.dataset.ssrType = targetType;
+  stack.dataset.ssrMode = data && data.mode ? data.mode : 'classic';
+  if (data && data.success) {
+    homeLayoutModeByType.set(targetType, data.mode === 'plugin' ? 'plugin' : 'classic');
+  }
 
   // 이전 로드에서 동적으로 삽입한 플러그인 위젯 카드는 매번 새로 그린다 (중복/오염 방지)
   stack.querySelectorAll('.home-widget-slot[data-widget-kind="plugin"]').forEach((el) => el.remove());
@@ -405,8 +517,6 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
     }
   }
 
-  await Promise.all(dataFetchPromises);
-
   if (requestToken !== homeLayoutLoadToken) return;
   refreshHomeWidgetDividers();
 
@@ -426,11 +536,16 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
         refreshHomeWidgetDividers();
       }
     });
+    applyHomeWidgetLockUi(isHomeWidgetsLocked());
   }
   applyHomeWidgetLockUi(isHomeWidgetsLocked());
 
   renderHomeWidgetCatalog(data.catalog || []);
   stack.classList.remove('home-widget-stack--loading');
+
+  // 코어 섹션과 위젯 자리까지는 이미 화면에 표시했다. 느린 위젯 응답은 해당 카드 안에서만
+  // 기다리게 해 홈 화면 전체가 가려지는 일을 막는다.
+  await Promise.all(dataFetchPromises);
 }
 
 // 아직 레이아웃에 추가하지 않은 home_widget 플러그인 목록을 "+ 위젯 추가" 버튼 그룹으로
@@ -715,8 +830,20 @@ async function loadDashboardWidgetData(pluginId, limit, contentId, requestToken)
   if (!container) return;
 
   try {
-    const res = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?type=${state.currentLibraryType}&limit=${limit}`);
-    const data = await res.json();
+    const initialDataElement = container.querySelector('.home-widget-initial-data');
+    let data = null;
+    if (initialDataElement) {
+      try {
+        data = JSON.parse(initialDataElement.textContent || 'null');
+      } catch (err) {
+        console.warn(`[Dashboard] 서버 렌더 위젯 데이터 해석 실패(${pluginId}), API로 다시 조회합니다.`, err);
+      }
+      initialDataElement.remove();
+    }
+    if (!data) {
+      const res = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?type=${state.currentLibraryType}&limit=${limit}`);
+      data = await res.json();
+    }
 
     if (requestToken !== pluginsLoadToken) return;
 
@@ -749,6 +876,11 @@ async function loadDashboardWidgetData(pluginId, limit, contentId, requestToken)
           console.error(`[Dashboard] 위젯 스크립트 실행 오류(${pluginId}):`, err);
         }
       }
+      return;
+    }
+
+    if (!data?.success) {
+      container.innerHTML = `<div class="plugin-widget-error">${escapeHtml(data?.error || '위젯 데이터를 불러오지 못했습니다.')}</div>`;
       return;
     }
 
@@ -814,7 +946,10 @@ async function loadDashboardWidgetData(pluginId, limit, contentId, requestToken)
         `;
         container.insertAdjacentHTML('beforeend', itemHtml);
       });
+      return;
     }
+
+    container.innerHTML = '<div class="plugin-widget-empty">표시할 데이터가 없습니다.</div>';
   } catch (e) {
     console.error(`대시보드 위젯 로드 오류(${pluginId}):`, e);
     container.innerHTML = '<div class="plugin-widget-error">서버 연결 오류</div>';

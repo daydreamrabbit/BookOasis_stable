@@ -9,22 +9,26 @@ import { flushProgress } from './viewer_progress.js';
 import './header_scroll_behavior.js';
 
 // category.js CRUD 임포트
-import { loadLibraries, triggerAddLibrary, triggerEditLibrary, triggerDeleteLibrary, closeLibraryModal, submitLibraryForm, triggerScanLibrary, triggerScanLibraryCovers, triggerCancelScanLibrary } from './category.js';
-import { applySidebarShowMore, expandGroupContainingCategory } from './category/index.js';
+import { loadLibraries, triggerAddLibrary, triggerEditLibrary, triggerDeleteLibrary, closeLibraryModal, submitLibraryForm, triggerScanLibrary, triggerScanLibraryCovers, triggerCancelScanLibrary } from './category.js?rev=20260919-library-content-kind-v1';
+import { applySidebarShowMore, expandGroupContainingCategory } from './category/index.js?rev=20260919-library-content-kind-v1';
 
 // scheduler.js 임포트
 import { loadLibrarySchedules, saveLibrarySchedule, runLibraryScanNow } from './scheduler.js';
 
 // 서브 모듈 임포트
-import { loadDashboardData, loadDashboardPlugins, switchPluginsViewTab } from './dashboard.js?v=20260917-home-widget-plugin-ui-v1';
+import { loadDashboardData, loadDashboardPlugins, switchPluginsViewTab } from './dashboard.js?v=20260919-home-widget-initial-data-v1';
 import { initScrollableRowNavDelegation } from './scrollable_row_nav.js';
 import { initInfiniteScrollObserver } from './infinite_scroll.js';
-import { showBookContextMenu, triggerScanSingleBookAction, triggerSearchAladinMetadataAction, triggerMarkAsUnreadAction } from './book_context_menu.js';
+import { showBookContextMenu, triggerScanSingleBookAction, triggerSearchAladinMetadataAction, triggerMarkAsUnreadAction } from './book_context_menu.js?rev=20260919-force-series-and-volume-scan-v2';
 import { openMetadataSearchModal, closeMetadataSearchModal, performMetadataSearch } from './metadata_search.js';
+import { getLoadedPageRange } from './book_list_refresh_state.js';
 
 // book_list.js 임포트
 import {
   loadBooksList,
+  restoreBookListPosition,
+  invalidateBookListAfterScan,
+  refreshBooksListIfStale,
   loadReadingHistory,
   filterBooks,
   toggleLibrarySort,
@@ -41,13 +45,14 @@ import { switchSettingsTab, loadInitialSystemSettings, loadGeneralSettings, subm
 
 // 장르/태그 및 사이드바 제어 모듈
 import { initFloatingFilter, toggleFilterModal } from './genre_tag_filter.js';
-import { initSidebarInteractions, restoreDesktopSidebarState, toggleDesktopSidebar, syncSidebarResponsiveControls } from './sidebar_manager.js';
+import { initSidebarInteractions, restoreDesktopSidebarState, toggleDesktopSidebar, syncSidebarResponsiveControls, runAfterMobileSidebarClose } from './sidebar_manager.js';
 import { decodeDetailParams } from './url_obfuscator.js';
 
 // 모듈화로 분리한 미디어 타입 토글 및 검색 단축키 제어부 임포트
-import { canAccessLibraryType, applyLibraryTypeToggleVisibility, applyLibraryTypeButtonState, switchLibraryType } from './library_type_toggle.js';
+import { canAccessLibraryType, applyLibraryTypeToggleVisibility, applyLibraryTypeButtonState, switchLibraryType, initLibraryTypeCollapse, toggleLibraryTypeCollapse } from './library_type_toggle.js?rev=20260919-library-content-kind-v1';
 import { applyGroupModeButtonState, switchGroupMode, restoreGroupModeView } from './author_group_toggle.js';
-import { focusLibrarySearchInput, applySearchShortcutSetting, initLibrarySearchShortcut, handleLibrarySearchAction, handleLibrarySearchKeydown, initLibraryTypeHotkeys } from './search_shortcut_manager.js';
+import { focusLibrarySearchInput, applySearchShortcutSetting, initLibrarySearchShortcut, handleLibrarySearchAction, handleLibrarySearchKeydown, initLibraryTypeHotkeys } from './search_shortcut_manager.js?rev=20260919-library-content-kind-v1';
+import { setSelectCategoryHandler } from './category_navigation.js?rev=20260919-library-content-kind-v1';
 
 import './viewer/viewer_padding.js';
 import './audio_player.js';
@@ -69,7 +74,7 @@ function initLibraryShellDelegation() {
 
   document.addEventListener('click', (event) => {
     const target = event && event.target && typeof event.target.closest === 'function'
-      ? event.target.closest('[data-role="mobile-brand-home"], [data-role="sidebar-category-static"], [data-role="desktop-sidebar-toggle"], [data-role="library-search-action"], [data-role="library-open-filter"], [data-role="library-sort-toggle"], [data-role="library-type-toggle"], [data-role="grouping-mode-toggle"], [data-role="library-filter-reset"], [data-role="detail-back-to-list"]')
+      ? event.target.closest('[data-role="mobile-brand-home"], [data-role="sidebar-category-static"], [data-role="desktop-sidebar-toggle"], [data-role="library-search-action"], [data-role="library-open-filter"], [data-role="library-sort-toggle"], [data-role="library-type-collapse"], [data-role="library-type-toggle"], [data-role="grouping-mode-toggle"], [data-role="library-filter-reset"], [data-role="detail-back-to-list"]')
       : null;
     if (!target) return;
 
@@ -77,10 +82,11 @@ function initLibraryShellDelegation() {
 
     const role = target.getAttribute('data-role');
     if (role === 'mobile-brand-home') {
-      return selectCategory('home');
+      return runAfterMobileSidebarClose(() => selectCategory('home'));
     }
     if (role === 'sidebar-category-static') {
-      return selectCategory(target.getAttribute('data-category-id') || 'home');
+      const categoryId = target.getAttribute('data-category-id') || 'home';
+      return runAfterMobileSidebarClose(() => selectCategory(categoryId));
     }
     if (role === 'desktop-sidebar-toggle') {
       return toggleDesktopSidebar();
@@ -93,6 +99,9 @@ function initLibraryShellDelegation() {
     }
     if (role === 'library-sort-toggle') {
       return toggleLibrarySort();
+    }
+    if (role === 'library-type-collapse') {
+      return toggleLibraryTypeCollapse();
     }
     if (role === 'library-type-toggle') {
       return switchLibraryType(target.getAttribute('data-library-type') || 'general');
@@ -153,6 +162,7 @@ function recoverTopCategoryUiAfterBack() {
   if (libraryTypeToggle) libraryTypeToggle.style.display = 'flex';
 
   applyLibraryTypeToggleVisibility();
+  initLibraryTypeCollapse();
   applyGroupModeButtonState(state.groupMode);
   // 뷰어 전체화면 종료 등으로 상단 사이드바(햄버거 메뉴)의 표시 상태가
   // 어긋난 채로 남는 경우를 대비해 back 복귀 시점에 항상 강제 재동기화한다.
@@ -543,10 +553,16 @@ async function initTabMediaLibrary() {
     applyLibraryTypeButtonState(state.currentLibraryType || 'general');
   }
 
-  // 중요: 초기 라이브러리 로드는 타입 적용 후에 수행해야
-  // 강력새로고침 시 좌측 메뉴 타입과 상세 타입이 어긋나지 않는다.
+  const targetLibraryId = parseLibraryIdFromUrl();
+  const homeLanding = !isDetailDeepLink && (!targetLibraryId || targetLibraryId === 'home');
+  let sidebarLoadPromise = null;
+
+  // 초기 라이브러리 로드는 타입 적용 후에 수행한다. 홈 진입이라면 사이드바 플러그인
+  // 목록까지 기다리지 않고 홈을 먼저 띄운 뒤, 카테고리 목록은 백그라운드에서 채운다.
   if (state.currentLibraryType === 'video') {
     if (typeof window.loadVideoLibraryView === 'function') await window.loadVideoLibraryView();
+  } else if (homeLanding) {
+    sidebarLoadPromise = loadLibraries();
   } else {
     await loadLibraries();
   }
@@ -559,12 +575,18 @@ async function initTabMediaLibrary() {
     }
   }
 
-  const targetLibraryId = parseLibraryIdFromUrl();
+  const savedListPosition = history.state
+    && ['category', 'list'].includes(history.state.view)
+    && String(history.state.libraryId || '') === String(targetLibraryId || '')
+    && String(history.state.type || state.currentLibraryType) === String(state.currentLibraryType)
+    ? history.state
+    : null;
   if (targetLibraryId && targetLibraryId !== 'home') {
-    selectCategory(targetLibraryId, true);
+    await selectCategory(targetLibraryId, true, { restoreListPosition: savedListPosition });
   } else {
-    selectCategory('home', true);
+    await selectCategory('home', true);
   }
+  if (sidebarLoadPromise) await sidebarLoadPromise;
 }
 
 function makeCategoryHistoryState(libraryId, type = state.currentLibraryType) {
@@ -612,6 +634,40 @@ function restoreNavigationScroll(scrollTop, libraryId = state.currentLibraryId) 
   requestAnimationFrame(apply);
   setTimeout(apply, 80);
 }
+
+function saveNavigationScrollState() {
+  const current = history.state;
+  if (!current || !['category', 'list'].includes(current.view)) return;
+  if (String(current.libraryId || '') !== String(state.currentLibraryId || '')) return;
+  if (String(current.type || 'general') !== String(state.currentLibraryType || 'general')) return;
+
+  const mainContent = document.querySelector('.library-main-content');
+  const mainTop = Number(mainContent?.scrollTop || 0);
+  const documentTop = Number(window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0);
+  const pages = getLoadedPageRange(state.firstLoadedPage, state.currentPage, state.hasMore);
+  try {
+    history.replaceState({
+      ...current,
+      scrollTop: mainTop > 0 ? mainTop : documentTop,
+      scrollUseDocument: !mainContent || (mainTop === 0 && documentTop > 0),
+      firstLoadedPage: pages.firstPage,
+      lastLoadedPage: pages.lastPage,
+    }, '', window.location.href);
+  } catch (error) {
+    console.warn('[Navigation-Scroll] 스크롤 위치 저장 실패:', error);
+  }
+}
+
+let scrollHistoryUpdatePending = false;
+document.addEventListener('scroll', () => {
+  if (scrollHistoryUpdatePending) return;
+  scrollHistoryUpdatePending = true;
+  requestAnimationFrame(() => {
+    scrollHistoryUpdatePending = false;
+    saveNavigationScrollState();
+  });
+}, { passive: true, capture: true });
+window.addEventListener('beforeunload', saveNavigationScrollState);
 
 function makeCategoryHistoryUrl(libraryId, type = state.currentLibraryType) {
   const hashParams = new URLSearchParams({
@@ -665,10 +721,12 @@ function recordCategoryNavigation(id, skipHistory) {
   if (alreadyAtTarget) {
     if (activeState.view === 'list') {
       try {
-        history.replaceState({
-          ...makeCategoryHistoryState(targetLibraryId, currentType),
-          scrollTop: getCurrentNavigationScrollTop(),
-        }, '', window.location.href);
+      history.replaceState({
+        ...makeCategoryHistoryState(targetLibraryId, currentType),
+        scrollTop: getCurrentNavigationScrollTop(),
+        firstLoadedPage: state.firstLoadedPage,
+        lastLoadedPage: getLoadedPageRange(state.firstLoadedPage, state.currentPage, state.hasMore).lastPage,
+      }, '', window.location.href);
       } catch (e) {}
     }
     return;
@@ -810,7 +868,13 @@ export async function selectCategory(id, skipHistory = false, options = {}) {
   // 초기 HTML의 "가나다 오름차순" 텍스트가 그대로 남아있는 문제가 있었다.
   updateSortButtonUI();
 
-  goBackToList();
+  // 상세 화면에서 라이브러리를 바꿀 때만 상세 복귀 처리를 한다. 목록 화면에서
+  // 이 함수를 항상 호출하면 상세에서 마지막으로 저장한 last_pos를 다시 적용해
+  // 라이브러리 전환 때 현재 스크롤 위치가 위로 튈 수 있다.
+  const detailView = document.getElementById('book-detail-view');
+  if (detailView && detailView.style.display !== 'none') {
+    goBackToList();
+  }
 
   if (id === 'home') {
     // 영상 세션도 오디오북과 동일하게 공용 대시보드(최근 시청/신규 추가)를 그대로 재사용한다.
@@ -854,8 +918,10 @@ export async function selectCategory(id, skipHistory = false, options = {}) {
       }
     } else if (id === 'history') {
       loadReadingHistory();
+    } else if (options.restoreListPosition) {
+      await restoreBookListPosition(options.restoreListPosition);
     } else {
-      loadBooksList(false);
+      loadBooksList(false, null, { preserveScroll: !skipHistory });
     }
   }
 
@@ -865,12 +931,15 @@ export async function selectCategory(id, skipHistory = false, options = {}) {
 }
 
 // 글로벌 전역 함수 노출
+setSelectCategoryHandler(selectCategory);
 window.selectCategory = selectCategory;
 window.switchLibraryType = switchLibraryType;
 window.filterBooks = filterBooks;
 window.openReader = openReader;
 window.openBookDetail = openBookDetail;
 window.goBackToList = goBackToList;
+window.invalidateBookListAfterScan = invalidateBookListAfterScan;
+window.refreshBooksListIfStale = refreshBooksListIfStale;
 window.setComicFitMode = setComicFitMode;
 window.closeMediaViewer = closeMediaViewer;
 window.toggleFullscreenViewer = toggleFullscreenViewer;

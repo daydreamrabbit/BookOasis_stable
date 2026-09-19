@@ -24,8 +24,9 @@ from services.metadata_factory import MetadataFactory
 from utils.drive_helper import is_remote_path
 from tools.scanner.memory_helper import check_memory_exceeded
 from tools.scanner.path_utils import canonical_path, join_canonical
-from tools.scanner.db_writer import update_book_metadata, insert_new_book_v2, save_book_offsets, bulk_update_books, clear_book_banners, bulk_insert_books, bulk_save_book_offsets
-from tools.scanner.tasks import process_folder_task, process_folder_covers, SUPPORTED_FORMATS, SUPPORTED_IMAGE_FORMATS, IMGDIR_VIRTUAL_FILENAME
+from tools.scanner.db_writer import update_book_metadata, insert_new_book_v2, save_book_offsets, bulk_update_books, bulk_update_book_covers, clear_book_banners, bulk_insert_books, bulk_save_book_offsets
+from tools.scanner.tasks import process_folder_task, process_folder_covers, SUPPORTED_FORMATS, SUPPORTED_METADATA_TITLE_FORMATS, SUPPORTED_IMAGE_FORMATS, IMGDIR_VIRTUAL_FILENAME
+from embedded_metadata_version import CURRENT_EMBEDDED_METADATA_VERSION, EMBEDDED_METADATA_EXTENSIONS
 from tools.scanner.sync_detector import detect_and_handle_book_movement, handle_deleted_books
 from tools.scanner.cover import cleanup_unreferenced_generated_banners
 
@@ -34,6 +35,35 @@ DB_DIR = os.path.join(MEDIA_SERVER_DIR, 'db')
 
 # 우아한 종료 시그널 감지 플래그
 stop_requested = False
+
+
+def _uses_library_scan_checkpoints(path_scope):
+    """Only full-library scans may read or write the shared resume checkpoints.
+
+    A path-scoped scan is an explicit request to inspect that subtree now; a
+    checkpoint left by a previous library scan must not suppress that request.
+    """
+    return not bool(path_scope)
+
+
+def _should_skip_checkpointed_folder(root, scanned_folders, path_scope=None):
+    """Return whether a completed-folder checkpoint applies to this scan."""
+    return _uses_library_scan_checkpoints(path_scope) and root in scanned_folders
+
+
+def _is_book_scan_complete(row):
+    """Return whether an unchanged row can use the metadata/cover fast path."""
+    cover_image = row['cover_image'] or ''
+    if not cover_image or cover_image.startswith('series_'):
+        return False
+    embedded_metadata_current = (
+        str(row['file_path'] or '').lower().endswith(EMBEDDED_METADATA_EXTENSIONS)
+        and int(row['embedded_metadata_version'] or 0) >= CURRENT_EMBEDDED_METADATA_VERSION
+    )
+    legacy_metadata_complete = bool(
+        row['author'] and row['publisher'] and row['summary']
+    )
+    return embedded_metadata_current or legacy_metadata_complete
 
 
 def _is_db_locked_error(exc):
@@ -66,8 +96,10 @@ def _is_db_locked_error(exc):
 # 긁어온 값을 그대로 흘려보내던 것이 원인 — 여기서 한 곳에서 안전하게 자른다.
 _METADATA_FIELD_MAX_LEN = {
     'title': 500,
+    'metadata_title': 500,
     'series_name': 500,
     'localized_series': 500,
+    'document_series_name': 500,
     'author': 500,
     'isbn': 100,
     'publisher': 255,
@@ -137,8 +169,42 @@ def _dispatch_new_books_to_plugin_hooks(db_type, event_payload):
         except Exception as hook_err:
             print(f"[Scanner-PluginHook] provider={meta.get('id')} failed: {hook_err}")
 
-def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_type, target_paths, is_remote, threads_to_use, library_errors, path_scope=None):
+def _scan_library_internal(
+    conn,
+    db_path,
+    library_id,
+    physical_path,
+    force,
+    db_type,
+    target_paths,
+    is_remote,
+    threads_to_use,
+    library_errors,
+    path_scope=None,
+    progress_callback=None,
+    gdrive_subpath=None,
+):
     cursor = conn.cursor()
+
+    def report_progress(phase, **details):
+        if not callable(progress_callback):
+            return
+        try:
+            progress_callback(phase, **details)
+        except Exception as progress_err:
+            print(f"[Scanner-Progress] Progress update failed (ignored): {progress_err}")
+
+    use_folder_cover = False
+    try:
+        cursor.execute("SELECT COALESCE(use_folder_cover, 0) AS use_folder_cover FROM libraries WHERE id = ?", (library_id,))
+        library_row = cursor.fetchone()
+        if library_row:
+            try:
+                use_folder_cover = bool(int(library_row['use_folder_cover'] or 0))
+            except (KeyError, TypeError, IndexError):
+                use_folder_cover = bool(int(library_row[0] or 0))
+    except Exception as e:
+        print(f"[Scanner] Library shared-cover option lookup failed; using default off: {e}")
 
     def log_pool_stats(tag):
         try:
@@ -162,7 +228,9 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
 
     cursor.execute(f"""
         SELECT id, file_path, has_offsets,
-               cover_image, author, publisher, summary, file_mtime, file_size, banner_image
+               cover_image, author, publisher, summary, file_mtime, file_size, banner_image,
+               metadata_title, metadata_title_checked, metadata_locked,
+               embedded_metadata_version
         FROM books WHERE library_id = ?{scope_clause}
     """, scope_params)
     all_rows = cursor.fetchall()
@@ -170,7 +238,10 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
     db_meta_full = set()
     db_offsets_cached = set()
     db_files_cache = {}
+    db_metadata_title_unchecked = set()
+    db_embedded_metadata_outdated = set()
     db_banner_images = {}
+    db_cover_images = {}
     banner_cache_cleanup_candidates = set()
     # 배너가 아직 없는 기존 도서 경로 집합 - 커버/메타데이터가 이미 다 채워져 있어 평소엔
     # "변경 없음"으로 스킵되는 파일이라도, 폴더에 새로 배너가 감지되면 이 집합을 근거로
@@ -181,25 +252,58 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
         norm_path = canonical_path(row['file_path'])
         db_books[norm_path] = row['id']
         db_files_cache[norm_path] = (row['file_mtime'] or 0.0, row['file_size'] or 0)
+        if (
+            not row['metadata_title']
+            and not row['metadata_title_checked']
+            and not row['metadata_locked']
+            and str(row['file_path']).lower().endswith(SUPPORTED_METADATA_TITLE_FORMATS)
+        ):
+            db_metadata_title_unchecked.add(norm_path)
+        if (
+            str(row['file_path']).lower().endswith(EMBEDDED_METADATA_EXTENSIONS)
+            and int(row['embedded_metadata_version'] or 0) < CURRENT_EMBEDDED_METADATA_VERSION
+        ):
+            db_embedded_metadata_outdated.add(norm_path)
         db_banner_images[norm_path] = row['banner_image']
+        db_cover_images[norm_path] = row['cover_image']
         if row['banner_image']:
             banner_cache_cleanup_candidates.add(row['banner_image'])
         if row['has_offsets'] == 1:
             db_offsets_cached.add(norm_path)
-        if (row['cover_image'] and not row['cover_image'].startswith('series_') and
-                row['author'] and row['publisher'] and row['summary']):
+        if _is_book_scan_complete(row):
+            # Missing optional fields can be a valid result. Once the current
+            # embedded extractor inspected the file, do not reopen an unchanged
+            # archive forever merely because it has no publisher or summary.
             db_meta_full.add(norm_path)
         if not row['banner_image']:
             db_banner_missing.add(norm_path)
 
+    if db_metadata_title_unchecked:
+        print(
+            f"[Scanner] Existing books with unchecked metadata titles: "
+            f"{len(db_metadata_title_unchecked)}; checking during this scan."
+        )
+    if db_embedded_metadata_outdated:
+        print(
+            f"[Scanner] Books requiring embedded metadata v{CURRENT_EMBEDDED_METADATA_VERSION}: "
+            f"{len(db_embedded_metadata_outdated)}; checking once during this scan."
+        )
+
     cursor.execute("SELECT folder_path, dir_mtime, meta_mtime FROM folder_mtimes")
     db_folder_mtimes = {canonical_path(row['folder_path']): (row['dir_mtime'], row['meta_mtime']) for row in cursor.fetchall()}
 
-    # 0. Load completely scanned folders from previous checkpoint
-    cursor.execute("SELECT folder_path FROM scanner_progress WHERE library_id = ?", (str(library_id),))
-    scanned_folders = set(canonical_path(row['folder_path']) for row in cursor.fetchall())
-    if scanned_folders:
-        print(f"[Scanner-Progress] 🔄 Previous scan progress detected ({len(scanned_folders)}folders completed). Resuming scan.")
+    # 0. Load completely scanned folders from previous checkpoint. An explicit
+    # path scan is authoritative for its subtree and must not inherit the
+    # library-wide resume state (which can be stale for newly added files).
+    use_library_scan_checkpoints = _uses_library_scan_checkpoints(path_scope)
+    scanned_folders = set()
+    if use_library_scan_checkpoints:
+        cursor.execute("SELECT folder_path FROM scanner_progress WHERE library_id = ?", (str(library_id),))
+        scanned_folders = set(canonical_path(row['folder_path']) for row in cursor.fetchall())
+        if scanned_folders:
+            print(f"[Scanner-Progress] 🔄 Previous scan progress detected ({len(scanned_folders)}folders completed). Resuming scan.")
+    else:
+        print(f"[Scanner-Progress] Explicit path scan ignores library checkpoints (library_id={library_id}).")
 
     # 1. Traverse physical folder tree and pre-collect file list
     tasks = []
@@ -211,7 +315,7 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
         print(f"[Scanner] os.walk traversal warning: {err}")
 
     print(f"[Scanner] Scanning physical folder tree...")
-    folder_count = 0
+    walked_folder_count = 0
     from tools.scanner.ignore_filter import IgnoreFilter
     cursor.execute("SELECT `value` FROM settings WHERE `key` = 'SCAN_IGNORE_PATTERNS'")
     ignore_row = cursor.fetchone()
@@ -223,7 +327,15 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
         if is_gdrive_url(t_path):
             print(f"[Scanner] 구글 드라이브 원격 링크 카테고리 스캔 시작: {t_path}")
             from utils.drive_helper import fetch_gdrive_folder_files, extract_gdrive_folder_id, encode_gdrive_file_id
-            g_files = fetch_gdrive_folder_files(t_path)
+            target_drive_subpath = gdrive_subpath if gdrive_subpath is not None else None
+            max_drive_depth = 4
+            if target_drive_subpath:
+                max_drive_depth = max_drive_depth + len(target_drive_subpath.split('/'))
+            g_files = fetch_gdrive_folder_files(
+                t_path,
+                max_depth=max_drive_depth,
+                target_subpath=target_drive_subpath,
+            )
             folder_id = extract_gdrive_folder_id(t_path) or 'gdrive_root'
 
             grouped_files = {}
@@ -253,6 +365,9 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     found_file_paths.add(encode_gdrive_file_id(join_canonical(v_root, fn), file_ids.get(fn)))
                 tasks.append((v_root, fnames, t_path, file_ids))
 
+            walked_folder_count += len(grouped_files)
+            report_progress('discover', count=walked_folder_count)
+
             print(f"[Scanner] 구글 드라이브 원격 도서 총 {len(g_files)}개 ({len(grouped_files)}개 폴더) 감지 완료!")
             continue
 
@@ -261,6 +376,8 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
             continue
         for root, dirs, files in os.walk(t_path, onerror=_walk_onerror):
             root = canonical_path(root)
+            walked_folder_count += 1
+            report_progress('discover', count=walked_folder_count)
 
             # Local .bookoasisignore 파일 체크
             local_ig = os.path.join(root, '.bookoasisignore')
@@ -290,7 +407,7 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
             if has_imgdir_candidate:
                 found_file_paths.add(join_canonical(root, IMGDIR_VIRTUAL_FILENAME))
             
-            if root in scanned_folders:
+            if _should_skip_checkpointed_folder(root, scanned_folders, path_scope):
                 continue
                 
             tasks.append((root, files, t_path, None))
@@ -306,6 +423,17 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
         # ── [Book movement detection and history preservation layer - pre-process before thread execution] ──
         deleted_paths = detect_and_handle_book_movement(cursor, db_books, found_file_paths, db_meta_full, db_offsets_cached)
         _commit_with_retry(conn, 'pre-move-detection')
+
+    def count_scan_units(task):
+        files = task[1]
+        media_count = sum(1 for filename in files if filename.lower().endswith(SUPPORTED_FORMATS))
+        if media_count:
+            return media_count
+        return 1 if any(filename.lower().endswith(SUPPORTED_IMAGE_FORMATS) for filename in files) else 0
+
+    task_unit_counts = [count_scan_units(task) for task in tasks]
+    progress_total = sum(task_unit_counts)
+    report_progress('process', event='process_start', completed=0, total=progress_total)
 
     # 2. Run thread pool and streaming process (as_completed)
     print(f"[Scanner] Multithread scan pool created (threads: {threads_to_use})")
@@ -345,7 +473,13 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
     def process_batch(cur, ins_list, upd_list):
         if upd_list:
             update_data = []
+            folder_cover_update_data = []
             for d in upd_list:
+                if d.get('folder_cover_only'):
+                    folder_cover_update_data.append((
+                        d['cover_image'], canonical_path(d['full_path']), int(d['library_id'])
+                    ))
+                    continue
                 if d.get('is_offset_only'):
                     continue
                 meta = d['merged_meta']
@@ -355,6 +489,7 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                 update_data.append((
                     lib_id_int,
                     _clamp_text(d.get('series_name', ''), _METADATA_FIELD_MAX_LEN['series_name']),
+                    _clamp_text(meta.get('title', ''), _METADATA_FIELD_MAX_LEN['metadata_title']),
                     d['cover_image'], d['cover_image'], d['cover_image'],
                     banner_image, banner_image, banner_image,
                     _clamp_text(meta.get('author', ''), _METADATA_FIELD_MAX_LEN['author']),
@@ -372,11 +507,15 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     _clamp_text(meta.get('locations', ''), _METADATA_FIELD_MAX_LEN['locations']),
                     _clamp_text(meta.get('characters', ''), _METADATA_FIELD_MAX_LEN['characters']),
                     _clamp_text(meta.get('localized_series', ''), _METADATA_FIELD_MAX_LEN['localized_series']),
+                    _clamp_text(meta.get('document_series_name', ''), _METADATA_FIELD_MAX_LEN['document_series_name']),
+                    meta.get('document_volume_index'), meta.get('document_volume_count'),
                     d.get('file_mtime', 0.0), d.get('file_size', 0),
                     canonical_path(d['full_path'])
                 ))
             if update_data:
                 bulk_update_books(cur, update_data, force=force)
+            if folder_cover_update_data:
+                bulk_update_book_covers(cur, folder_cover_update_data)
 
             clear_banner_paths = [
                 canonical_path(d['full_path'])
@@ -397,6 +536,7 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                 insert_data.append((
                     lib_id_int,
                     _clamp_text(title, _METADATA_FIELD_MAX_LEN['title']),
+                    _clamp_text(meta.get('title', ''), _METADATA_FIELD_MAX_LEN['metadata_title']),
                     _clamp_text(d['series_name'], _METADATA_FIELD_MAX_LEN['series_name']),
                     _clamp_text(meta.get('author', ''), _METADATA_FIELD_MAX_LEN['author']),
                     _clamp_text(meta.get('isbn', ''), _METADATA_FIELD_MAX_LEN['isbn']),
@@ -416,9 +556,42 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     _clamp_text(meta.get('locations', ''), _METADATA_FIELD_MAX_LEN['locations']),
                     _clamp_text(meta.get('characters', ''), _METADATA_FIELD_MAX_LEN['characters']),
                     _clamp_text(meta.get('localized_series', ''), _METADATA_FIELD_MAX_LEN['localized_series']),
+                    _clamp_text(meta.get('document_series_name', ''), _METADATA_FIELD_MAX_LEN['document_series_name']),
+                    meta.get('document_volume_index'), meta.get('document_volume_count'),
                     d.get('file_mtime', 0.0), d.get('file_size', 0)
                 ))
             bulk_insert_books(cur, insert_data)
+
+        checked_paths = [
+            canonical_path(item['full_path']) for item in ins_list
+        ] + [
+            canonical_path(item['full_path']) for item in upd_list
+            if not item.get('folder_cover_only') and not item.get('is_offset_only')
+        ]
+        for start in range(0, len(checked_paths), 900):
+            chunk = checked_paths[start:start + 900]
+            placeholders = ','.join(['?'] * len(chunk))
+            cur.execute(
+                f"UPDATE books SET metadata_title_checked = 1 "
+                f"WHERE library_id = ? AND file_path IN ({placeholders})",
+                (library_id, *chunk),
+            )
+
+        embedded_checked_paths = [
+            canonical_path(item['full_path'])
+            for item in ins_list + upd_list
+            if item.get('embedded_metadata_checked')
+            and not item.get('folder_cover_only')
+            and not item.get('is_offset_only')
+        ]
+        for start in range(0, len(embedded_checked_paths), 900):
+            chunk = embedded_checked_paths[start:start + 900]
+            placeholders = ','.join(['?'] * len(chunk))
+            cur.execute(
+                f"UPDATE books SET embedded_metadata_version = ? "
+                f"WHERE library_id = ? AND file_path IN ({placeholders})",
+                (CURRENT_EMBEDDED_METADATA_VERSION, library_id, *chunk),
+            )
 
         all_paths = [canonical_path(d['full_path']) for d in ins_list] + [canonical_path(d['full_path']) for d in upd_list if d.get('offsets_data')]
         if all_paths:
@@ -480,7 +653,10 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
 
                 # 2. Scanner Progress Update
                 for pf in pending_folders:
-                    cursor.execute("INSERT OR IGNORE INTO scanner_progress (library_id, folder_path) VALUES (?, ?)", (str(library_id), pf['root']))
+                    # Partial scans must not create shared library checkpoints:
+                    # that state belongs to a resumable full-library scan.
+                    if use_library_scan_checkpoints:
+                        cursor.execute("INSERT OR IGNORE INTO scanner_progress (library_id, folder_path) VALUES (?, ?)", (str(library_id), pf['root']))
                     if pf.get('dir_mtime') is not None:
                         cursor.execute("INSERT OR REPLACE INTO folder_mtimes (folder_path, dir_mtime, meta_mtime) VALUES (?, ?, ?)", (pf['root'], pf['dir_mtime'], pf['meta_mtime']))
 
@@ -588,17 +764,64 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
             except Exception:
                 pass
 
+    progress_lock = threading.Lock()
+    completed_by_task = [0] * len(tasks)
+    completed_items = 0
+
+    def make_task_progress_callback(task_index):
+        if not callable(progress_callback):
+            return None
+
+        def _task_progress(event, current=None):
+            nonlocal completed_items
+            with progress_lock:
+                if event == 'item_done' and completed_by_task[task_index] < task_unit_counts[task_index]:
+                    completed_by_task[task_index] += 1
+                    completed_items += 1
+                completed = completed_items
+            report_progress(
+                'process', event=event, completed=completed,
+                total=progress_total, current=current
+            )
+        return _task_progress
+
+    def finish_task_progress(task_index, current):
+        nonlocal completed_items
+        if not callable(progress_callback):
+            return
+        with progress_lock:
+            remaining = max(0, task_unit_counts[task_index] - completed_by_task[task_index])
+            completed_by_task[task_index] += remaining
+            completed_items += remaining
+            completed = completed_items
+        report_progress(
+            'process', event='folder_done', completed=completed,
+            total=progress_total, current=current
+        )
+
     with ThreadPoolExecutor(max_workers=threads_to_use) as executor:
-        futures = {
-            executor.submit(process_folder_task, root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote, library_id, db_files_cache, t_path, file_ids, db_type, db_books, db_banner_missing, db_banner_images): root
-            for root, files, t_path, file_ids in tasks
-        }
+        futures = {}
+        future_task_indexes = {}
+        for task_index, (root, files, t_path, file_ids) in enumerate(tasks):
+            future = executor.submit(
+                process_folder_task, root, files, force, db_meta_full,
+                db_offsets_cached, db_folder_mtimes, is_remote, library_id,
+                db_files_cache, t_path, file_ids, db_type, db_books,
+                db_banner_missing, db_banner_images, use_folder_cover,
+                db_cover_images,
+                progress_callback=make_task_progress_callback(task_index),
+                db_metadata_title_unchecked=db_metadata_title_unchecked,
+                db_embedded_metadata_outdated=db_embedded_metadata_outdated,
+            )
+            futures[future] = root
+            future_task_indexes[future] = task_index
         
         for fut in as_completed(futures):
             if stop_requested:
                 print("[Scanner] ⚠️ 스캔 중단 요청(SIGTERM/SIGINT)이 감지되었습니다. 루프를 탈출하여 현재까지의 변경점만 DB에 쓰고 마감합니다.")
                 break
             root_folder = futures[fut]
+            task_index = future_task_indexes[fut]
             try:
                 res = fut.result()
 
@@ -606,6 +829,7 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     # process_folder_task()가 None을 반환하는 것은 예외가 아니라
                     # "Ultra-fast skip" 등으로 처리할 변경점이 없다는 정상 조기 종료다.
                     processed_folders_count += 1
+                    finish_task_progress(task_index, root_folder)
                     continue
 
                 dir_mtime = res.get('dir_mtime')
@@ -629,7 +853,12 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                             or (banner_image and banner_image != old_banner_image)
                         )
                     )
-                    if item['skip'] and not banner_only_update:
+                    folder_cover_only_update = bool(
+                        item.get('folder_cover_only')
+                        and full_path in db_books
+                        and not banner_only_update
+                    )
+                    if item['skip'] and not banner_only_update and not folder_cover_only_update:
                         continue
 
                     filename = item['filename']
@@ -653,8 +882,8 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                                 # safely remove this newly generated orphan.
                                 banner_cache_cleanup_candidates.add(banner_image)
                         pending_updates.append({
-                            "action": "update", "library_id": library_id, "is_offset_only": is_offset_only, "full_path": full_path,
-                            "cover_image": cover_image, "banner_image": banner_image, "clear_banner": clear_banner, "merged_meta": item_meta, "offsets_data": offsets_data,
+                            "action": "update", "library_id": library_id, "is_offset_only": is_offset_only, "folder_cover_only": folder_cover_only_update, "full_path": full_path,
+                            "cover_image": cover_image, "banner_image": banner_image, "clear_banner": clear_banner, "merged_meta": {} if folder_cover_only_update else item_meta, "offsets_data": offsets_data,
                             "filename": filename, "series_name": series_name, "file_mtime": item.get('file_mtime', 0.0), "file_size": item.get('file_size', 0)
                         })
                     else:
@@ -713,7 +942,10 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
                     # 부분 경로 스캔(scan-path)은 대상 폴더 처리 실패를 삼키지 않고
                     # 상위로 전달해 API가 성공 응답을 반환하지 않도록 한다.
                     raise RuntimeError(f"부분 경로 스캔 실패: {folder_processing_errors}") from e
+                finish_task_progress(task_index, root_folder)
                 continue
+
+            finish_task_progress(task_index, root_folder)
 
             if processed_folders_count % 20 == 0:
                 log_pool_stats(f'progress-{processed_folders_count}')
@@ -953,9 +1185,20 @@ def _scan_library_internal(conn, db_path, library_id, physical_path, force, db_t
 
 def _scan_library_covers_only_internal(conn, db_path, library_id, physical_path, target_paths, db_type):
     cursor = conn.cursor()
+    use_folder_cover = False
+    try:
+        cursor.execute("SELECT COALESCE(use_folder_cover, 0) AS use_folder_cover FROM libraries WHERE id = ?", (library_id,))
+        library_row = cursor.fetchone()
+        if library_row:
+            try:
+                use_folder_cover = bool(int(library_row['use_folder_cover'] or 0))
+            except (KeyError, TypeError, IndexError):
+                use_folder_cover = bool(int(library_row[0] or 0))
+    except Exception as e:
+        print(f"[Scanner-Covers] Library shared-cover option lookup failed; using default off: {e}")
 
     cursor.execute("""
-        SELECT id, file_path, series_name
+        SELECT id, file_path, series_name, COALESCE(metadata_locked, 0) AS metadata_locked
         FROM books WHERE library_id = ?
     """, (library_id,))
     rows = cursor.fetchall()
@@ -984,7 +1227,7 @@ def _scan_library_covers_only_internal(conn, db_path, library_id, physical_path,
     all_results = []
     with ThreadPoolExecutor(max_workers=MAX_SCANNER_THREADS) as executor:
         futures = {
-            executor.submit(process_folder_covers, parent_dir, folder_rows, is_remote, library_id): parent_dir
+            executor.submit(process_folder_covers, parent_dir, folder_rows, is_remote, library_id, use_folder_cover): parent_dir
             for parent_dir, folder_rows in folder_groups.items()
         }
         for fut in as_completed(futures):
@@ -1000,7 +1243,7 @@ def _scan_library_covers_only_internal(conn, db_path, library_id, physical_path,
                 UPDATE books SET 
                     cover_image = ?,
                     cover_updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND COALESCE(metadata_locked, 0) = 0
             """, (cover_image, book_id))
             processed_count += 1
             

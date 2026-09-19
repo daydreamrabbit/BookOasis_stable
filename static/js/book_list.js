@@ -1,13 +1,125 @@
 import { state } from './state.js';
 import * as api from './api.js';
-import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js';
+import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js?v=20260918-library-scan-progress-v1';
 import { openReader } from './viewer.js';
 import { initInfiniteScrollObserver } from './infinite_scroll.js';
 import { stripLeadingBracketTags } from './series_display.js';
 import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js';
+import { BookListRefreshState, getLoadedPageRange } from './book_list_refresh_state.js';
 
 let filterDebounceTimer = null;
 let totalsRequestSerial = 0;
+const bookListRefreshState = new BookListRefreshState();
+let refreshAfterCurrentLoad = false;
+
+function isBookListViewActive() {
+  const currentId = String(state.currentLibraryId || '');
+  return !(
+    ['home', 'history', 'collection', 'smart_rec', 'settings', 'plugins'].includes(currentId)
+    || currentId.startsWith('plugin_')
+  );
+}
+
+function getBookListKey(type = state.currentLibraryType, libraryId = state.currentLibraryId) {
+  return `${String(type || 'general')}:${String(libraryId ?? '')}`;
+}
+
+function isDetailViewVisible() {
+  const detailView = document.getElementById('book-detail-view');
+  return !!detailView && detailView.style.display !== 'none';
+}
+
+function flushQueuedBookListRefresh() {
+  if (!refreshAfterCurrentLoad) return;
+  refreshAfterCurrentLoad = false;
+  setTimeout(() => refreshBooksListIfStale(), 0);
+}
+
+function captureBookListScrollPosition() {
+  const mainContent = document.querySelector('.library-main-content');
+  const mainTop = Number(mainContent?.scrollTop || 0);
+  const documentTop = Number(window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0);
+  return {
+    scrollTop: mainTop > 0 ? mainTop : documentTop,
+    scrollUseDocument: !mainContent || (mainTop === 0 && documentTop > 0),
+  };
+}
+
+function restoreBookListScrollPosition(position, type, libraryId) {
+  const restore = () => {
+    if (state.currentLibraryType !== type || String(state.currentLibraryId || '') !== libraryId) return;
+    const top = Math.max(0, Number(position.scrollTop) || 0);
+    const mainContent = document.querySelector('.library-main-content');
+    if (position.scrollUseDocument) {
+      window.scrollTo(0, top);
+      document.documentElement.scrollTop = top;
+      document.body.scrollTop = top;
+    } else if (mainContent) {
+      mainContent.scrollTop = top;
+    }
+  };
+  requestAnimationFrame(restore);
+  setTimeout(restore, 80);
+}
+
+async function loadBookListToPosition(type, libraryId, firstPage, lastPage, position) {
+  await loadBooksList(false, firstPage);
+  while (
+    state.currentLibraryType === type
+    && String(state.currentLibraryId || '') === libraryId
+    && state.hasMore
+    && state.currentPage <= lastPage
+  ) {
+    const nextPage = state.currentPage;
+    await loadBooksList(true);
+    if (state.currentPage === nextPage && state.hasMore) break;
+  }
+  restoreBookListScrollPosition(position, type, libraryId);
+}
+
+// Called when a scan finishes. If a list request is already running, queue a full
+// replacement request after it settles instead of losing the refresh notification.
+export function invalidateBookListAfterScan() {
+  bookListRefreshState.invalidate(getBookListKey());
+  return refreshBooksListIfStale();
+}
+
+// A detail view keeps the old grid mounted underneath it. Defer the network request
+// until the user returns, then refresh only if that grid was invalidated meanwhile.
+export function refreshBooksListIfStale() {
+  const listKey = getBookListKey();
+  if (!bookListRefreshState.isStale(listKey) || !isBookListViewActive() || isDetailViewVisible()) return false;
+
+  if (state.isLoading || state.isLoadingPrevious) {
+    refreshAfterCurrentLoad = true;
+    return false;
+  }
+
+  refreshAfterCurrentLoad = false;
+  const { firstPage, lastPage } = getLoadedPageRange(
+    state.firstLoadedPage,
+    state.currentPage,
+    state.hasMore,
+  );
+  loadBookListToPosition(
+    state.currentLibraryType,
+    String(state.currentLibraryId || ''),
+    firstPage,
+    lastPage,
+    captureBookListScrollPosition(),
+  ).catch((error) => console.warn('[Book-List] 스캔 후 목록 갱신 실패:', error));
+  return true;
+}
+
+export async function restoreBookListPosition(position = {}) {
+  const type = String(state.currentLibraryType || 'general');
+  const libraryId = String(state.currentLibraryId || '');
+  const range = getLoadedPageRange(position.firstLoadedPage, position.lastLoadedPage, false);
+  await loadBookListToPosition(type, libraryId, range.firstPage, range.lastPage, {
+    scrollTop: position.scrollTop,
+    scrollUseDocument: position.scrollUseDocument,
+  });
+}
 
 export function normalizeMetadataToken(token) {
   if (!token) return '';
@@ -40,7 +152,7 @@ export function updateLibraryTotalCount(items, totals = null) {
 }
 
 // 1. 도서 시리즈 목록 로드
-export async function loadBooksList(isAppend = false, startPage = null) {
+export async function loadBooksList(isAppend = false, startPage = null, options = {}) {
   const currentId = state.currentLibraryId || '';
   if (['home', 'collection', 'settings', 'plugins'].includes(currentId) || currentId.startsWith('plugin_')) {
     console.warn(`[Book-List] loadBooksList skipped: currentLibraryId=${currentId} is not a book list category.`);
@@ -58,6 +170,19 @@ export async function loadBooksList(isAppend = false, startPage = null) {
     return;
   }
   const spinner = document.getElementById('infinite-scroll-spinner');
+  const mainContent = document.querySelector('.library-main-content');
+  const mainScrollTop = Number(mainContent?.scrollTop || 0);
+  const documentScrollTop = Number(window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0);
+  const preservedScroll = !isAppend && options.preserveScroll
+    ? {
+      useDocument: !mainContent || (mainScrollTop === 0 && documentScrollTop > 0),
+      top: mainScrollTop > 0 ? mainScrollTop : documentScrollTop,
+    }
+    : null;
+  const requestType = state.currentLibraryType;
+  const requestLibraryId = String(state.currentLibraryId || '');
+  const requestListKey = getBookListKey(requestType, requestLibraryId);
+  const requestRefreshVersion = bookListRefreshState.beginRequest(requestListKey);
   container.classList.toggle('author-drilldown-active', !!state.authorKeyFilter);
 
   state.isLoading = true;
@@ -80,12 +205,14 @@ export async function loadBooksList(isAppend = false, startPage = null) {
       state.hasMore = true;
       state.firstLoadedPage = targetPage;
       state.hasPrevious = targetPage > 1;
-      container.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> ${i18n.t('book_list.loading')}</div>`;
-      const countSpan = document.getElementById('library-total-count');
-      if (countSpan) countSpan.innerText = '';
+      if (!options.keepCurrentGrid) {
+        container.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> ${i18n.t('book_list.loading')}</div>`;
+        const countSpan = document.getElementById('library-total-count');
+        if (countSpan) countSpan.innerText = '';
+      }
     }
 
-    const data = await api.fetchBooksList({
+    const data = options.preloadedData || await api.fetchBooksList({
       type: requestFilters.type,
       libraryId: requestFilters.libraryId,
       page: targetPage,
@@ -96,12 +223,16 @@ export async function loadBooksList(isAppend = false, startPage = null) {
       tags: requestFilters.tags,
       groupBy: state.groupMode === 'author' ? 'author' : '',
       authorKey: state.authorKeyFilter || '',
+      includeHasMetadata: state.showMetadataConnectionStatus === true,
     });
 
     if (!data.success) {
       container.innerHTML = `<div class="loading-spinner">${i18n.t('book_list.load_fail', {error: data.error || ''})}</div>`;
       return;
     }
+
+    const isSameList = state.currentLibraryType === requestType
+      && String(state.currentLibraryId || '') === requestLibraryId;
 
     const incomingSeries = Array.isArray(data.series) ? data.series : [];
 
@@ -113,8 +244,12 @@ export async function loadBooksList(isAppend = false, startPage = null) {
       renderBooksGrid(state.currentBooksData);
     }
 
+    if (!isAppend && isSameList) {
+      bookListRefreshState.markLoaded(requestListKey, requestRefreshVersion);
+    }
+
     state.filteredBooksData = state.currentBooksData;
-    if (!isAppend) {
+    if (!isAppend && !options.skipTotals) {
       api.fetchBooksTotals(requestFilters)
         .then((totals) => {
           const isSameList = state.currentLibraryType === requestFilters.type
@@ -149,6 +284,22 @@ export async function loadBooksList(isAppend = false, startPage = null) {
   }
   } finally {
     state.isLoading = false;
+    if (preservedScroll) {
+      const restoreScroll = () => {
+        const activeMainContent = document.querySelector('.library-main-content');
+        const isSameLibrary = state.currentLibraryType === requestType
+          && String(state.currentLibraryId || '') === requestLibraryId;
+        if (!isSameLibrary) return;
+        if (preservedScroll.useDocument) {
+          window.scrollTo(0, preservedScroll.top);
+          document.documentElement.scrollTop = preservedScroll.top;
+          document.body.scrollTop = preservedScroll.top;
+        } else if (activeMainContent) activeMainContent.scrollTop = preservedScroll.top;
+      };
+      requestAnimationFrame(restoreScroll);
+      setTimeout(restoreScroll, 80);
+    }
+    flushQueuedBookListRefresh();
   }
 
   // 렌더링 및 스피너 상태 결정 완료 후 무한 스크롤 옵저버 재바인딩
@@ -186,6 +337,7 @@ export async function loadPreviousBooksPage() {
       tags: (state.filterTags || []).map(normalizeMetadataToken).filter(Boolean),
       groupBy: state.groupMode === 'author' ? 'author' : '',
       authorKey: state.authorKeyFilter || '',
+      includeHasMetadata: state.showMetadataConnectionStatus === true,
     });
 
     if (!data.success) return;
@@ -214,6 +366,7 @@ export async function loadPreviousBooksPage() {
   } finally {
     state.isLoadingPrevious = false;
     if (spinnerTop) spinnerTop.classList.remove('is-loading');
+    flushQueuedBookListRefresh();
   }
 }
 

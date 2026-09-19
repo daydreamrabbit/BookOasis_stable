@@ -22,14 +22,15 @@ export async function fetchLibraries(type) {
   return res.json();
 }
 
-export async function fetchBooksList({type, libraryId, page, limit, append, search, sort, genres = [], tags = [], groupBy, authorKey}) {
+export async function fetchBooksList({type, libraryId, page, limit, append, search, sort, genres = [], tags = [], groupBy, authorKey, includeHasMetadata = false}) {
   const searchQuery = search ? `&search=${encodeURIComponent(search)}` : '';
   const sortQuery = sort ? `&sort=${sort}` : '';
   const genresQuery = genres.length > 0 ? `&genres=${encodeURIComponent(genres.join(','))}` : '';
   const tagsQuery = tags.length > 0 ? `&tags=${encodeURIComponent(tags.join(','))}` : '';
   const groupByQuery = groupBy ? `&group_by=${encodeURIComponent(groupBy)}` : '';
   const authorKeyQuery = authorKey ? `&author_key=${encodeURIComponent(authorKey)}` : '';
-  const url = `/api/media/list?type=${type}&library_id=${libraryId}&page=${page}&limit=${limit}${searchQuery}${sortQuery}${genresQuery}${tagsQuery}${groupByQuery}${authorKeyQuery}&_=${Date.now()}`;
+  const metadataQuery = includeHasMetadata ? '&include_has_metadata=1' : '';
+  const url = `/api/media/list?type=${type}&library_id=${libraryId}&page=${page}&limit=${limit}${searchQuery}${sortQuery}${genresQuery}${tagsQuery}${groupByQuery}${authorKeyQuery}${metadataQuery}&_=${Date.now()}`;
   const res = await safeFetch(url, {cache: 'no-store'});
   return res.json();
 }
@@ -298,13 +299,13 @@ export async function scanSingleBook(type, bookId) {
   return res.json();
 }
 
-export async function enqueueBatchBookScan(type, bookIds) {
+export async function enqueueBatchBookScan(type, bookIds, { scope = 'book', force = false } = {}) {
   const res = await fetch('/api/media/books/scan-batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type, book_ids: bookIds })
+    body: JSON.stringify({ type, book_ids: bookIds, scope, force })
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function unlockMetadata(type, seriesName, libraryId, bookId) {

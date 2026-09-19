@@ -3,6 +3,7 @@
 book_scan_repository.py – 도서(books) 및 오프셋(book_offsets) 백그라운드 스캔용 데이터 액세스 레이어
 """
 import database
+from embedded_metadata_version import CURRENT_EMBEDDED_METADATA_VERSION
 
 class BookScanRepository:
     @staticmethod
@@ -12,8 +13,11 @@ class BookScanRepository:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, library_id, title, series_name, file_path, file_format, cover_image
-            FROM books WHERE id = ?
+            SELECT b.id, b.library_id, b.title, b.series_name, b.file_path, b.file_format,
+                   b.cover_image, COALESCE(l.is_remote, 0) AS library_is_remote
+            FROM books b
+            LEFT JOIN libraries l ON l.id = b.library_id
+            WHERE b.id = ?
             """,
             (book_id,)
         )
@@ -31,6 +35,7 @@ class BookScanRepository:
                 """
                 UPDATE books SET 
                     series_name  = COALESCE(NULLIF(?, ''), series_name),
+                    metadata_title = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), metadata_title) ELSE metadata_title END,
                     cover_image  = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND ? IS NOT NULL AND ? != '' THEN ? ELSE cover_image END,
                     cover_updated_at = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND ? != '' AND ? IS NOT NULL THEN CURRENT_TIMESTAMP ELSE cover_updated_at END,
                     banner_image = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND ? IS NOT NULL AND ? != '' THEN ? ELSE banner_image END,
@@ -49,11 +54,16 @@ class BookScanRepository:
                     teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), teams) ELSE teams END,
                     locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), locations) ELSE locations END,
                     characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), characters) ELSE characters END,
-                    localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), localized_series) ELSE localized_series END
+                    localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), localized_series) ELSE localized_series END,
+                    document_series_name = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), document_series_name) ELSE document_series_name END,
+                    document_volume_index = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(?, document_volume_index) ELSE document_volume_index END,
+                    document_volume_count = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(?, document_volume_count) ELSE document_volume_count END,
+                    embedded_metadata_version = CASE WHEN ? = 1 THEN ? ELSE embedded_metadata_version END
                 WHERE id = ?
                 """,
                 (
                     series_name,
+                    meta.get('title', ''),
                     cover_image, cover_image, cover_image,
                     cover_image, cover_image,
                     banner_image, banner_image, banner_image,
@@ -73,6 +83,11 @@ class BookScanRepository:
                     meta.get('locations', ''),
                     meta.get('characters', ''),
                     meta.get('localized_series', ''),
+                    meta.get('document_series_name', ''),
+                    meta.get('document_volume_index'),
+                    meta.get('document_volume_count'),
+                    1 if meta.get('_embedded_metadata_checked') else 0,
+                    CURRENT_EMBEDDED_METADATA_VERSION,
                     book_id
                 )
             )

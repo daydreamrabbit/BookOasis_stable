@@ -116,7 +116,9 @@ function selectRange(anchorCard, endCard) {
 
   const first = Math.min(start, end);
   const last = Math.max(start, end);
-  for (let index = first; index <= last; index += 1) setSelected(cards[index], true);
+  const range = cards.slice(first, last + 1);
+  const shouldSelect = !range.every(isBookCardSelected);
+  for (const card of range) setSelected(card, shouldSelect);
 }
 
 export function getSelectedBookTargets() {

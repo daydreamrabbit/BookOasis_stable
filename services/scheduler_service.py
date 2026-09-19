@@ -295,6 +295,57 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
     # DB가 현재 최적화(VACUUM 등) 튜닝 진행 중인 경우, 완료될 때까지 안전하게 대기
     from services.db_tuning_service import is_db_tuning
     import time
+    import threading
+    from utils.library_scan_progress import format_library_scan_progress
+
+    scan_progress_lock = threading.Lock()
+    scan_progress_state = {
+        'last_updated_at': 0.0,
+        'last_stage': '',
+        'last_phase': '',
+        'last_event': '',
+        'completed': 0,
+    }
+    scan_task_key = f'library_scan_{db_type}_{library_id}'
+
+    def update_library_scan_progress(phase, **details):
+        now = time.monotonic()
+        event = details.get('event', '')
+        with scan_progress_lock:
+            if phase == 'process':
+                completed = max(0, int(details.get('completed', 0) or 0))
+                if completed < scan_progress_state['completed']:
+                    return
+                scan_progress_state['completed'] = completed
+            stage_details = {key: value for key, value in details.items() if key != 'event'}
+            stage = format_library_scan_progress(phase, **stage_details)
+            phase_changed = phase != scan_progress_state['last_phase']
+            first_folder_started = (
+                phase == 'process'
+                and event == 'folder_start'
+                and scan_progress_state['last_event'] == 'process_start'
+            )
+            is_complete = (
+                phase == 'process'
+                and int(details.get('total', 0) or 0) > 0
+                and int(details.get('completed', 0) or 0) >= int(details.get('total', 0) or 0)
+            )
+            if stage == scan_progress_state['last_stage']:
+                return
+            if not (phase_changed or first_folder_started or is_complete
+                    or now - scan_progress_state['last_updated_at'] >= 2.0):
+                return
+
+            try:
+                _update_task_stage(scan_task_key, stage)
+                scan_progress_state.update({
+                    'last_updated_at': now,
+                    'last_stage': stage,
+                    'last_phase': phase,
+                    'last_event': event,
+                })
+            except Exception as progress_err:
+                print(f"[Scanner-Trigger WARNING] Library scan progress update failed: {progress_err}")
 
     def is_connection_refused_error(err):
         reason = getattr(err, 'reason', err)
@@ -572,8 +623,8 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
     except Exception as db_err:
         print(f"[Scanner-Trigger] VFS 옵션 DB 조회 Error: {db_err}")
     
-    # 큐 세부 진행 단계를 도서 스캔 중으로 기록
-    _update_task_stage(f"library_scan_{db_type}_{library_id}", 'book_scan')
+    # 내부 enum(book_scan) 대신 사용자에게 의미 있는 현재 단계를 먼저 표시한다.
+    update_library_scan_progress('discover', count=0)
 
     try:
         # 로컬(비원격) 경로는 스캔이 매우 빠르게 끝나 flush 타이밍 경합이 발생하기 쉬워
@@ -597,7 +648,11 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
 
         for attempt in range(1, max_scan_attempts + 1):
             try:
-                scan_library(db_path, library_id, physical_path, force=force, skip_vfs_refresh=vfs_refreshed_in_wrapper)
+                scan_library(
+                    db_path, library_id, physical_path, force=force,
+                    skip_vfs_refresh=vfs_refreshed_in_wrapper,
+                    progress_callback=update_library_scan_progress,
+                )
                 break
             except Exception as scan_err:
                 if attempt < max_scan_attempts and is_transient_scan_error(scan_err):
@@ -663,6 +718,4 @@ def run_lazy_scanner_job():
     from services.scanner_queue import scanner_queue
     print("[Scheduler] Lazy cover scanner job scheduled -> Enqueuing if no Lazy-Scanner is active...")
     scanner_queue.enqueue('lazy_scan')
-
-
 

@@ -10,7 +10,7 @@ import {
   triggerScanLibraryCovers,
   triggerLazyScanLibrary,
   triggerCancelScanLibrary
-} from './crud_controller.js';
+} from './crud_controller.js?rev=20260919-library-content-kind-v1';
 
 export let currentTargetLibrary = null; // 우클릭 대상 저장
 let suppressSidebarClickUntil = 0;
@@ -142,8 +142,9 @@ export function bindSidebarContextMenu() {
         const type = menuItem.dataset.type;
         const id = menuItem.dataset.id;
         const name = menuItem.dataset.name;
+        const libraryType = menuItem.dataset.libraryType || state.currentLibraryType;
         
-        currentTargetLibrary = { id, name, type };
+        currentTargetLibrary = { id, name, type, libraryType };
 
         configureCategoryContextMenu(type);
       } else {
@@ -178,11 +179,12 @@ export function bindSidebarContextMenu() {
         const type = menuItem.dataset.type;
         const id = menuItem.dataset.id;
         const name = menuItem.dataset.name;
+        const libraryType = menuItem.dataset.libraryType || state.currentLibraryType;
 
         if (typeof window.handleLongPressTouchStart === 'function') {
           window.handleLongPressTouchStart(e, (x, y) => {
             suppressSidebarClickUntil = Date.now() + 900;
-            currentTargetLibrary = { id, name, type };
+            currentTargetLibrary = { id, name, type, libraryType };
 
             configureCategoryContextMenu(type);
             showContextMenu(x, y);

@@ -14,6 +14,56 @@ from repositories.sqlite.scanner_queue_repository import ScannerQueueRepository 
 
 
 class BatchBookScanProgressTests(unittest.TestCase):
+    def test_pdf_and_remote_epub_are_processed_in_one_isolated_batch(self):
+        queue = Mock()
+        books = {
+            101: {
+                'id': 101, 'title': 'PDF 도서', 'file_path': '/books/a.pdf',
+                'file_format': 'pdf', 'library_is_remote': 0,
+            },
+            202: {
+                'id': 202, 'title': '원격 EPUB', 'file_path': '/rclone/b.epub',
+                'file_format': 'epub', 'library_is_remote': 1,
+            },
+            303: {
+                'id': 303, 'title': 'CBZ 도서', 'file_path': '/books/c.cbz',
+                'file_format': 'cbz', 'library_is_remote': 0,
+            },
+        }
+        lookup = Mock(side_effect=lambda _db_type, book_id: books[book_id])
+        scan_single = Mock(return_value=(True, '완료', None))
+        scan_documents = Mock(return_value=(True, '완료', {101: '1/a.webp', 202: '1/b.webp'}))
+        update_stage = Mock()
+        book_repository_module = types.ModuleType('repositories.book_scan_repository')
+        book_repository_module.BookScanRepository = types.SimpleNamespace(
+            get_book_basic_info_raw=lookup
+        )
+        book_scan_module = types.ModuleType('services.book_scan_service')
+        book_scan_module.BookScanService = types.SimpleNamespace(
+            scan_single_book=scan_single,
+            scan_document_books=scan_documents,
+        )
+        queue_repository_module = types.ModuleType('repositories.scanner_queue_repository')
+        queue_repository_module.ScannerQueueRepository = types.SimpleNamespace(
+            update_task_stage=update_stage
+        )
+
+        with patch.dict('sys.modules', {
+            'repositories.book_scan_repository': book_repository_module,
+            'services.book_scan_service': book_scan_module,
+            'repositories.scanner_queue_repository': queue_repository_module,
+        }):
+            _process_batch_book_scan(
+                queue,
+                task_id=14,
+                db_type='general',
+                book_ids=[101, 202, 303],
+            )
+
+        scan_documents.assert_called_once_with('general', [101, 202], task_id=14)
+        scan_single.assert_called_once_with('general', 303)
+        self.assertIn('성공 3/3, 실패 0', update_stage.call_args_list[-1].args[1])
+
     def test_worker_reports_current_book_and_completion_count(self):
         queue = Mock()
         lookup = Mock(side_effect=[{'title': '첫 번째 책'}, {'title': '두 번째 책'}])
@@ -59,6 +109,24 @@ class BatchBookScanProgressTests(unittest.TestCase):
 
         self.assertEqual(first, reordered)
         self.assertTrue(first.startswith('batch_book_scan_general_'))
+
+    def test_targeted_lazy_scan_keys_do_not_block_global_or_other_series_scans(self):
+        queue = ScannerQueue()
+        global_scan = queue._get_task_key('lazy_scan', {})
+        series_scan = queue._get_task_key('lazy_scan', {
+            'db_type': 'general', 'library_id': 2, 'series_name': 'Naruto'
+        })
+        same_series_scan = queue._get_task_key('lazy_scan', {
+            'db_type': 'general', 'library_id': 2, 'series_name': ' Naruto '
+        })
+        other_series_scan = queue._get_task_key('lazy_scan', {
+            'db_type': 'general', 'library_id': 2, 'series_name': 'Boruto'
+        })
+
+        self.assertEqual(global_scan, 'lazy_scan')
+        self.assertEqual(series_scan, same_series_scan)
+        self.assertNotEqual(global_scan, series_scan)
+        self.assertNotEqual(series_scan, other_series_scan)
 
     def test_single_book_scan_completion_stage_keeps_the_book_title(self):
         queue = Mock()

@@ -82,6 +82,7 @@ def normalize_metadata_list_field(value):
 
 def _empty_meta():
     return {
+        'title': '',
         'author': '',
         'localized_series': '',
         'cover_artist': '',
@@ -145,6 +146,7 @@ def _parse_comicinfo_from_cbz_local(file_path):
             # Writer(글 작가)만 author로 채운다 - Penciller(그림 작가)를 author 폴백으로
             # 섞으면 표지/그림 담당자가 글 작가로 잘못 표기된다. 그림 작가는 아래
             # cover_artist에 별도로 보존한다.
+            meta['title'] = _get('Title')
             meta['author'] = _get('Writer')
             meta['localized_series'] = _get('LocalizedSeries')
 
@@ -175,7 +177,7 @@ def _parse_comicinfo_from_cbz_local(file_path):
                 meta['release_date'] = f"{year}-{month or '01'}-{day or '01'}"
 
     except zipfile.BadZipFile:
-        return meta
+        raise
 
     meta['genre'] = normalize_metadata_list_field(meta.get('genre', ''))
     meta['tags'] = normalize_metadata_list_field(meta.get('tags', ''))
@@ -183,15 +185,20 @@ def _parse_comicinfo_from_cbz_local(file_path):
     return meta
 
 
-def parse_comicinfo_from_cbz(file_path, is_remote=False, timeout=None):
+def parse_comicinfo_from_cbz(file_path, is_remote=False, timeout=None, status_out=None):
     """Parse ComicInfo.xml locally or with a bounded wait for remote VFS files."""
     meta = _empty_meta()
+    if isinstance(status_out, dict):
+        status_out['parsed'] = False
     if not file_path or not str(file_path).lower().endswith(('.cbz', '.zip')):
         return meta
 
     if not is_remote:
         try:
-            return _parse_comicinfo_from_cbz_local(file_path)
+            parsed = _parse_comicinfo_from_cbz_local(file_path)
+            if isinstance(status_out, dict):
+                status_out['parsed'] = True
+            return parsed
         except Exception as error:
             print(f"[Scanner] ComicInfo.xml parsing error ({file_path}): {error}")
             return meta
@@ -234,4 +241,6 @@ def parse_comicinfo_from_cbz(file_path, is_remote=False, timeout=None):
         return meta
 
     _circuit_breaker.record_success()
+    if isinstance(status_out, dict):
+        status_out['parsed'] = True
     return parsed

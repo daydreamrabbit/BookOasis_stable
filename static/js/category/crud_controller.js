@@ -1,8 +1,8 @@
 // crud_controller.js – 카테고리 생성/수정/삭제, 스캔/중단, 보관함 이관 및 폼 UI 조작
 import { state } from '../state.js';
 import * as api from '../api.js';
-import { selectCategory } from '../tab_media_library.js';
-import { currentTargetLibrary } from './context_menu.js';
+import { selectCategory } from '../category_navigation.js?rev=20260919-library-content-kind-v1';
+import { currentTargetLibrary } from './context_menu.js?rev=20260919-library-content-kind-v1';
 import { updateRemoteWarning, enableVFSCheckForRemote, loadGdriveCopyRemotes, detectGdriveMountRoot } from './path_browser.js';
 import { loadVideoLibraryView } from '../video_library.js';
 
@@ -25,6 +25,23 @@ function updateHideTitleRowVisibility() {
   const row = document.getElementById('library-form-hide-title-row');
   const isBookSession = state.currentLibraryType === 'general' || state.currentLibraryType === 'adult';
   if (row) row.style.display = isBookSession ? '' : 'none';
+}
+
+function updateFolderCoverRowVisibility() {
+  const row = document.getElementById('library-form-folder-cover-row');
+  const isBookSession = state.currentLibraryType === 'general' || state.currentLibraryType === 'adult';
+  if (row) row.style.display = isBookSession ? '' : 'none';
+}
+
+function updateContentKindRowVisibility(isEditing = false, libraryType = state.currentLibraryType) {
+  const row = document.getElementById('library-form-content-kind-row');
+  const select = document.getElementById('library-form-content-kind');
+  const legacyOption = select?.querySelector('[data-legacy-content-kind]');
+  const isBookSession = libraryType === 'general' || libraryType === 'adult';
+  if (row) row.style.display = isBookSession ? '' : 'none';
+  if (select) select.required = isBookSession;
+  if (legacyOption) legacyOption.hidden = !isEditing;
+  if (!isBookSession && select) select.value = 'unspecified';
 }
 
 const MAX_LIBRARY_NAME_LENGTH = 25;
@@ -104,8 +121,10 @@ export function triggerAddLibrary() {
     return;
   }
   form.reset();
+  form.dataset.libraryType = state.currentLibraryType;
   document.getElementById('library-form-id').value = '';
   populateLibraryGroupSelect('');
+  updateContentKindRowVisibility(false);
   const remoteEl = document.getElementById('library-form-remote');
   if (remoteEl) {
     remoteEl.checked = false;
@@ -152,6 +171,9 @@ export function triggerAddLibrary() {
   const hideTitleEl = document.getElementById('library-form-hide-title');
   if (hideTitleEl) hideTitleEl.checked = false;
   updateHideTitleRowVisibility();
+  const folderCoverEl = document.getElementById('library-form-use-folder-cover');
+  if (folderCoverEl) folderCoverEl.checked = false;
+  updateFolderCoverRowVisibility();
 
   const gdriveViewMirrorEl = document.getElementById('library-form-gdrive-view-mirror-path');
   if (gdriveViewMirrorEl) gdriveViewMirrorEl.value = '';
@@ -213,9 +235,10 @@ export async function triggerEditLibrary() {
 
   // 이동 버튼 노출 및 텍스트 갱신
   const moveBtn = document.getElementById('library-form-move-btn');
+  const libraryType = currentTargetLibrary.libraryType || state.currentLibraryType;
   if (moveBtn) {
     moveBtn.style.display = 'block';
-    if (state.currentLibraryType === 'general') {
+    if (libraryType === 'general') {
       moveBtn.innerText = '성인도서로 이동';
     } else {
       moveBtn.innerText = '일반도서로 이동';
@@ -224,8 +247,12 @@ export async function triggerEditLibrary() {
   
   const id = currentTargetLibrary.id;
   const name = currentTargetLibrary.name;
-  const libraryItem = document.querySelector(`[data-type="custom"][data-id="${id}"]`);
+  const matchingItems = [...document.querySelectorAll('[data-type="custom"][data-id]')]
+    .filter((item) => String(item.dataset.id) === String(id));
+  const libraryItem = matchingItems.find((item) => item.dataset.libraryType === libraryType)
+    || matchingItems.find((item) => !item.dataset.libraryType);
  
+  form.dataset.libraryType = libraryType;
   document.getElementById('library-form-id').value = id;
   document.getElementById('library-form-name').value = name;
   const groupIdVal = libraryItem?.dataset?.groupId || '';
@@ -233,6 +260,10 @@ export async function triggerEditLibrary() {
   
   const pathVal = libraryItem?.dataset?.path || '';
   document.getElementById('library-form-path').value = pathVal;
+  const contentKindVal = libraryItem?.dataset?.contentKind || 'unspecified';
+  const contentKindEl = document.getElementById('library-form-content-kind');
+  if (contentKindEl) contentKindEl.value = contentKindVal;
+  updateContentKindRowVisibility(true, libraryType);
 
   const isRemoteVal = libraryItem?.dataset?.remote || '0';
   const remoteEl = document.getElementById('library-form-remote');
@@ -304,6 +335,11 @@ export async function triggerEditLibrary() {
   if (hideTitleEl) hideTitleEl.checked = (hideTitleVal === '1');
   updateHideTitleRowVisibility();
 
+  const useFolderCoverVal = libraryItem?.dataset?.useFolderCover || '0';
+  const folderCoverEl = document.getElementById('library-form-use-folder-cover');
+  if (folderCoverEl) folderCoverEl.checked = (useFolderCoverVal === '1');
+  updateFolderCoverRowVisibility();
+
   // 체크박스 변경 감지 바인딩 (최초 1회)
   if (remoteEl && !remoteEl.dataset.listenerBound) {
     remoteEl.dataset.listenerBound = 'true';
@@ -332,7 +368,8 @@ export async function triggerDeleteLibrary() {
   if (!confirmDel) return;
 
   const formData = new FormData();
-  formData.append('type', state.currentLibraryType);
+  const libraryType = currentTargetLibrary.libraryType || state.currentLibraryType;
+  formData.set('type', libraryType);
   formData.append('id', currentTargetLibrary.id);
 
   if (typeof window.showGlobalLoadingSpinner === 'function') {
@@ -522,7 +559,8 @@ export async function submitLibraryForm(event) {
     return;
   }
 
-  formData.append('type', state.currentLibraryType);
+  const libraryType = form.dataset.libraryType || state.currentLibraryType;
+  formData.set('type', libraryType);
   
   const isRemoteChecked = document.getElementById('library-form-remote')?.checked;
   formData.set('is_remote', isRemoteChecked ? '1' : '0');
@@ -530,9 +568,20 @@ export async function submitLibraryForm(event) {
   formData.set('hide_cover', hideCoverChecked ? '1' : '0');
   const hideTitleChecked = document.getElementById('library-form-hide-title')?.checked;
   formData.set('hide_title', hideTitleChecked ? '1' : '0');
-
+  const useFolderCoverChecked = document.getElementById('library-form-use-folder-cover')?.checked;
+  formData.set('use_folder_cover', useFolderCoverChecked ? '1' : '0');
   const id = formData.get('id');
   const isEdit = !!id;
+  const contentKind = String(formData.get('content_kind') || '').trim();
+  const isBookSession = libraryType === 'general' || libraryType === 'adult';
+  const validContentKinds = isEdit
+    ? ['manga', 'novel', 'book', 'unspecified']
+    : ['manga', 'novel', 'book'];
+  if (isBookSession && !validContentKinds.includes(contentKind)) {
+    alert(i18n.t('modal.content_kind_required'));
+    return;
+  }
+  formData.set('content_kind', contentKind || 'unspecified');
 
   try {
     const submitBtn = document.getElementById('library-form-submit-btn');

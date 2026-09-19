@@ -11,10 +11,9 @@ let lastIsHeaderScanning = false;
 let scanLatchTimerMap = new Map();
 let latestSystemStatus = null;
 let refreshStatusPoll = null;
-
-export function refreshSystemStatus() {
-  return refreshStatusPoll ? refreshStatusPoll() : Promise.resolve();
-}
+let seenRecentBatchScanIds = null;
+const ACTIVE_STATUS_POLL_INTERVAL_MS = 2000;
+const IDLE_STATUS_POLL_INTERVAL_MS = 5000;
 
 function escapeActivityText(value) {
   const node = document.createElement('div');
@@ -26,12 +25,21 @@ function escapeActivityAttribute(value) {
   return escapeActivityText(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function isRecentlyFinishedScan(task) {
+  const finishedAt = parseServerDateTime(task?.finished_at);
+  if (!finishedAt) return false;
+  const age = Date.now() - finishedAt.getTime();
+  return age >= -60000 && age <= 120000;
+}
+
 function getScanActivityTaskInfo(task, isPending = false, isRecent = false) {
   const taskType = task?.type || task?.task_type || 'background';
   const kwargs = task?.kwargs || {};
   const libraryId = kwargs.library_id;
   const dbType = kwargs.db_type || state.currentLibraryType || 'general';
-  const stage = String(task?.stage || '').trim();
+  const rawStage = String(task?.stage || '').trim();
+  // 예전 서버 버전이 저장한 내부 enum은 사용자에게 그대로 노출하지 않는다.
+  const stage = rawStage === 'book_scan' ? '도서 파일 처리 중' : rawStage;
   const names = {
     library_scan: '카테고리 스캔',
     cover_scan: '표지 스캔',
@@ -101,8 +109,8 @@ function renderScanActivity(data) {
   }
   button.title = tasks.length > 0 ? `스캔 활동 ${tasks.length}건` : '스캔 활동';
   summary.textContent = running
-    ? `실행 중 · 대기 ${pending.length}건`
-    : pending.length ? `대기 ${pending.length}건`
+    ? `실행 중 · 대기열 ${pending.length}건`
+    : pending.length ? `대기열 ${pending.length}건`
       : recentBookScans.length ? `최근 도서 스캔 ${recentBookScans.length}건`
         : tasks.length ? '실행 중' : '대기 중';
   if (tasks.length === 0) {
@@ -187,7 +195,7 @@ function applyCategoryScanSpinnersState() {
   });
 }
 
-function updateCategoryScanSpinners(data) {
+function updateCategoryScanSpinners(data, scanRefresh = {}) {
   const now = Date.now();
   const currentActiveLibIds = new Set();
   let isGlobalOrCurrentLibScanning = false;
@@ -234,14 +242,42 @@ function updateCategoryScanSpinners(data) {
   } else {
     if (wasScanningPrevious) {
       wasScanningPrevious = false;
+      const detailView = document.getElementById('book-detail-view');
+      const detailLibraryKey = `${state.currentLibraryType}:${state.detailLibraryId}`;
+      const shouldRefreshDetail = Boolean(
+        !scanRefresh.detailRefreshed
+        && detailView
+        && detailView.style.display !== 'none'
+        && state.detailSeriesName
+        && state.detailBookIds?.length
+        && (lastActiveLibIds.has(detailLibraryKey) || lastIsHeaderScanning)
+      );
       scanLatchTimerMap.clear();
       console.log('[ScanSpinner] 🏁 백그라운드 스캔 완수. 리스트 자동 갱신');
-      if (state.currentLibraryId === 'home') {
-        if (typeof window.loadDashboardData === 'function') window.loadDashboardData();
+      if (!scanRefresh.dashboardInvalidated && typeof window.invalidateDashboardData === 'function') {
+        window.invalidateDashboardData();
+      }
+      if (state.currentLibraryId === 'home' && !scanRefresh.handledBatchScans) {
+        if (typeof window.loadDashboardData === 'function') window.loadDashboardData({ force: true });
       } else if (state.currentLibraryId === 'history') {
         if (typeof window.loadReadingHistory === 'function') window.loadReadingHistory();
       } else if (state.currentLibraryId !== 'settings') {
-        if (typeof window.loadBooksList === 'function') window.loadBooksList(false);
+        if (scanRefresh.listInvalidated || scanRefresh.handledBatchScans) {
+          // A completed immediate-series scan already invalidated this list.
+        } else if (typeof window.invalidateBookListAfterScan === 'function') {
+          window.invalidateBookListAfterScan();
+        } else if (typeof window.loadBooksList === 'function') {
+          window.loadBooksList(false);
+        }
+      }
+      if (shouldRefreshDetail && typeof window.openBookDetail === 'function') {
+        window.openBookDetail(
+          null,
+          state.detailSeriesName,
+          state.detailLibraryId,
+          state.detailRepresentativeBookId,
+          state.detailDisplayTitle
+        );
       }
     }
   }
@@ -260,6 +296,119 @@ function updateCategoryScanSpinners(data) {
   lastIsHeaderScanning = isGlobalOrCurrentLibScanning || effectiveActiveLibIds.has(`${state.currentLibraryType}:${state.currentLibraryId}`);
 
   applyCategoryScanSpinnersState();
+}
+
+function refreshDetailAfterBookScan(data) {
+  const recentScans = (Array.isArray(data?.raw_status?.recent_book_scans)
+    ? data.raw_status.recent_book_scans
+    : []).filter(task => task?.type === 'batch_book_scan');
+  const currentIds = new Set(recentScans.map(task => String(task.id ?? task.key ?? '')));
+
+  const isInitialStatus = seenRecentBatchScanIds === null;
+  const newlyFinished = recentScans.filter(task =>
+    ['completed', 'failed', 'cancelled'].includes(task?.status)
+    && (isInitialStatus
+      ? isRecentlyFinishedScan(task)
+      : !seenRecentBatchScanIds.has(String(task.id ?? task.key ?? '')))
+  );
+  seenRecentBatchScanIds = currentIds;
+  if (!newlyFinished.length) {
+    return {
+      listInvalidated: false,
+      detailRefreshed: false,
+      dashboardInvalidated: false,
+      handledBatchScans: false,
+    };
+  }
+
+  const finishedDbTypes = new Set(newlyFinished.map(task =>
+    String(task?.kwargs?.db_type || 'general')
+  ));
+  finishedDbTypes.forEach(dbType => window.invalidateDashboardData?.(dbType));
+  const dashboardInvalidated = finishedDbTypes.size > 0;
+  const dashboardRefreshed = state.currentLibraryId === 'home'
+    && finishedDbTypes.has(String(state.currentLibraryType || 'general'));
+  if (dashboardRefreshed && typeof window.loadDashboardData === 'function') {
+    window.loadDashboardData({ force: true });
+  }
+
+  const currentType = String(state.currentLibraryType || 'general');
+  const currentLibraryId = String(state.currentLibraryId || '');
+  const affectsList = newlyFinished.some(task => {
+    const kwargs = task.kwargs || {};
+    const taskLibraryId = kwargs.library_id;
+    return String(kwargs.db_type || 'general') === currentType
+      && (
+        taskLibraryId == null
+        || currentLibraryId === 'all'
+        || currentLibraryId === 'favorite'
+        || String(taskLibraryId) === currentLibraryId
+      );
+  });
+  let listInvalidated = false;
+  if (affectsList) {
+    if (typeof window.invalidateBookListAfterScan === 'function') {
+      window.invalidateBookListAfterScan();
+      listInvalidated = true;
+    } else if (typeof window.loadBooksList === 'function') {
+      window.loadBooksList(false, null, { preserveScroll: true });
+      listInvalidated = true;
+    }
+  }
+
+  if (typeof window.openBookDetail !== 'function') {
+    return {
+      listInvalidated,
+      detailRefreshed: false,
+      dashboardInvalidated,
+      dashboardRefreshed,
+      handledBatchScans: true,
+    };
+  }
+
+  const detailView = document.getElementById('book-detail-view');
+  if (!detailView || detailView.style.display === 'none' || !state.detailBookIds?.length) {
+    return {
+      listInvalidated,
+      detailRefreshed: false,
+      dashboardInvalidated,
+      dashboardRefreshed,
+      handledBatchScans: true,
+    };
+  }
+
+  const detailBookIds = new Set(state.detailBookIds.map(id => String(id)));
+  const affectsDetail = newlyFinished.some(task => {
+    const kwargs = task.kwargs || {};
+    if (String(kwargs.db_type || 'general') !== currentType) return false;
+    const scannedIds = Array.isArray(kwargs.book_ids) ? kwargs.book_ids : [];
+    return scannedIds.some(id => detailBookIds.has(String(id)));
+  });
+  if (!affectsDetail) {
+    return {
+      listInvalidated,
+      detailRefreshed: false,
+      dashboardInvalidated,
+      dashboardRefreshed,
+      handledBatchScans: true,
+    };
+  }
+
+  console.log('[ScanDetailRefresh] 도서 스캔 완료로 열린 상세 페이지를 갱신합니다.');
+  window.openBookDetail(
+    null,
+    state.detailSeriesName,
+    state.detailLibraryId,
+    state.detailRepresentativeBookId,
+    state.detailDisplayTitle
+  );
+  return {
+    listInvalidated,
+    detailRefreshed: true,
+    dashboardInvalidated,
+    dashboardRefreshed,
+    handledBatchScans: true,
+  };
 }
 
 window.addEventListener('library:categories-rendered', () => {
@@ -285,7 +434,8 @@ export function startSystemStatusPolling() {
       const res = await fetch(`/api/system/status?type=${state.currentLibraryType}`);
       const data = await res.json();
       keepPolling = Boolean(data?.success && data?.is_active);
-      updateCategoryScanSpinners(data);
+      const scanRefresh = refreshDetailAfterBookScan(data);
+      updateCategoryScanSpinners(data, scanRefresh);
       renderScanActivity(data);
     } catch (err) {
       console.error('[ScanSpinner] 상태 조회 실패:', err);
@@ -294,8 +444,14 @@ export function startSystemStatusPolling() {
       if (statusRefreshPending) {
         statusRefreshPending = false;
         poll();
-      } else if (keepPolling) {
-        statusTimerId = setTimeout(poll, 2000);
+      } else if (document.visibilityState === 'visible') {
+        // API나 다른 클라이언트에서 시작한 스캔은 bookoasis:scan-queued 이벤트를
+        // 이 브라우저에 보내지 않는다. 유휴 상태에서도 가볍게 상태를 조회해야
+        // 완료 직후 recent_book_scans를 발견해 목록/상세 데이터를 갱신할 수 있다.
+        const interval = keepPolling
+          ? ACTIVE_STATUS_POLL_INTERVAL_MS
+          : IDLE_STATUS_POLL_INTERVAL_MS;
+        statusTimerId = setTimeout(poll, interval);
       }
     }
   };
@@ -309,6 +465,10 @@ window.addEventListener('bookoasis:scan-queued', () => refreshStatusPoll?.());
 window.addEventListener('focus', () => refreshStatusPoll?.());
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') refreshStatusPoll?.();
+  else if (statusTimerId) {
+    clearTimeout(statusTimerId);
+    statusTimerId = null;
+  }
 });
 
 // 스크립트 로드 시 즉시 시작
