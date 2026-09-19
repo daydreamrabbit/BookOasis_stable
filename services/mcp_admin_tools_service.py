@@ -27,7 +27,10 @@ MCP_WRITE_AUDIT_LOG = os.path.join(LOGS_DIR, 'mcp_write_audit.log')
 
 _VALID_DB_TYPES = ('general', 'adult', 'audiobook', 'video')
 
-_ALLOWED_LEADING_KEYWORDS = ('select', 'with', 'explain', 'pragma')
+_ALLOWED_LEADING_KEYWORDS = ('select', 'with', 'explain', 'pragma', 'show', 'describe')
+# SHOW/DESCRIBE는 MariaDB용 스키마 조회(SHOW COLUMNS/INDEX/CREATE TABLE 등) - 본질적으로 읽기 전용이라
+# 'SHOW CREATE TABLE'이 금지 키워드(create)에 걸리지 않도록 금지어 검사를 건너뛴다.
+_SCHEMA_INSPECTION_KEYWORDS = ('show', 'describe')
 _BANNED_KEYWORDS = (
     'insert', 'update', 'delete', 'drop', 'alter', 'create', 'attach', 'detach',
     'replace', 'truncate', 'grant', 'revoke', 'vacuum',
@@ -51,6 +54,9 @@ def _validate_readonly_sql(sql):
     if first_word not in _ALLOWED_LEADING_KEYWORDS:
         raise ValueError(f"SELECT/WITH/EXPLAIN 쿼리만 허용됩니다 (시작 키워드: {first_word})")
 
+    if first_word in _SCHEMA_INSPECTION_KEYWORDS:
+        return stripped
+
     lowered = stripped.lower()
     for kw in _BANNED_KEYWORDS:
         if re.search(rf'\b{kw}\b', lowered):
@@ -67,6 +73,18 @@ def _validate_db_type(db_type):
 
 
 class McpAdminToolsService:
+    @staticmethod
+    def get_version_info():
+        """VERSION 파일(루트)의 컴포넌트별 버전을 그대로 읽어 반환한다 (네트워크 호출 없음)."""
+        version_path = os.path.join(BASE_DIR, 'VERSION')
+        info = {}
+        with open(version_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                key, sep, value = line.strip().partition(':')
+                if sep:
+                    info[key.strip().strip('"')] = value.strip().strip('"')
+        return {'dashboard': info.get('dashboard'), 'state': info.get('state'), 'components': info}
+
     @staticmethod
     def run_readonly_query(db_type, sql, max_rows=200):
         db_type = _validate_db_type(db_type)

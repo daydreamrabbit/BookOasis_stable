@@ -111,12 +111,24 @@ def find_duplicate_series(db_type: str = "general") -> dict:
 
 
 @mcp.tool()
+def get_version() -> dict:
+    """실행 중인 BookOasis의 버전을 반환합니다 (VERSION 파일 기준: dashboard 본체 버전,
+    state, 그리고 migrator/extensions/API/DBMS 등 컴포넌트별 버전)."""
+    def _run():
+        from services.mcp_admin_tools_service import McpAdminToolsService
+        return McpAdminToolsService.get_version_info()
+    return _quiet(_run)
+
+
+@mcp.tool()
 def run_readonly_query(db_type: str = "general", sql: str = "", max_rows: int = 200) -> dict:
-    """서재 DB에 읽기 전용(SELECT/WITH/EXPLAIN) SQL을 직접 실행합니다.
+    """서재 DB에 읽기 전용(SELECT/WITH/EXPLAIN/SHOW/DESCRIBE/PRAGMA) SQL을 직접 실행합니다.
     db_type: general(일반 도서) / adult(성인 서재) / audiobook(오디오북) / video(영상 강좌).
     INSERT/UPDATE/DELETE/DROP 등 쓰기 구문은 앱 레벨과 DB 레벨(읽기전용 커넥션/세션) 양쪽에서
     거부됩니다. 미리 만들어진 진단 툴로 커버되지 않는 새로운 조건을 즉석에서 조회할 때 쓰세요.
-    스키마를 모르면 먼저 `PRAGMA table_info(books)` 같은 쿼리로 컬럼을 확인하세요."""
+    스키마를 모르면 먼저 컬럼을 확인하세요: SQLite는 `PRAGMA table_info(books)`,
+    MariaDB는 `SHOW COLUMNS FROM books` / `SHOW INDEX FROM books` / `SHOW CREATE TABLE books`
+    (MariaDB에서 PRAGMA는 동작하지 않습니다)."""
     def _run():
         from services.mcp_admin_tools_service import McpAdminToolsService
         return McpAdminToolsService.run_readonly_query(db_type, sql, max_rows=max_rows)

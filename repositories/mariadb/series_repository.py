@@ -5,8 +5,8 @@ series_repository.py – MariaDB 전용 시리즈(Series) 데이터 그룹핑 �
 import time
 import re
 import database
+from repositories.series_metadata_utils import book_metadata_select_expr
 from repositories.series_search_query import parse_series_search_query
-from repositories.series_metadata_utils import book_metadata_exists_sql
 
 class SeriesRepository:
     @staticmethod
@@ -97,7 +97,7 @@ class SeriesRepository:
             conn.close()
 
     @staticmethod
-    def _fetch_summary_rows(db_type, library_id, user_id, role, limit, offset, favorite_user_id, sort='asc'):
+    def _fetch_summary_rows(db_type, library_id, user_id, role, limit, offset, favorite_user_id, sort='asc', include_has_metadata=False):
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
@@ -144,7 +144,7 @@ class SeriesRepository:
                        ) AS is_favorite,
                        b.created_at, b.genre, b.tags, b.books_lv, b.publication_status, b.library_id,
                        COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       {book_metadata_exists_sql('b')} AS has_metadata,
+                       {book_metadata_select_expr('b', include_has_metadata)} AS has_metadata,
                        s.series_book_count, s.latest_added AS series_latest_added
                 FROM series_summary s
                 INNER JOIN books b ON b.id = s.representative_book_id
@@ -225,7 +225,7 @@ class SeriesRepository:
             conn.close()
 
     @staticmethod
-    def fetch_books_for_grouping(db_type, library_id, search_query='', favorite_only=False, genre_filters=None, tag_filters=None, user_id=None, role=None, limit=None, offset=None, sort='asc'):
+    def fetch_books_for_grouping(db_type, library_id, search_query='', favorite_only=False, genre_filters=None, tag_filters=None, user_id=None, role=None, limit=None, offset=None, sort='asc', include_has_metadata=False):
         """시리즈 그룹핑 렌더링에 필요한 기본 도서 레코드 목록 조회 (MariaDB Native)"""
         safe_user_id = int(user_id) if user_id is not None and int(user_id) > 0 else 1
         genre_filters = [str(v).strip() for v in (genre_filters or []) if str(v).strip()]
@@ -239,7 +239,8 @@ class SeriesRepository:
         if db_type not in ('audiobook', 'video') and not search_query and not favorite_only and not genre_filters and not tag_filters:
             try:
                 summary_rows = SeriesRepository._fetch_summary_rows(
-                    db_type, library_id, user_id, role, limit, offset, safe_user_id, sort=sort
+                    db_type, library_id, user_id, role, limit, offset, safe_user_id, sort=sort,
+                    include_has_metadata=include_has_metadata
                 )
                 if summary_rows is not None:
                     return summary_rows
@@ -416,7 +417,7 @@ class SeriesRepository:
                        0 AS is_favorite,
                        b.created_at,
                        b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       {book_metadata_exists_sql('b')} AS has_metadata,
+                       {book_metadata_select_expr('b', include_has_metadata)} AS has_metadata,
                        rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
                 FROM books b
                 INNER JOIN (

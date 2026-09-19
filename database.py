@@ -397,6 +397,14 @@ class MariadbCursorWrapper:
             return [DictRow(row) for row in rows]
         return [DictRow(r) for r in rows]
 
+    def fetchmany(self, size=None):
+        rows = self._cursor.fetchmany(size) if size is not None else self._cursor.fetchmany()
+        return [DictRow(r) for r in rows] if rows else []
+
+    @property
+    def description(self):
+        return self._cursor.description
+
     @property
     def rowcount(self):
         return self._cursor.rowcount

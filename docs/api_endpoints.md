@@ -173,6 +173,7 @@
   * `page` (integer, 선택): 조회 페이지 번호 (기본: `1`)
   * `limit` (integer, 선택): 1회당 조회 목록 크기 (기본: 시스템 설정값)
   * `sort` (string, 선택): 정렬 기준 (`title_asc`, `title_desc`, `date_desc`, `date_asc`)
+  * `include_has_metadata` (`1`, 선택): 응답의 `has_metadata`(시리즈에 실제 메타데이터가 있으면 `1`, 없으면 `0`)를 계산해서 채웁니다. 기본은 미계산(`null`)이며, 대형 카테고리에서는 수 초가 더 걸릴 수 있으니 필요한 경우에만 사용하세요.
 * **응답 예시 (200 OK)**:
   ```json
   {

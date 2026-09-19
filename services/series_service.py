@@ -116,8 +116,11 @@ def _build_series_entries(db_type, rows):
         latest_added = series_latest_added or max((b['created_at'] for b in books if b['created_at']), default='')
         any_favorite = 1 if any((b['is_favorite'] or 0) == 1 for b in books) else 0
         any_locked = 1 if any((b.get('metadata_locked') or 0) == 1 for b in books) else 0
+        # 목록 SQL은 has_metadata를 NULL로 내려준다(상관 EXISTS가 대형 카테고리에서 수 초 걸려 제거).
+        # 응답 키는 계약 유지를 위해 남기고, SQL이 값을 채워줄 때만 집계한다. 상세화면은
+        # book_detail_service가 단건으로 따로 계산한다.
         has_metadata = None
-        if db_type in ('general', 'adult'):
+        if db_type in ('general', 'adult') and any(b.get('has_metadata') is not None for b in books):
             has_metadata = 1 if any(int(b.get('has_metadata') or 0) == 1 for b in books) else 0
         author = next((b['author'] for b in books if b['author']), '')
         genre = next((b['genre'] for b in books if b['genre']), '')
@@ -347,7 +350,7 @@ class SeriesService:
             _bump_shared_books_cache_epoch(db_type)
 
     @staticmethod
-    def get_books_list(db_type, library_id, page, limit, search_query, sort='asc', genre_filters=None, tag_filters=None, user_id=None, role=None, group_by=None, author_key=None):
+    def get_books_list(db_type, library_id, page, limit, search_query, sort='asc', genre_filters=None, tag_filters=None, user_id=None, role=None, group_by=None, author_key=None, include_has_metadata=False):
         import time
         t0 = time.perf_counter()
         _sync_local_books_cache_with_shared_epoch(db_type)
@@ -379,6 +382,7 @@ class SeriesService:
             str(role or ''),
             group_by,
             author_key,
+            bool(include_has_metadata),
         )
 
         if not requires_full_scan:
@@ -412,7 +416,8 @@ class SeriesService:
                 user_id=user_id,
                 role=role,
                 limit=None,
-                offset=None
+                offset=None,
+                include_has_metadata=include_has_metadata
             )
             t2 = time.perf_counter()
 
@@ -449,7 +454,8 @@ class SeriesService:
             role=role,
             limit=sql_limit,
             offset=sql_offset,
-            sort=sort
+            sort=sort,
+            include_has_metadata=include_has_metadata
         )
         t2 = time.perf_counter()
 

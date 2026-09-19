@@ -26,12 +26,31 @@ def book_metadata_exists_sql(book_alias='b'):
             )
         conditions.append(value_present)
     conditions.append(f'COALESCE({metadata_book}.score, 0) <> 0')
-    return f"""EXISTS (
-        SELECT 1
+    # 시리즈 키 = COALESCE(NULLIF(series_name,''), title) (series_summary 그룹 키와 동일).
+    # 비교식의 안쪽(metadata_book) 컬럼을 COALESCE로 감싸면 idx_books_series_name을 못 타고
+    # library_id 인덱스로 라이브러리 전체를 훑는다(대형 카테고리에서 수 초). 그래서 같은 의미를
+    # 안쪽 컬럼은 맨몸으로 두는 두 갈래로 나눈다 - (a) series_name이 있는 권은 series_name 인덱스,
+    # (b) series_name이 비어 있는 권은 title 인덱스. 바깥(b) 쪽 COALESCE는 행마다 상수라 무방하다.
+    series_key = f"COALESCE(NULLIF({book_alias}.series_name, ''), {book_alias}.title)"
+    base = f"""SELECT 1
         FROM books {metadata_book}
         WHERE {metadata_book}.library_id = {book_alias}.library_id
-          AND COALESCE(NULLIF({metadata_book}.series_name, ''), {metadata_book}.title)
-              = COALESCE(NULLIF({book_alias}.series_name, ''), {book_alias}.title)
           AND ({metadata_book}.is_deleted = 0 OR {metadata_book}.is_deleted IS NULL)
-          AND ({' OR '.join(conditions)})
+          AND ({' OR '.join(conditions)})"""
+    return f"""(
+        EXISTS ({base}
+          AND {metadata_book}.series_name <> ''
+          AND {metadata_book}.series_name = {series_key})
+        OR EXISTS ({base}
+          AND ({metadata_book}.series_name IS NULL OR {metadata_book}.series_name = '')
+          AND {metadata_book}.title = {series_key})
     )"""
+
+
+def book_metadata_select_expr(book_alias='b', include=False):
+    """Return the SELECT expression for a list row's has_metadata column.
+
+    The correlated EXISTS scans the whole category per result row (seconds on a ~40K-book
+    library), so list queries emit NULL unless the caller opted in (include_has_metadata).
+    """
+    return book_metadata_exists_sql(book_alias) if include else 'NULL'

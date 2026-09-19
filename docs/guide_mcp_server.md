@@ -68,6 +68,14 @@ claude mcp add bookoasis -- docker exec -i bookoasis python3 tools/mcp_server.py
   }
   ```
 
+### 버전 확인과 업데이트 — MCP는 업데이트를 "안내"만 합니다
+
+`get_version`으로 실행 중인 버전을 확인하고, `call_api`로 `/api/media/about`을 호출하면 GitHub 최신 버전과 비교한 업데이트 가능 여부를 볼 수 있습니다. **MCP 서버는 BookOasis 자신을 업데이트하거나 덮어쓰지 않습니다** — 이는 "코어/플러그인 소스 파일은 건드리지 않고 DB만 쓴다"는 설계 원칙 때문이며, Docker 컨테이너 안에서 실행되는 MCP가 자기 이미지를 교체할 수도 없습니다. 업데이트는 항상 호스트에서 직접 실행하세요. (AI에게 "업데이트가 있는지 확인하고 방법을 알려줘"라고 요청하면 안내까지만 해줍니다.)
+
+- **Docker (GHCR 이미지):** `docker compose -f <사용 중인 compose 파일> pull` 후 `up -d` — 자세한 명령은 [설치 가이드](guide_installation.md)를 참고하세요.
+- **Docker (직접 빌드):** `docker compose -f docker-compose.build.yml -f docker-compose.override.yml up -d --build`
+- **네이티브 설치:** 소스를 갱신한 뒤 서비스를 재시작하세요.
+
 ### Gemini CLI / OpenAI Codex CLI / Cursor 등 기타 MCP 클라이언트
 
 이들도 대부분 위와 동일한 `mcpServers` JSON 형태를 쓰지만, 설정 파일 이름·위치와 CLI 등록 명령(있다면)은 도구마다 다르고 계속 바뀔 수 있습니다. 각 도구의 최신 공식 문서에서 "MCP server 등록"을 찾아 위 공통 JSON 블록을 그대로 붙여넣으면 됩니다 — `command`/`args`만 맞으면 어떤 클라이언트든 동일하게 동작합니다.
@@ -90,7 +98,8 @@ mcp dev tools/mcp_server.py
 | `find_missing_genre_and_tags` | 장르·태그가 모두 비어있는 도서 목록 |
 | `find_missing_offsets` | 페이지 오프셋 캐시가 없어 재스캔이 필요한 zip/cbz 도서 목록 (rclone/GDrive 등 원격 마운트 파일은 자동 제외) |
 | `find_duplicate_series` | 동일한 시리즈명이 서로 다른 카테고리 2곳 이상에 흩어진 케이스 |
-| `run_readonly_query` | 서재 DB에 읽기 전용(SELECT/WITH/EXPLAIN/PRAGMA) SQL을 직접 실행 |
+| `get_version` | 실행 중인 BookOasis 버전(VERSION 파일 기준) 조회 |
+| `run_readonly_query` | 서재 DB에 읽기 전용(SELECT/WITH/EXPLAIN/PRAGMA/SHOW/DESCRIBE) SQL을 직접 실행 |
 | `read_logs` | `logs/` 폴더의 서버 로그를 끝에서부터 최근 N줄 조회 (검색어 필터 지원) |
 | `call_api` | 기존 GET REST API(`docs/api_endpoints.md`)를 그대로 호출 |
 

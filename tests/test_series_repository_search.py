@@ -141,7 +141,14 @@ class SeriesRepositorySearchTest(unittest.TestCase):
         self.assertEqual(totals['total_series_count'], 3)
         self.assertEqual(totals['total_book_count'], 4)
 
-    def test_series_metadata_presence_checks_all_volumes(self):
+    def test_list_rows_do_not_compute_has_metadata(self):
+        rows = SeriesRepository.fetch_books_for_grouping(
+            'general', 10, user_id=1, role='admin'
+        )
+        self.assertTrue(rows)
+        self.assertTrue(all(row['has_metadata'] is None for row in rows))
+
+    def test_series_metadata_presence_checks_all_volumes_when_opted_in(self):
         conn = sqlite3.connect(self.db_path)
         conn.execute("UPDATE books SET author = '' WHERE id IN (1, 3)")
         conn.execute("UPDATE books SET cover_artist = 'Illustrator' WHERE id = 3")
@@ -149,10 +156,9 @@ class SeriesRepositorySearchTest(unittest.TestCase):
         conn.close()
 
         rows = SeriesRepository.fetch_books_for_grouping(
-            'general', 10, user_id=1, role='admin'
+            'general', 10, user_id=1, role='admin', include_has_metadata=True
         )
         series = next(row for row in rows if row['series_name'] == '예상과 다른 시리즈')
-        self.assertEqual(series['id'], 1)
         self.assertEqual(series['has_metadata'], 1)
 
         conn = sqlite3.connect(self.db_path)
@@ -161,7 +167,7 @@ class SeriesRepositorySearchTest(unittest.TestCase):
         conn.close()
 
         rows = SeriesRepository.fetch_books_for_grouping(
-            'general', 10, user_id=1, role='admin'
+            'general', 10, user_id=1, role='admin', include_has_metadata=True
         )
         series = next(row for row in rows if row['series_name'] == '예상과 다른 시리즈')
         self.assertEqual(series['has_metadata'], 0)
