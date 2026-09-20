@@ -3,7 +3,7 @@ import { state } from './state.js';
 import * as api from './api.js';
 import { openBookDetail } from './modal.js';
 import { loadBooksList, loadReadingHistory } from './book_list.js';
-import { loadDashboardData } from './dashboard.js?v=20260917-home-widget-plugin-ui-v1';
+import { loadDashboardData } from './dashboard.js?v=20260918-home-dashboard-progressive-v1';
 import { hideFloatingMenu, isFloatingMenuOpen, positionMenuAtPoint } from './context_menu_manager.js';
 import { clearBookSelection, getSelectedBookTargets, isBookCardSelected } from './book_selection.js';
 import { refreshSystemStatus } from './scan_activity_status.js';
@@ -41,6 +41,14 @@ function canRunLazyScanFromCurrentBookMenu() {
 
 function getLazyScanSeriesTarget(book) {
   if (!book || book.isVolumeDetail || book.markUnreadScope !== 'series') return null;
+  const libraryId = Number(book.libraryId);
+  const seriesName = String(book.seriesName || '').trim();
+  if (!Number.isInteger(libraryId) || libraryId <= 0 || !seriesName) return null;
+  return { libraryId, seriesName };
+}
+
+function getImmediateScanSeriesTarget(book) {
+  if (!book) return null;
   const libraryId = Number(book.libraryId);
   const seriesName = String(book.seriesName || '').trim();
   if (!Number.isInteger(libraryId) || libraryId <= 0 || !seriesName) return null;
@@ -227,7 +235,8 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
   const selectedBooks = Array.isArray(context.selectedBooks) ? context.selectedBooks : [];
   const isMultiSelection = selectedBooks.length > 1;
   const seriesName = String(context.seriesName || (isVolumeDetail ? state.detailSeriesName : '') || '').trim();
-  currentTargetBook = { id: bookId, title: bookTitle, isVolumeDetail, ...context, selectedBooks, seriesName };
+  const libraryId = context.libraryId ?? (isVolumeDetail ? state.detailLibraryId : null);
+  currentTargetBook = { id: bookId, title: bookTitle, isVolumeDetail, ...context, selectedBooks, seriesName, libraryId };
 
   const menuTitle = bookMenu.querySelector('.context-menu-title');
   if (menuTitle) menuTitle.textContent = isMultiSelection ? `도서 메뉴 (${selectedBooks.length}개 선택)` : '도서 메뉴';
@@ -390,6 +399,9 @@ export async function triggerScanSingleBookAction() {
   const { id, title } = currentTargetBook;
 
   const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
+  const seriesTarget = selectedBooks.length <= 1 && canRunLazyScanFromCurrentBookMenu()
+    ? getImmediateScanSeriesTarget(currentTargetBook)
+    : null;
   if (selectedBooks.length > 1) {
     const vm = await import('./view_manager.js');
     try {
@@ -422,8 +434,28 @@ export async function triggerScanSingleBookAction() {
 
       closeBookContextMenu();
       clearBookSelection();
+      let message = result.message || `"${title}" 스캔이 대기열에 추가되었습니다.`;
+      let toastType = 'success';
+      if (seriesTarget) {
+        let lazyResult;
+        try {
+          lazyResult = await api.triggerSeriesLazyScan(
+            state.currentLibraryType,
+            seriesTarget.libraryId,
+            seriesTarget.seriesName,
+          );
+        } catch (lazyError) {
+          lazyResult = { success: false, error: lazyError.message || '서버 통신 오류' };
+        }
+        if (lazyResult?.success) {
+          message += ` · ${seriesTarget.seriesName} 시리즈의 누락 표지를 이어서 확인합니다.`;
+        } else {
+          message += ` · 시리즈 누락 표지 스캔 등록 실패: ${lazyResult?.error || '요청 실패'}`;
+          toastType = 'warning';
+        }
+      }
       refreshSystemStatus();
-      vm.showToast(result.message || `"${title}" 스캔이 대기열에 추가되었습니다.`, 'success');
+      vm.showToast(message, toastType);
     } catch (err) {
       console.error('단일 도서 스캔 대기열 등록 오류:', err);
       vm.showToast('도서 스캔 요청 중 서버 통신 오류가 발생했습니다.', 'error');

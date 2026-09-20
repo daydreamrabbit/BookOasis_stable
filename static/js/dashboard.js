@@ -68,11 +68,9 @@ export async function loadDashboardData() {
     // 0-1. 플러그인 로드 상태 패널 (관리자 전용, 나머지 대시보드 로딩을 막지 않도록 별도 실행)
     loadPluginHealthPanel();
 
-    // 0-2. 홈 화면 플러그인 배치 모드 레이아웃. 코어 3섹션은 정적 HTML에 항상 이미 존재해서
-    // fetch를 아무리 빨리 해도 "기본 배치로 먼저 페인트된 뒤 → 재배치/카드 삽입"이라는 2단계
-    // 자체가 눈에 보이는 리플로우로 남는다(fetch 타이밍 문제가 아니었음). 그래서 레이아웃이
-    // 확정되기 전까지 스택 전체를 미리 숨겨두고, loadHomeDashboardLayout()이 배치를 다 끝낸
-    // 뒤 한 번에 드러낸다 - 타입 전환 시 historyRow/newRow에 스피너를 넣는 것과 같은 원리.
+    // 0-2. 홈 화면 플러그인 배치 모드 레이아웃. 순서와 위젯 카드 자리만 먼저 확정해
+    // 화면에 보여주고, 플러그인 데이터는 각 카드에서 따로 로드한다. 위젯 서버 응답이
+    // 느려도 홈의 코어 섹션까지 숨겨지지 않게 한다.
     const homeWidgetStackEl = document.getElementById('home-widget-stack');
     if (state.homeDashboardPluginMode) {
       if (homeWidgetStackEl) homeWidgetStackEl.classList.add('home-widget-stack--loading');
@@ -82,49 +80,63 @@ export async function loadDashboardData() {
       });
     }
 
-    // 1. 전체 보관함 합계, 최근 읽은 도서, 신규 추가 도서를 동시에 요청
+    // 1. 세 요청은 병렬로 시작하고, 각 영역은 자기 응답이 도착하는 즉시 그린다.
+    // Promise.all로 묶어두면 느린 한 요청이 최근 읽은 도서와 신규 도서 표시까지 지연시킨다.
+    const isCurrentDashboard = () => requestToken === dashboardLoadToken
+      && state.currentLibraryId === 'home'
+      && state.currentLibraryType === targetType;
+
     const totalsPromise = api.fetchBooksTotals({type: targetType, libraryId: 'all'})
-      .catch(err => ({ success: false, error: String(err) }));
-    const historyPromise = api.fetchReadingHistory(targetType);
+      .then((data) => {
+        if (isCurrentDashboard() && data && data.success) updateLibraryTotalCount([], data);
+      })
+      .catch((err) => console.error('[Dashboard] 보관함 합계 로드 실패:', err));
+
+    const historyPromise = api.fetchReadingHistory(targetType)
+      .then((data) => {
+        if (!isCurrentDashboard()) return;
+        if (!data || !data.success) {
+          if (data && data.error) console.error('[Dashboard] 히스토리 로드 실패:', data.error);
+          if (historyRow) historyRow.innerHTML = `<div class="loading-spinner">${i18n.t('dashboard.history_load_fail') || '히스토리를 불러오지 못했습니다.'}</div>`;
+          return;
+        }
+
+        let books = data.books || [];
+        if (state.hideCompletedInHistory) {
+          books = books.filter(b => {
+            const fmt = String(b.file_format || '').toLowerCase();
+            const isAudiobook = fmt === 'audiobook' || fmt === 'audio';
+            return isAudiobook
+              ? (b.is_completed !== 1)
+              : !(b.is_completed === 1 || (b.total_pages > 0 && b.pages_read >= b.total_pages));
+          });
+        }
+        renderDashboardHistory(books);
+      })
+      .catch((err) => {
+        if (!isCurrentDashboard()) return;
+        console.error('[Dashboard] 히스토리 로드 실패:', err);
+        if (historyRow) historyRow.innerHTML = `<div class="loading-spinner">${i18n.t('dashboard.history_load_fail') || '히스토리를 불러오지 못했습니다.'}</div>`;
+      });
+
     const recentlyAddedPromise = fetch(`/api/media/recently-added?type=${targetType}&_=${Date.now()}`, {cache: 'no-store'})
       .then(res => res.json())
-      .catch(err => ({ success: false, error: String(err) }));
+      .then((data) => {
+        if (!isCurrentDashboard()) return;
+        if (data && data.success) {
+          renderDashboardRecentlyAdded(data.books);
+        } else {
+          if (data && data.error) console.error('[Dashboard] 신규 도서 로드 실패:', data.error);
+          if (newRow) newRow.innerHTML = `<div class="loading-spinner">${i18n.t('dashboard.new_books_load_fail') || '신규 도서를 불러오지 못했습니다.'}</div>`;
+        }
+      })
+      .catch((err) => {
+        if (!isCurrentDashboard()) return;
+        console.error('[Dashboard] 신규 도서 로드 실패:', err);
+        if (newRow) newRow.innerHTML = `<div class="loading-spinner">${i18n.t('dashboard.new_books_load_fail') || '신규 도서를 불러오지 못했습니다.'}</div>`;
+      });
 
-    const [totalsData, historyData, newData] = await Promise.all([totalsPromise, historyPromise, recentlyAddedPromise]);
-    if (requestToken !== dashboardLoadToken) return;
-    if (state.currentLibraryId !== 'home' || state.currentLibraryType !== targetType) return;
-
-    if (totalsData && totalsData.success) {
-      updateLibraryTotalCount([], totalsData);
-    }
-
-    // 최근 읽은 도서 렌더링
-    if (historyData && historyData.success) {
-      let books = historyData.books || [];
-      if (state.hideCompletedInHistory) {
-        books = books.filter(b => {
-          const fmt = String(b.file_format || '').toLowerCase();
-          const isAudiobook = fmt === 'audiobook' || fmt === 'audio';
-          return isAudiobook
-            ? (b.is_completed !== 1)
-            : !(b.is_completed === 1 || (b.total_pages > 0 && b.pages_read >= b.total_pages));
-        });
-      }
-      renderDashboardHistory(books);
-    } else {
-      // 서버 예외 원문(DB 엔진/테이블명 등 내부 정보 포함 가능)을 화면에 그대로 노출하지 않고
-      // 콘솔에만 남긴다 - 사용자에게는 일반적인 실패 메시지만 보여준다.
-      if (historyData && historyData.error) console.error('[Dashboard] 히스토리 로드 실패:', historyData.error);
-      if (historyRow) historyRow.innerHTML = `<div class="loading-spinner">${i18n.t('dashboard.history_load_fail') || '히스토리를 불러오지 못했습니다.'}</div>`;
-    }
-
-    // 신규 추가 도서 렌더링
-    if (newData && newData.success) {
-      renderDashboardRecentlyAdded(newData.books);
-    } else {
-      if (newData && newData.error) console.error('[Dashboard] 신규 도서 로드 실패:', newData.error);
-      if (newRow) newRow.innerHTML = `<div class="loading-spinner">${i18n.t('dashboard.new_books_load_fail') || '신규 도서를 불러오지 못했습니다.'}</div>`;
-    }
+    await Promise.all([totalsPromise, historyPromise, recentlyAddedPromise]);
 
   } catch (e) {
     if (requestToken !== dashboardLoadToken) return;
@@ -141,14 +153,8 @@ export async function loadDashboardData() {
 
 let homeLayoutLoadToken = 0;
 
-// 최초 페이지 로드 시 서버(services/home_dashboard_service.py)가 이미 db_type='general' 기준
-// 최종 순서로 #home-widget-stack을 렌더링해뒀다(data-ssr-* 속성 참고). 그 순서를 딱 한 번
-// "소비"할 기회를 이 플래그로 표시한다 - 세션 타입이 일치하면 재조회 없이 이미 그려진 DOM을
-// 그대로 인정하고 상호작용(Sortable/위젯 데이터)만 붙인다. 코어 위젯이 기본 배치로 먼저
-// 그려졌다가 JS가 재배치하며 생기던 리플로우를 근본적으로 없애기 위함
-// (docs/plan_home_dashboard_pluginization.md 참고). 세션이 안 맞거나 이미 한 번 썼으면 그
-// 뒤로는 항상 기존 fetch 경로를 탄다.
-let homeLayoutSsrChecked = false;
+// 최초 페이지 로드 때 서버가 렌더한 레이아웃과 이후 JS가 갱신한 레이아웃을 기억한다.
+// 같은 타입으로 홈에 다시 들어오면 배치 API를 다시 호출하지 않고 현재 DOM을 재사용한다.
 
 // 서버가 마지막으로 내려준 "현재 레이아웃에 실제로 포함된" 위젯 id 목록. 코어 3섹션의
 // DOM 래퍼는 제거해도 항상 #home-widget-stack에 남아있고 display:none으로만 숨겨지기
@@ -203,6 +209,11 @@ function consumeSsrHomeLayout(stack, requestToken) {
   refreshHomeWidgetDividers();
   stack.classList.remove('home-widget-stack--loading');
 
+  if (stack.__homeSortable) {
+    stack.__homeSortable.destroy();
+    stack.__homeSortable = null;
+  }
+
   if (typeof Sortable !== 'undefined') {
     stack.__homeSortable = Sortable.create(stack, {
       animation: 180,
@@ -244,12 +255,9 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
   const stack = document.getElementById('home-widget-stack');
   if (!stack) return;
 
-  // SSR 스냅샷은 "자연스러운 최초 로드" 경로(loadDashboardData)에서만 소비를 시도한다.
-  // 위젯 추가/제거, 순서 변경, 설정 화면에서 모드를 방금 켠 뒤의 명시적 재조회처럼 "지금 막
-  // 바뀐 걸 반영해야 하는" 호출에서 SSR을 쓰면, 페이지가 그려질 때의 낡은 스냅샷을 최신
-  // 상태로 착각해 방금의 변경이 반영 안 된 것처럼 보일 수 있다.
-  if (allowSsr && !homeLayoutSsrChecked) {
-    homeLayoutSsrChecked = true;
+  // 홈 재진입은 이미 배치된 DOM을 재사용한다. 위젯 추가/제거, 순서 변경, 설정 변경은
+  // 명시적으로 이 옵션 없이 호출해 서버의 최신 배치를 다시 가져온다.
+  if (allowSsr) {
     if (stack.dataset.ssrType === targetType && stack.dataset.ssrMode) {
       consumeSsrHomeLayout(stack, requestToken);
       return;
@@ -264,6 +272,9 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
     return;
   }
   if (requestToken !== homeLayoutLoadToken) return;
+
+  stack.dataset.ssrType = targetType;
+  stack.dataset.ssrMode = data && data.success && data.mode ? data.mode : 'classic';
 
   // 이전 로드에서 동적으로 삽입한 플러그인 위젯 카드는 매번 새로 그린다 (중복/오염 방지)
   stack.querySelectorAll('.home-widget-slot[data-widget-kind="plugin"]').forEach((el) => el.remove());
@@ -354,8 +365,6 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
     }
   }
 
-  await Promise.all(dataFetchPromises);
-
   if (requestToken !== homeLayoutLoadToken) return;
   refreshHomeWidgetDividers();
 
@@ -378,6 +387,10 @@ export async function loadHomeDashboardLayout(targetType, { allowSsr = false } =
 
   renderHomeWidgetCatalog(data.catalog || []);
   stack.classList.remove('home-widget-stack--loading');
+
+  // 코어 섹션과 위젯 자리까지는 이미 화면에 표시했다. 느린 위젯 응답은 해당 카드 안에서만
+  // 기다리게 해 홈 화면 전체가 가려지는 일을 막는다.
+  await Promise.all(dataFetchPromises);
 }
 
 // 아직 레이아웃에 추가하지 않은 home_widget 플러그인 목록을 "+ 위젯 추가" 버튼 그룹으로

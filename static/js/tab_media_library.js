@@ -16,7 +16,7 @@ import { applySidebarShowMore, expandGroupContainingCategory } from './category/
 import { loadLibrarySchedules, saveLibrarySchedule, runLibraryScanNow } from './scheduler.js';
 
 // 서브 모듈 임포트
-import { loadDashboardData, loadDashboardPlugins, switchPluginsViewTab } from './dashboard.js?v=20260917-home-widget-plugin-ui-v1';
+import { loadDashboardData, loadDashboardPlugins, switchPluginsViewTab } from './dashboard.js?v=20260918-home-dashboard-progressive-v1';
 import { initScrollableRowNavDelegation } from './scrollable_row_nav.js';
 import { initInfiniteScrollObserver } from './infinite_scroll.js';
 import { showBookContextMenu, triggerScanSingleBookAction, triggerSearchAladinMetadataAction, triggerMarkAsUnreadAction } from './book_context_menu.js';

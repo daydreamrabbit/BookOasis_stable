@@ -60,6 +60,24 @@ class BatchBookScanProgressTests(unittest.TestCase):
         self.assertEqual(first, reordered)
         self.assertTrue(first.startswith('batch_book_scan_general_'))
 
+    def test_targeted_lazy_scan_keys_do_not_block_global_or_other_series_scans(self):
+        queue = ScannerQueue()
+        global_scan = queue._get_task_key('lazy_scan', {})
+        series_scan = queue._get_task_key('lazy_scan', {
+            'db_type': 'general', 'library_id': 2, 'series_name': 'Naruto'
+        })
+        same_series_scan = queue._get_task_key('lazy_scan', {
+            'db_type': 'general', 'library_id': 2, 'series_name': ' Naruto '
+        })
+        other_series_scan = queue._get_task_key('lazy_scan', {
+            'db_type': 'general', 'library_id': 2, 'series_name': 'Boruto'
+        })
+
+        self.assertEqual(global_scan, 'lazy_scan')
+        self.assertEqual(series_scan, same_series_scan)
+        self.assertNotEqual(global_scan, series_scan)
+        self.assertNotEqual(series_scan, other_series_scan)
+
     def test_single_book_scan_completion_stage_keeps_the_book_title(self):
         queue = Mock()
         lookup = Mock(return_value={'title': '테스트 단행본'})

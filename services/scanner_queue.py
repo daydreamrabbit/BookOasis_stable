@@ -61,6 +61,20 @@ class ScannerQueue:
 
     def _get_task_key(self, task_type, kwargs):
         if task_type == 'lazy_scan':
+            db_type = str(kwargs.get('db_type') or 'general')
+            series_name = str(kwargs.get('series_name') or '').strip()
+            library_id = kwargs.get('library_id')
+            if series_name and library_id is not None:
+                target = f"{db_type}:{library_id}:{series_name}"
+                target_hash = hashlib.sha256(target.encode('utf-8')).hexdigest()[:16]
+                return f'lazy_scan_series_{target_hash}'
+            if library_id is not None:
+                return f'lazy_scan_library_{db_type}_{library_id}'
+            book_ids = kwargs.get('book_ids')
+            if book_ids is not None:
+                normalized_ids = ','.join(sorted(str(book_id) for book_id in book_ids))
+                target_hash = hashlib.sha256(f'{db_type}:{normalized_ids}'.encode('utf-8')).hexdigest()[:16]
+                return f'lazy_scan_books_{target_hash}'
             return 'lazy_scan'
         elif task_type in ('library_scan', 'cover_scan'):
             db_type = kwargs.get('db_type', 'general')
@@ -623,9 +637,9 @@ def _process_lazy_scan(sq, task_id, **kwargs):
             sq.log(f"⏱️ 세션 시간 한도(7200초) 도달로 서브-배치 세션 #{sub_batch_count} 강제 종료. 다음 분량을 계속 처리합니다.")
             try:
                 from repositories.scanner_queue_repository import ScannerQueueRepository
-                task = ScannerQueueRepository.get_task_by_key('lazy_scan')
-                if task and task.get('id'):
-                    ScannerQueueRepository.update_task_status(task['id'], 'exit_pending', stage=f'시간 한도 재기동 (배치 #{sub_batch_count})')
+                ScannerQueueRepository.update_task_status(
+                    task_id, 'exit_pending', stage=f'시간 한도 재기동 (배치 #{sub_batch_count})'
+                )
             except Exception as st_err:
                 sq.log(f"[Lazy-Scanner] Intermediate status update warning: {st_err}")
             if _lazy_scan_should_yield_to_priority_task(sq, sub_batch_count):
@@ -635,9 +649,9 @@ def _process_lazy_scan(sq, task_id, **kwargs):
             sq.log(f"⚡ 서브-배치 세션 #{sub_batch_count} 마감 (RAM 환수 완료). 다음 분량을 계속 처리합니다.")
             try:
                 from repositories.scanner_queue_repository import ScannerQueueRepository
-                task = ScannerQueueRepository.get_task_by_key('lazy_scan')
-                if task and task.get('id'):
-                    ScannerQueueRepository.update_task_status(task['id'], 'exit_pending', stage=f'RAM 환수 재기동 (배치 #{sub_batch_count})')
+                ScannerQueueRepository.update_task_status(
+                    task_id, 'exit_pending', stage=f'RAM 환수 재기동 (배치 #{sub_batch_count})'
+                )
             except Exception as st_err:
                 sq.log(f"[Lazy-Scanner] Intermediate status update warning: {st_err}")
             if _lazy_scan_should_yield_to_priority_task(sq, sub_batch_count):

@@ -128,7 +128,13 @@ def get_system_status():
             elif task_type == 'cover_scan':
                 running_tasks.append(f"[{target_disp} ({db_t})] 표지 전용 스캔 진행 중...")
             elif task_type == 'lazy_scan':
-                running_tasks.append("[전체 시스템] Lazy Scanner 실행 중...")
+                series_name = str(kwargs.get('series_name') or '').strip()
+                if series_name:
+                    running_tasks.append(f"[{target_disp} · {series_name}] Lazy Scanner 실행 중...")
+                elif lib_id is not None:
+                    running_tasks.append(f"[{target_disp} ({db_t})] Lazy Scanner 실행 중...")
+                else:
+                    running_tasks.append("[전체 시스템] Lazy Scanner 실행 중...")
             elif task_type == 'batch_book_scan':
                 selected_count = len(kwargs.get('book_ids') or [])
                 running_tasks.append(f"[선택 도서 {selected_count}권] 메타데이터/표지 스캔 진행 중...")

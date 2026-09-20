@@ -10,7 +10,7 @@ import { changeDashboardTheme, populateCustomThemeOptions, rescanCustomThemesUi,
 import { startCoverStorageMigration } from './cover_storage_settings.js';
 import { getTempShortcut, setTempShortcut, initShortcutRecorderEvents } from './shortcut_recorder.js';
 import { runVaapiCheck, triggerLazyScanNow } from './system_actions.js';
-import { loadHomeDashboardLayout } from '../dashboard.js?v=20260917-home-widget-plugin-ui-v1';
+import { loadHomeDashboardLayout } from '../dashboard.js?v=20260918-home-dashboard-progressive-v1';
 
 function initGeneralDelegation() {
   if (window.__generalDelegationBound) return;
