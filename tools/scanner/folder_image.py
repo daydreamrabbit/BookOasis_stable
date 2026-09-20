@@ -37,6 +37,31 @@ def find_common_cover(folder_path):
     return None
 
 
+def find_batch_cover(folder_path):
+    """Return the folder's exact ``cover.jpg`` sidecar, case-insensitively."""
+    if not folder_path:
+        return None
+
+    try:
+        existing_names = {}
+        for filename in os.listdir(folder_path):
+            existing_names.setdefault(filename.lower(), filename)
+    except OSError:
+        return None
+
+    actual_name = existing_names.get('cover.jpg')
+    if not actual_name:
+        return None
+
+    cover_path = os.path.join(folder_path, actual_name)
+    try:
+        if os.path.isfile(cover_path) and os.path.getsize(cover_path) > 0:
+            return cover_path
+    except OSError:
+        pass
+    return None
+
+
 COMMON_BANNER_NAMES = (
     'banner.jpg', 'banner.jpeg', 'banner.png', 'banner.webp', 'banner.bmp', 'banner.gif',
 )

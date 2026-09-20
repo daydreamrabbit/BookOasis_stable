@@ -82,6 +82,7 @@ def normalize_metadata_list_field(value):
 
 def _empty_meta():
     return {
+        'title': '',
         'author': '',
         'localized_series': '',
         'cover_artist': '',
@@ -145,6 +146,7 @@ def _parse_comicinfo_from_cbz_local(file_path):
             # Writer(글 작가)만 author로 채운다 - Penciller(그림 작가)를 author 폴백으로
             # 섞으면 표지/그림 담당자가 글 작가로 잘못 표기된다. 그림 작가는 아래
             # cover_artist에 별도로 보존한다.
+            meta['title'] = _get('Title')
             meta['author'] = _get('Writer')
             meta['localized_series'] = _get('LocalizedSeries')
 

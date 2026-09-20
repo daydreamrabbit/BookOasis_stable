@@ -1,5 +1,6 @@
 <!-- templates/components/views/library_dashboard.html -->
 {% set home_layout = home_layout|default({'mode': 'classic', 'widgets': [], 'catalog': []}) %}
+{% set home_widget_initial_data = home_widget_initial_data|default({}) %}
 
 {% macro core_reading_insights_slot(hidden=False) %}
 <div class="home-widget-slot home-widget-slot--full" id="home-widget-core.reading_insights" data-widget-id="core.reading_insights"{% if hidden %} style="display:none;"{% endif %}>
@@ -61,6 +62,9 @@
     {% if w.subtitle %}<div class="plugin-widget-subtitle">{{ w.subtitle }}</div>{% endif %}
     <div id="home-widget-content-{{ w.id }}" class="plugin-widget-body">
         <div class="loading-spinner loading-spinner--widget"><i class="fa-solid fa-circle-notch fa-spin"></i> 위젯 데이터를 불러오는 중...</div>
+        {% if w.initial_data and w.id in home_widget_initial_data %}
+        <script type="application/json" class="home-widget-initial-data">{{ home_widget_initial_data[w.id]|tojson }}</script>
+        {% endif %}
     </div>
 </div>
 {% endmacro %}
@@ -101,6 +105,14 @@
 {{ core_recent_slot() }}
 {{ core_new_slot() }}
 {% endif %}
+    </div>
+
+    <!-- 모바일 스크롤이 위젯 재배치로 오인되지 않도록 기본 잠금 상태를 제공한다.
+         플러그인 배치 모드에서만 표시되며, 잠금을 풀었을 때만 드래그할 수 있다. -->
+    <div id="home-widget-lock-bar" class="home-widget-lock-bar">
+        <button type="button" id="home-widget-lock-toggle" class="home-widget-lock-toggle" data-locked="1" title="위젯 배치 잠금/해제">
+            <i class="fa-solid fa-lock"></i> <span>배치 잠금</span>
+        </button>
     </div>
 
     <!-- 홈 화면 플러그인 배치 모드에서, 아직 추가하지 않은 home_widget 플러그인을 고르는 UI.

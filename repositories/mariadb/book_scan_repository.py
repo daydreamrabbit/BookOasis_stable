@@ -11,8 +11,11 @@ class BookScanRepository:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, library_id, title, series_name, file_path, file_format, cover_image
-            FROM books WHERE id = %s
+            SELECT b.id, b.library_id, b.title, b.series_name, b.file_path, b.file_format,
+                   b.cover_image, COALESCE(l.is_remote, 0) AS library_is_remote
+            FROM books b
+            LEFT JOIN libraries l ON l.id = b.library_id
+            WHERE b.id = %s
             """,
             (book_id,)
         )
@@ -29,6 +32,7 @@ class BookScanRepository:
                 """
                 UPDATE books SET 
                     series_name  = COALESCE(NULLIF(%s, ''), series_name),
+                    metadata_title = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), metadata_title) ELSE metadata_title END,
                     cover_image  = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND %s IS NOT NULL AND %s != '' THEN %s ELSE cover_image END,
                     cover_updated_at = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND %s != '' AND %s IS NOT NULL THEN CURRENT_TIMESTAMP ELSE cover_updated_at END,
                     banner_image = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND %s IS NOT NULL AND %s != '' THEN %s ELSE banner_image END,
@@ -47,11 +51,15 @@ class BookScanRepository:
                     teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), teams) ELSE teams END,
                     locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), locations) ELSE locations END,
                     characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), characters) ELSE characters END,
-                    localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), localized_series) ELSE localized_series END
+                    localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), localized_series) ELSE localized_series END,
+                    document_series_name = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), document_series_name) ELSE document_series_name END,
+                    document_volume_index = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(%s, document_volume_index) ELSE document_volume_index END,
+                    document_volume_count = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(%s, document_volume_count) ELSE document_volume_count END
                 WHERE id = %s
                 """,
                 (
                     series_name,
+                    meta.get('title', ''),
                     cover_image, cover_image, cover_image,
                     cover_image, cover_image,
                     banner_image, banner_image, banner_image,
@@ -71,6 +79,9 @@ class BookScanRepository:
                     meta.get('locations', ''),
                     meta.get('characters', ''),
                     meta.get('localized_series', ''),
+                    meta.get('document_series_name', ''),
+                    meta.get('document_volume_index'),
+                    meta.get('document_volume_count'),
                     book_id
                 )
             )

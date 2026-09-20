@@ -318,13 +318,7 @@ def get_dashboard_widget_data_api(plugin_id):
             return jsonify({'success': False, 'error': _t('api.admin_required')}), 403
 
         result = provider.get_dashboard_data(db_type, limit=limit)
-
-        if result.get('success'):
-            dashboard_ui = MetadataFactory._load_plugin_ui_bundle(plugin_id, target='dashboard')
-            if dashboard_ui:
-                result['html'] = dashboard_ui.get('html', '')
-                result['css'] = dashboard_ui.get('css', '')
-                result['js'] = dashboard_ui.get('js', '')
+        MetadataFactory.add_dashboard_ui_bundle(plugin_id, result)
 
         status_code = 200 if result.get('success') else 400
         return jsonify(result), status_code

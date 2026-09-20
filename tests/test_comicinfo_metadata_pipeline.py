@@ -52,6 +52,7 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
             archive_path = Path(temporary_dir) / 'volume.cbz'
             xml = '''<?xml version="1.0" encoding="UTF-8"?>
             <ComicInfo>
+              <Title>ComicInfo volume title</Title>
               <Penciller>Comic Artist</Penciller>
               <AgeRating>M</AgeRating>
               <Web>https://example.com/work</Web>
@@ -61,13 +62,15 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
 
             meta = parse_comicinfo_from_cbz(archive_path)
 
+        self.assertEqual(meta['title'], 'ComicInfo volume title')
         self.assertEqual(meta['cover_artist'], 'Comic Artist')
         self.assertEqual(meta['books_lv'], 'M')
         self.assertEqual(meta['link'], 'https://example.com/work')
 
     def test_single_scan_comicinfo_merge_includes_link_and_creator_fields(self):
-        target = {'author': '', 'link': 'https://sidecar.example/work'}
+        target = {'title': '', 'author': '', 'link': 'https://sidecar.example/work'}
         comicinfo = {
+            'title': 'ComicInfo volume title',
             'author': 'Writer',
             'cover_artist': 'Artist',
             'teams': 'Team A',
@@ -78,6 +81,7 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
 
         _merge_comicinfo_metadata(target, comicinfo)
 
+        self.assertEqual(target['title'], 'ComicInfo volume title')
         self.assertEqual(target['author'], 'Writer')
         self.assertEqual(target['cover_artist'], 'Artist')
         self.assertEqual(target['teams'], 'Team A')
@@ -103,11 +107,15 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
             conn.execute('''
                 CREATE TABLE books (
                     id INTEGER PRIMARY KEY, library_id INTEGER, series_name TEXT,
-                    cover_image TEXT, cover_updated_at TEXT, author TEXT, isbn TEXT,
+                    metadata_title TEXT,
+                    cover_image TEXT, cover_updated_at TEXT, banner_image TEXT,
+                    banner_updated_at TEXT, author TEXT, isbn TEXT,
                     publisher TEXT, link TEXT, score REAL, summary TEXT,
                     release_date TEXT, genre TEXT, tags TEXT, books_lv TEXT,
                     cover_artist TEXT, teams TEXT, locations TEXT, characters TEXT,
                     localized_series TEXT,
+                    document_series_name TEXT, document_volume_index REAL,
+                    document_volume_count INTEGER,
                     metadata_locked INTEGER DEFAULT 0
                 )
             ''')
@@ -117,7 +125,7 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
-            def connect(_db_type):
+            def connect(_db_type, **_kwargs):
                 connection = sqlite3.connect(db_path)
                 connection.row_factory = sqlite3.Row
                 return connection
@@ -129,41 +137,62 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
                     'Series',
                     None,
                     {
+                        'title': 'ComicInfo volume title',
                         'author': '', 'isbn': '', 'publisher': '', 'link': 'https://example.com',
                         'score': 0, 'summary': '', 'release_date': '', 'genre': '', 'tags': '',
                         'books_lv': 'M', 'cover_artist': 'Comic Artist', 'teams': 'Team A',
                         'locations': 'Location A', 'characters': 'Character A',
                         'localized_series': 'Original Series',
+                        'document_series_name': 'Embedded Series',
+                        'document_volume_index': 1.5,
+                        'document_volume_count': 6,
                     },
                 )
 
             conn = sqlite3.connect(db_path)
             row = conn.execute(
-                'SELECT link, books_lv, cover_artist, teams, locations, characters, localized_series FROM books WHERE id = 1'
+                'SELECT metadata_title, link, books_lv, cover_artist, teams, locations, characters, localized_series, document_series_name, document_volume_index, document_volume_count FROM books WHERE id = 1'
             ).fetchone()
             conn.close()
 
         self.assertEqual(row, (
-            'https://example.com', 'M', 'Comic Artist', 'Team A', 'Location A', 'Character A', 'Original Series'
+            'ComicInfo volume title', 'https://example.com', 'M', 'Comic Artist', 'Team A', 'Location A', 'Character A',
+            'Original Series', 'Embedded Series', 1.5, 6
         ))
 
-    def test_series_metadata_aggregates_links_and_highest_rating(self):
+    def test_series_metadata_prefers_volume_one_links_and_highest_rating(self):
         result = merge_series_metadata_rows([
             {
-                'summary': 'Series summary', 'link': 'https://first.example/work',
+                '_volume_title': 'Series 04권', '_volume_path': '/Series/04.cbz',
+                'summary': 'Series summary', 'link': 'https://ridi.example/work/4',
                 'books_lv': 'MA15+', 'cover_artist': '',
             },
             {
-                'summary': '', 'link': 'https://second.example/work; https://first.example/work',
+                '_volume_title': 'Series 01권', '_volume_path': '/Series/01.cbz',
+                'summary': '', 'link': 'https://mangabaka.example/work; https://ridi.example/work/1',
                 'books_lv': 'M', 'cover_artist': 'Volume Artist',
+            },
+            {
+                '_volume_title': 'Series 02권', '_volume_path': '/Series/02.cbz',
+                'summary': '', 'link': 'https://ridi.example/work/2',
+                'books_lv': 'M', 'cover_artist': '',
             },
         ])
 
         self.assertEqual(result['books_lv'], 'M')
         self.assertEqual(result['cover_artist'], 'Volume Artist')
         self.assertEqual(result['link'].splitlines(), [
-            'https://first.example/work', 'https://second.example/work'
+            'https://mangabaka.example/work', 'https://ridi.example/work/1'
         ])
+
+    def test_series_metadata_falls_back_to_next_volume_when_volume_one_has_no_link(self):
+        result = merge_series_metadata_rows([
+            {'_volume_title': 'Series 03권', 'link': 'https://example.com/3'},
+            {'_volume_title': 'Series 01권', 'link': ''},
+            {'_volume_title': 'Series 02권', 'link': 'https://example.com/2'},
+        ])
+
+        self.assertEqual(result['link'], 'https://example.com/2')
 
     def test_sqlite_series_detail_reads_metadata_from_all_volumes(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -171,26 +200,28 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
             conn = sqlite3.connect(db_path)
             conn.execute('''
                 CREATE TABLE books (
-                    id INTEGER PRIMARY KEY, series_name TEXT, library_id INTEGER,
+                    id INTEGER PRIMARY KEY, title TEXT, file_path TEXT,
+                    series_name TEXT, library_id INTEGER,
                     is_deleted INTEGER DEFAULT 0, author TEXT, isbn TEXT,
                     publisher TEXT, link TEXT, score REAL, summary TEXT,
                     genre TEXT, tags TEXT, books_lv TEXT, publication_status TEXT,
                     cover_artist TEXT, teams TEXT, locations TEXT, characters TEXT,
-                    series_alias TEXT, metadata_locked INTEGER DEFAULT 0
+                    series_alias TEXT, localized_series TEXT,
+                    metadata_locked INTEGER DEFAULT 0
                 )
             ''')
             conn.execute('''
-                INSERT INTO books (id, series_name, library_id, summary, books_lv)
-                VALUES (1, 'Series', 1, 'Series summary', 'MA15+')
+                INSERT INTO books (id, title, file_path, series_name, library_id, summary, books_lv)
+                VALUES (1, 'Series 04권', '/Series/04.cbz', 'Series', 1, 'Series summary', 'MA15+')
             ''')
             conn.execute('''
-                INSERT INTO books (id, series_name, library_id, link, books_lv, cover_artist)
-                VALUES (2, 'Series', 1, 'https://volume.example/work', 'M', 'Volume Artist')
+                INSERT INTO books (id, title, file_path, series_name, library_id, link, books_lv, cover_artist)
+                VALUES (2, 'Series 01권', '/Series/01.cbz', 'Series', 1, 'https://volume.example/work', 'M', 'Volume Artist')
             ''')
             conn.commit()
             conn.close()
 
-            def connect(_db_type):
+            def connect(_db_type, **_kwargs):
                 connection = sqlite3.connect(db_path)
                 connection.row_factory = sqlite3.Row
                 return connection

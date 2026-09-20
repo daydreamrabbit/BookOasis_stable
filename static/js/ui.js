@@ -4,7 +4,7 @@ import { openBookDetail } from './modal.js';
 import { openReader } from './viewer.js';
 import { showToast } from './view_manager.js';
 import { buildFallbackCoverUrl, getBookCoverSrc, buildTextCoverDataUri, coverAlignToObjectPosition } from './cover_fallback.js';
-import { stripLeadingBracketTags, middleTruncateTitle } from './series_display.js';
+import { stripLeadingBracketTags, stripTrailingBracketSuffix, middleTruncateTitle } from './series_display.js';
 import { initGridPruning, resetGridPruning, notifyCardsAppended, notifyCardsPrepended } from './grid_pruning.js';
 import { clearBookSelection, syncBookSelectionCard } from './book_selection.js';
 import './scan_activity_status.js?v=20260918-active-only-scan-poll-v1';
@@ -138,24 +138,24 @@ function normalizeBookTitle(item) {
 
 function resolveCardDisplayTitle(item, showVolumeCount) {
   if (item.series_alias) {
-    return item.series_alias;
+    return stripTrailingBracketSuffix(item.series_alias);
   }
   if (item.display_name) {
-    return item.display_name;
+    return stripTrailingBracketSuffix(item.display_name);
   }
   const rawNormalizedTitle = String(normalizeBookTitle(item) || '').trim();
   const rawRepresentativeTitle = String(item.representative_title || '').trim();
   const rawSeriesName = String(item.series_name || '').trim();
   const rawAnchorDir = String(item.anchor_dir || '').trim();
-  const normalizedTitle = stripLeadingBracketTags(rawNormalizedTitle);
-  const representativeTitle = stripLeadingBracketTags(rawRepresentativeTitle);
-  const seriesName = stripLeadingBracketTags(rawSeriesName);
+  const normalizedTitle = stripTrailingBracketSuffix(stripLeadingBracketTags(rawNormalizedTitle));
+  const representativeTitle = stripTrailingBracketSuffix(stripLeadingBracketTags(rawRepresentativeTitle));
+  const seriesName = stripTrailingBracketSuffix(stripLeadingBracketTags(rawSeriesName));
   let anchorDirTitle = '';
   if (rawAnchorDir) {
     const normalizedDir = rawAnchorDir.replace(/\\/g, '/').replace(/\/+$/, '');
     const segments = normalizedDir.split('/').filter(Boolean);
     if (segments.length > 0) {
-      anchorDirTitle = stripLeadingBracketTags(segments[segments.length - 1]);
+      anchorDirTitle = stripTrailingBracketSuffix(stripLeadingBracketTags(segments[segments.length - 1]));
     }
   }
   // Single-volume groups should open detail with the actual title, not author-like series labels.
@@ -170,7 +170,7 @@ function resolveCardDisplayTitle(item, showVolumeCount) {
       const bracketPrefix = new RegExp(`^\\[\\s*${escapedSeries}\\s*\\]\\s*(.+)$`, 'i');
       const match = rawRepresentativeTitle.match(bracketPrefix);
       if (match && match[1] && match[1].trim()) {
-        const extracted = stripLeadingBracketTags(match[1].trim());
+        const extracted = stripTrailingBracketSuffix(stripLeadingBracketTags(match[1].trim()));
         if (extracted) return extracted;
       }
     }
@@ -323,11 +323,11 @@ export function createBookCard(item, options = {}) {
   }
 
   // 4. 즐겨찾기 버튼 구성
-  const isFav = item.is_favorite === 1;
+  const isFav = Number(item.is_favorite) === 1;
   const favIconClass = isFav ? 'fa-solid fa-star' : 'fa-regular fa-star';
   const favoriteTargetName = rawSeriesName || displayTitle;
   const favBtnHtml = `
-    <button class="btn-card-fav-toggle ${isFav ? 'active' : ''}" title="즐겨찾기 토글" data-role="card-favorite-toggle" data-favorite-name="${favoriteTargetName.replace(/"/g, '&quot;')}" data-book-id="${item.id || ''}" data-next-status="${isFav ? 0 : 1}">
+    <button class="btn-card-fav-toggle ${isFav ? 'active' : ''}" title="즐겨찾기 토글" aria-pressed="${isFav ? 'true' : 'false'}" data-role="card-favorite-toggle" data-favorite-name="${favoriteTargetName.replace(/"/g, '&quot;')}" data-book-id="${item.id || ''}" data-next-status="${isFav ? 0 : 1}">
       <i class="${favIconClass}"></i>
     </button>
   `;
@@ -441,7 +441,8 @@ export function createBookCard(item, options = {}) {
     favBtn._onClick = (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const nextStatus = Number.parseInt(favBtn.getAttribute('data-next-status') || '0', 10) || 0;
+      if (favBtn.dataset.favoritePending === '1') return;
+      const nextStatus = favBtn.classList.contains('active') ? 0 : 1;
       const bookIdRaw = favBtn.getAttribute('data-book-id') || '';
       const parsedBookId = Number.parseInt(bookIdRaw, 10);
       const bookId = Number.isFinite(parsedBookId) ? parsedBookId : null;
@@ -736,43 +737,57 @@ window.toggleCardFavoriteEvent = async (event, name, bookId, nextStatus, authorK
   // 실제 리스너가 붙은 document를 계속 가리킨다(document는 truthy라 예전엔 fallback으로
   // 못 내려가 btn=document가 되고 document.classList가 undefined라 에러가 났었음).
   // 따라서 실제 버튼 엘리먼트는 항상 target.closest로 찾아야 한다.
-  const btn = event.target && event.target.closest ? event.target.closest('.btn-card-fav-toggle') : null;
-  let originalClass = '';
-  let originalActive = false;
+  const btn = event?.target?.closest?.('.btn-card-fav-toggle') || null;
+  const requestedStatus = Number(nextStatus) === 1 ? 1 : 0;
+  let originalState = null;
   if (btn) {
-    originalActive = btn.classList.contains('active');
+    if (btn.dataset.favoritePending === '1') return;
+    originalState = {
+      active: btn.classList.contains('active'),
+      iconClass: btn.querySelector('i')?.className || '',
+      nextStatus: btn.getAttribute('data-next-status'),
+      ariaPressed: btn.getAttribute('aria-pressed'),
+      disabled: btn.disabled,
+    };
+    btn.dataset.favoritePending = '1';
+    btn.disabled = true;
+    btn.classList.toggle('active', requestedStatus === 1);
+    btn.setAttribute('data-next-status', requestedStatus === 1 ? '0' : '1');
+    btn.setAttribute('aria-pressed', requestedStatus === 1 ? 'true' : 'false');
     const icon = btn.querySelector('i');
     if (icon) {
-      originalClass = icon.className;
-      if (nextStatus === 1) {
-        btn.classList.add('active');
-        icon.className = 'fa-solid fa-star';
-      } else {
-        btn.classList.remove('active');
-        icon.className = 'fa-regular fa-star';
-      }
+      icon.className = requestedStatus === 1 ? 'fa-solid fa-star' : 'fa-regular fa-star';
     }
   }
 
   let res;
-  if (authorKey) {
-    console.log(`[Favorite-Action] window.toggleAuthorFavoriteAction 호출 (authorKey="${authorKey}", status=${nextStatus})`);
-    res = await window.toggleAuthorFavoriteAction(authorKey, nextStatus);
-  } else if (bookId && state.currentLibraryId === 'history') {
-    console.log(`[Favorite-Action] window.toggleFavoriteAction 호출 (bookId=${bookId}, status=${nextStatus})`);
-    res = await window.toggleFavoriteAction(bookId, nextStatus);
-  } else {
-    console.log(`[Favorite-Action] window.toggleSeriesFavoriteAction 호출 (name="${name}", status=${nextStatus})`);
-    res = await window.toggleSeriesFavoriteAction(name, nextStatus);
+  try {
+    if (authorKey) {
+      console.log(`[Favorite-Action] window.toggleAuthorFavoriteAction 호출 (authorKey="${authorKey}", status=${requestedStatus})`);
+      res = await window.toggleAuthorFavoriteAction(authorKey, requestedStatus);
+    } else if (bookId && state.currentLibraryId === 'history') {
+      console.log(`[Favorite-Action] window.toggleFavoriteAction 호출 (bookId=${bookId}, status=${requestedStatus})`);
+      res = await window.toggleFavoriteAction(bookId, requestedStatus);
+    } else {
+      console.log(`[Favorite-Action] window.toggleSeriesFavoriteAction 호출 (name="${name}", status=${requestedStatus})`);
+      res = await window.toggleSeriesFavoriteAction(name, requestedStatus);
+    }
+  } catch (error) {
+    console.error('[Favorite-Action] 즐겨찾기 요청 실패:', error);
+    res = { success: false };
   }
   console.log(`[Favorite-Action] 토글 API 응답 결과:`, res);
 
   if (res && res.success) {
-    const statusText = nextStatus === 1 ? '등록' : '해제';
+    if (btn) {
+      btn.dataset.favoritePending = '0';
+      btn.disabled = originalState?.disabled || false;
+    }
+    const statusText = requestedStatus === 1 ? '등록' : '해제';
     showToast(`"${name}" 즐겨찾기가 ${statusText}되었습니다.`, 'success');
 
     if (state.currentLibraryId === 'home') {
-      if (typeof window.loadDashboardData === 'function') window.loadDashboardData();
+      if (typeof window.loadDashboardData === 'function') window.loadDashboardData({ force: true });
     } else if (state.currentLibraryId === 'history') {
       if (typeof window.loadReadingHistory === 'function') window.loadReadingHistory();
     } else {
@@ -781,10 +796,15 @@ window.toggleCardFavoriteEvent = async (event, name, bookId, nextStatus, authorK
   } else {
     // 실패 시 UI 복원
     if (btn) {
-      if (originalActive) btn.classList.add('active');
-      else btn.classList.remove('active');
+      btn.classList.toggle('active', originalState?.active || false);
       const icon = btn.querySelector('i');
-      if (icon) icon.className = originalClass;
+      if (icon && originalState) icon.className = originalState.iconClass;
+      if (originalState?.nextStatus === null) btn.removeAttribute('data-next-status');
+      else if (originalState) btn.setAttribute('data-next-status', originalState.nextStatus);
+      if (originalState?.ariaPressed === null) btn.removeAttribute('aria-pressed');
+      else if (originalState) btn.setAttribute('aria-pressed', originalState.ariaPressed);
+      if (originalState) btn.disabled = originalState.disabled;
+      btn.dataset.favoritePending = '0';
     }
     showToast('즐겨찾기 업데이트에 실패했습니다.', 'error');
   }

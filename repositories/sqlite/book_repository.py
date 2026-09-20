@@ -417,7 +417,7 @@ class BookRepository:
     def get_series_meta(db_type, series_name, library_id, perm_clause, perm_params):
         with database.connection(db_type) as conn:
             cursor = conn.cursor()
-            columns = "author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, localized_series, COALESCE(metadata_locked, 0) AS metadata_locked"
+            columns = "title AS _volume_title, file_path AS _volume_path, author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, localized_series, COALESCE(metadata_locked, 0) AS metadata_locked"
             where = ["series_name = ?", "COALESCE(is_deleted, 0) = 0"]
             params = [series_name]
             if library_id and library_id not in ('all', 'history', 'favorite', 'home'):
@@ -441,7 +441,7 @@ class BookRepository:
             use_lib = library_id and library_id not in ('all', 'history', 'favorite', 'home')
             if use_lib:
                 query = f"""
-                    SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
+                    SELECT b.id, b.title, b.metadata_title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
                            b.banner_image, b.banner_updated_at,
                            b.file_path, p.pages_read, p.is_completed,
                            CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
@@ -455,7 +455,7 @@ class BookRepository:
                 cursor.execute(query, (user_id, user_id, series_name, library_id, *perm_params))
             else:
                 query = f"""
-                    SELECT b.id, b.title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
+                    SELECT b.id, b.title, b.metadata_title, b.title_alias, b.series_name, b.series_alias, b.localized_series, b.file_format, b.total_pages, b.has_offsets, b.cover_image, b.cover_updated_at,
                            b.banner_image, b.banner_updated_at,
                            b.file_path, p.pages_read, p.is_completed,
                            CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,

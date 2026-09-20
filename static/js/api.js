@@ -298,13 +298,13 @@ export async function scanSingleBook(type, bookId) {
   return res.json();
 }
 
-export async function enqueueBatchBookScan(type, bookIds) {
+export async function enqueueBatchBookScan(type, bookIds, { scope = 'book', force = false } = {}) {
   const res = await fetch('/api/media/books/scan-batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type, book_ids: bookIds })
+    body: JSON.stringify({ type, book_ids: bookIds, scope, force })
   });
-  return res.json();
+  return finishScanRequest(res);
 }
 
 export async function unlockMetadata(type, seriesName, libraryId, bookId) {

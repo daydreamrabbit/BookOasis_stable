@@ -1,12 +1,12 @@
 // book_context_menu.js – 도서 우클릭 단독 스캔 컨텍스트 메뉴 제어 모듈
 import { state } from './state.js';
-import * as api from './api.js';
+import * as api from './api.js?rev=20260919-force-series-rescan-v1';
 import { openBookDetail } from './modal.js';
 import { loadBooksList, loadReadingHistory } from './book_list.js';
-import { loadDashboardData } from './dashboard.js?v=20260917-home-widget-plugin-ui-v1';
+import { loadDashboardData } from './dashboard.js?v=20260918-home-return-cache-v1';
 import { hideFloatingMenu, isFloatingMenuOpen, positionMenuAtPoint } from './context_menu_manager.js';
 import { clearBookSelection, getSelectedBookTargets, isBookCardSelected } from './book_selection.js';
-import { refreshSystemStatus } from './scan_activity_status.js?v=20260918-active-only-scan-poll-v1';
+import { selectCategory } from './category_navigation.js?rev=20260919-library-content-kind-v1';
 
 let currentTargetBook = null;
 let contextMenuSuppressUntil = 0;
@@ -37,6 +37,13 @@ function canRunLazyScanFromCurrentBookMenu() {
   const dbType = String(state.currentLibraryType || '').toLowerCase();
   return String(user.role || '').trim().toLowerCase() === 'admin'
     && ['general', 'adult', 'audiobook'].includes(dbType);
+}
+
+function canRunForceBookScan() {
+  const user = state.currentUser || window.currentUser || {};
+  const dbType = String(state.currentLibraryType || '').toLowerCase();
+  return String(user.role || '').trim().toLowerCase() === 'admin'
+    && ['general', 'adult'].includes(dbType);
 }
 
 function getLazyScanSeriesTarget(book) {
@@ -227,10 +234,51 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
   const selectedBooks = Array.isArray(context.selectedBooks) ? context.selectedBooks : [];
   const isMultiSelection = selectedBooks.length > 1;
   const seriesName = String(context.seriesName || (isVolumeDetail ? state.detailSeriesName : '') || '').trim();
-  currentTargetBook = { id: bookId, title: bookTitle, isVolumeDetail, ...context, selectedBooks, seriesName };
+  const libraryId = context.libraryId ?? (isVolumeDetail ? state.detailLibraryId : null);
+  currentTargetBook = { id: bookId, title: bookTitle, isVolumeDetail, ...context, selectedBooks, seriesName, libraryId };
+
+  const scanLabel = bookMenu.querySelector('#ctx-scan-book span[data-i18n]');
+  if (scanLabel) {
+    const scanLabelKey = isMultiSelection
+      ? 'context_menu.scan_selected_now'
+      : seriesName ? 'context_menu.scan_series_now' : 'context_menu.scan_book_now';
+    scanLabel.dataset.i18n = scanLabelKey;
+    scanLabel.textContent = window.i18n?.t(scanLabelKey) || (
+      isMultiSelection
+        ? '선택 항목 전체 스캔 (표지/메타)'
+        : seriesName ? '이 시리즈 즉시 스캔 (표지/메타)' : '이 책 즉시 스캔 (표지/메타)'
+    );
+  }
 
   const menuTitle = bookMenu.querySelector('.context-menu-title');
   if (menuTitle) menuTitle.textContent = isMultiSelection ? `도서 메뉴 (${selectedBooks.length}개 선택)` : '도서 메뉴';
+
+  const canForceScan = canRunForceBookScan() && Number(currentTargetBook.id) > 0;
+  const forceSeriesItem = document.getElementById('ctx-force-scan-series');
+  if (forceSeriesItem) {
+    const showSeriesScan = canForceScan && !isMultiSelection && !!seriesName;
+    forceSeriesItem.style.display = showSeriesScan ? '' : 'none';
+    const label = forceSeriesItem.querySelector('span[data-i18n]');
+    if (label) {
+      label.dataset.i18n = 'context_menu.force_scan_series';
+      label.textContent = window.i18n?.t('context_menu.force_scan_series')
+        || '시리즈 폴더 강제 스캔 (신규 권 포함)';
+    }
+  }
+
+  const forceBookItem = document.getElementById('ctx-force-scan-selected');
+  if (forceBookItem) {
+    // 단일 권 강제 재스캔은 일반 스캔과 기능이 중복되어 메뉴에서 제외한다.
+    // 강제 재스캔은 사용자가 명시적으로 여러 권을 선택했을 때만 제공한다.
+    const showBookScan = canForceScan && isMultiSelection;
+    forceBookItem.style.display = showBookScan ? '' : 'none';
+    const label = forceBookItem.querySelector('span[data-i18n]');
+    if (label) {
+      const key = 'context_menu.force_scan_selected';
+      label.dataset.i18n = key;
+      label.textContent = window.i18n?.t(key) || '강제 재스캔 (선택한 권)';
+    }
+  }
 
   const lazyScanItem = document.getElementById('ctx-lazy-scan-book');
   if (lazyScanItem) lazyScanItem.style.display = canRunLazyScanFromCurrentBookMenu() ? '' : 'none';
@@ -349,8 +397,7 @@ export async function triggerBookContextPluginAction(pluginId, actionId) {
       if (pendingPopup) {
         pendingPopup.close();
       }
-      const tml = await import('./tab_media_library.js');
-      tml.selectCategory(res.open_category);
+      selectCategory(res.open_category);
     } else if (res.open_url) {
       if (pendingPopup) {
         pendingPopup.location.href = res.open_url;
@@ -390,12 +437,17 @@ export async function triggerScanSingleBookAction() {
   const { id, title } = currentTargetBook;
 
   const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
+  const targetBookIds = selectedBooks.length > 1
+    ? selectedBooks.map(book => book.id)
+    : [id];
+  const scanScope = selectedBooks.length > 1 || currentTargetBook.seriesName ? 'series' : 'book';
   if (selectedBooks.length > 1) {
     const vm = await import('./view_manager.js');
     try {
       const result = await api.enqueueBatchBookScan(
         state.currentLibraryType,
-        selectedBooks.map(book => book.id)
+        targetBookIds,
+        { scope: scanScope }
       );
       if (!result?.success) {
         vm.showToast(result?.error || '다중 도서 스캔 요청에 실패했습니다.', 'error');
@@ -403,7 +455,6 @@ export async function triggerScanSingleBookAction() {
       }
       closeBookContextMenu();
       clearBookSelection();
-      refreshSystemStatus();
       vm.showToast(result.message || `선택한 ${selectedBooks.length}개 작품의 스캔을 대기열에 추가했습니다.`, 'success');
     } catch (error) {
       console.error('[BookContextMenu] 다중 스캔 요청 실패:', error);
@@ -414,7 +465,11 @@ export async function triggerScanSingleBookAction() {
   
   import('./view_manager.js').then(async (vm) => {
     try {
-      const result = await api.enqueueBatchBookScan(state.currentLibraryType, [id]);
+      const result = await api.enqueueBatchBookScan(
+        state.currentLibraryType,
+        targetBookIds,
+        { scope: scanScope }
+      );
       if (!result?.success) {
         vm.showToast(result?.error || `"${title}" 스캔 요청에 실패했습니다.`, 'error');
         return;
@@ -422,7 +477,6 @@ export async function triggerScanSingleBookAction() {
 
       closeBookContextMenu();
       clearBookSelection();
-      refreshSystemStatus();
       vm.showToast(result.message || `"${title}" 스캔이 대기열에 추가되었습니다.`, 'success');
     } catch (err) {
       console.error('단일 도서 스캔 대기열 등록 오류:', err);
@@ -432,6 +486,47 @@ export async function triggerScanSingleBookAction() {
 }
 
 window.triggerScanSingleBookAction = triggerScanSingleBookAction;
+
+async function enqueueForceBookScan(scope) {
+  if (!currentTargetBook?.id || !canRunForceBookScan()) return;
+
+  const selectedBooks = Array.isArray(currentTargetBook.selectedBooks) ? currentTargetBook.selectedBooks : [];
+  if (scope === 'series' && (selectedBooks.length > 1 || !String(currentTargetBook.seriesName || '').trim())) return;
+  const bookIds = selectedBooks.length > 1
+    ? selectedBooks.map(book => Number(book.id)).filter(id => Number.isInteger(id) && id > 0)
+    : [Number(currentTargetBook.id)];
+  if (!bookIds.length) return;
+
+  const vm = await import('./view_manager.js');
+  try {
+    const result = await api.enqueueBatchBookScan(
+      state.currentLibraryType,
+      bookIds,
+      { scope, force: true }
+    );
+    if (!result?.success) {
+      vm.showToast(result?.error || '강제 재스캔 요청에 실패했습니다.', 'error');
+      return;
+    }
+
+    closeBookContextMenu();
+    clearBookSelection();
+    vm.showToast(result.message || '강제 재스캔을 스캔 대기열에 추가했습니다.', 'success');
+  } catch (error) {
+    console.error('[BookContextMenu] 강제 재스캔 요청 실패:', error);
+    vm.showToast('강제 재스캔 요청 중 서버 통신 오류가 발생했습니다.', 'error');
+  }
+}
+
+export function triggerForceBookScanAction() {
+  return enqueueForceBookScan('book');
+}
+window.triggerForceBookScanAction = triggerForceBookScanAction;
+
+export function triggerForceSeriesScanAction() {
+  return enqueueForceBookScan('series');
+}
+window.triggerForceSeriesScanAction = triggerForceSeriesScanAction;
 
 export async function triggerLazyScanBookAction() {
   if (!currentTargetBook || !canRunLazyScanFromCurrentBookMenu()) return;
@@ -545,7 +640,7 @@ export async function triggerMarkAsUnreadAction() {
         if (failures.length) console.warn('[BookContextMenu] 다중 읽지 않음 처리 실패:', failures);
         closeBookContextMenu();
         clearBookSelection();
-        if (state.currentLibraryId === 'home') await loadDashboardData();
+        if (state.currentLibraryId === 'home') await loadDashboardData({ force: true });
         else if (state.currentLibraryId === 'history') await loadReadingHistory();
         else await loadBooksList();
         return;
@@ -564,7 +659,7 @@ export async function triggerMarkAsUnreadAction() {
         
         // 화면 리프레시: 현재 위치한 탭/뷰에 맞추어 라이브 리로드 실행
         if (state.currentLibraryId === 'home') {
-          await loadDashboardData();
+          await loadDashboardData({ force: true });
         } else if (state.currentLibraryId === 'history') {
           await loadReadingHistory();
         } else {
@@ -882,6 +977,8 @@ if (!window.__bookContextActionBound) {
 
     const action = target.getAttribute('data-action');
     if (action === 'scan') return window.triggerScanSingleBookAction?.();
+    if (action === 'force-scan-selected') return window.triggerForceBookScanAction?.();
+    if (action === 'force-scan-series') return window.triggerForceSeriesScanAction?.();
     if (action === 'lazy-scan') return window.triggerLazyScanBookAction?.();
     if (action === 'search-meta') return window.triggerSearchMetadataAction?.();
     if (action === 'add-to-collection') return window.triggerAddToCollectionAction?.();

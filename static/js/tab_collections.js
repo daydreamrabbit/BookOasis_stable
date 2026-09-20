@@ -1,6 +1,6 @@
 /* tab_collections.js - 사용자별 컬렉션(Collection) UI 렌더러 및 이벤트 매니저 */
 import { state } from './state.js';
-import { createBookCard } from './ui.js';
+import { createBookCard } from './ui.js?v=20260918-library-scan-progress-v1';
 import { openBookDetail } from './modal.js';
 import { resumeSeries } from './book_list.js';
 import { openReader } from './viewer.js';

@@ -442,6 +442,7 @@ def export_single_category(db_type, library_id, output_path=None):
             "hide_cover": library.get('hide_cover', 0),
             "hide_title": library.get('hide_title', 0),
             "cover_aspect_ratio": library.get('cover_aspect_ratio', '4:3'),
+            "content_kind": library.get('content_kind', 'unspecified'),
             "group_id": library.get('group_id'),
             "sort_order": library.get('sort_order', 0)
         },

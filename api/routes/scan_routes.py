@@ -3,11 +3,13 @@
 scan_routes.py – 스캔 관리 라우터 (도서 스캔, 표지 스캔 등)
 """
 import os
+import posixpath
 from flask import Blueprint, request, jsonify
 from services.book_scan_service import BookScanService
 from api.auth import admin_required
 from utils.i18n import _t
 import database
+from services.batch_book_scan_targets import resolve_batch_book_scan_targets
 
 scan_bp = Blueprint('scan', __name__)
 LAZY_SCAN_DB_TYPES = {'general', 'adult', 'audiobook'}
@@ -20,6 +22,86 @@ def get_db_path_for_scan(db_type):
 def _enqueue_targeted_lazy_scan(db_type, **target):
     from services.scanner_queue import scanner_queue
     return scanner_queue.enqueue('lazy_scan', db_type=db_type, **target)
+
+
+def _gdrive_virtual_parts(path):
+    """Return (Drive folder id, path components) for a stored gdrive:/ virtual path."""
+    from utils.drive_helper import split_gdrive_file_id
+
+    base_path, _file_id = split_gdrive_file_id(str(path or '').strip())
+    normalized = base_path.replace('\\', '/')
+    if not normalized.lower().startswith('gdrive:'):
+        return None
+    components = [part for part in normalized.split(':', 1)[1].strip('/').split('/') if part]
+    if not components:
+        return None
+    return components[0], components[1:]
+
+
+def _resolve_series_scan_target(file_path, physical_path):
+    """Resolve a series folder under either a local/mounted root or a Drive share root.
+
+    GDrive books are stored as virtual paths (gdrive:/<share-id>/<relative-path>/file),
+    while the library root is commonly the original Drive share URL. Keep the original
+    root for the scanner and separately pass the virtual subpath used to scope the scan.
+    """
+    from utils.drive_helper import extract_gdrive_folder_id, is_gdrive_url
+
+    file_path = str(file_path or '').strip()
+    roots = [path.strip() for path in str(physical_path or '').replace('\r', '').split('\n') if path.strip()]
+    if not file_path or not roots:
+        return None
+
+    if is_gdrive_url(file_path):
+        file_parts = _gdrive_virtual_parts(file_path)
+        if not file_parts:
+            return None
+        file_root_id, file_relative_parts = file_parts
+        if not file_relative_parts:
+            return None
+        folder_relative_parts = file_relative_parts[:-1]
+
+        for root in roots:
+            if not is_gdrive_url(root):
+                continue
+            root_parts = _gdrive_virtual_parts(root)
+            if root_parts:
+                root_id, root_relative_parts = root_parts
+            else:
+                root_id = extract_gdrive_folder_id(root)
+                root_relative_parts = []
+            if root_id != file_root_id:
+                continue
+            if folder_relative_parts[:len(root_relative_parts)] != root_relative_parts:
+                continue
+
+            gdrive_subpath = '/'.join(folder_relative_parts)
+            path_scope = f"gdrive:/{file_root_id}"
+            if folder_relative_parts:
+                path_scope += '/' + '/'.join(folder_relative_parts)
+            return {
+                'target_path': root,
+                'path_scope': path_scope,
+                'gdrive_subpath': gdrive_subpath,
+            }
+        return None
+
+    if not os.path.isabs(file_path):
+        return None
+    target_path = os.path.realpath(os.path.dirname(file_path))
+    if not os.path.isdir(target_path):
+        return None
+
+    for root in roots:
+        if is_gdrive_url(root) or not os.path.isabs(root):
+            continue
+        root_path = os.path.realpath(root)
+        try:
+            if os.path.commonpath((target_path, root_path)) == root_path:
+                return {'target_path': target_path}
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 @scan_bp.route('/api/media/books/lazy-scan', methods=['POST'])
@@ -153,6 +235,11 @@ def enqueue_batch_book_scan():
     db_type = str(payload.get('type') or 'general').strip().lower()
     if db_type not in ('general', 'adult'):
         return jsonify({'success': False, 'error': '일반/성인 도서만 다중 스캔할 수 있습니다.'}), 400
+    scan_scope = str(payload.get('scope') or 'book').strip().lower()
+    if scan_scope not in ('book', 'series'):
+        return jsonify({'success': False, 'error': '지원하지 않는 스캔 범위입니다.'}), 400
+    force_value = payload.get('force', False)
+    force_scan = force_value is True or str(force_value).strip().lower() in ('true', '1', 'yes', 'on')
 
     raw_book_ids = payload.get('book_ids')
     if not isinstance(raw_book_ids, list) or not raw_book_ids:
@@ -172,27 +259,72 @@ def enqueue_batch_book_scan():
                 book_ids.append(book_id)
     except (TypeError, ValueError) as error:
         return jsonify({'success': False, 'error': str(error)}), 400
+    # Scope is an explicit part of the request. A one-book anchor with scope=series
+    # must expand to every active volume, while scope=book must remain one book.
+    # Do not infer scope from the number of IDs: that used to silently downgrade
+    # a series scan to missing-cover-only work.
+    target_scope = scan_scope
 
     conn = None
     try:
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
-        placeholders = ', '.join('?' for _ in book_ids)
-        cursor.execute(
-            f'SELECT id, library_id, title FROM books WHERE id IN ({placeholders})',
-            tuple(book_ids),
-        )
-        rows = cursor.fetchall()
-        found_ids = {int(row['id']) for row in rows}
-        if found_ids != set(book_ids):
-            return jsonify({'success': False, 'error': '요청한 도서 중 현재 데이터베이스에서 찾을 수 없는 항목이 있습니다.'}), 404
+        try:
+            rows = resolve_batch_book_scan_targets(cursor, book_ids, scope=target_scope)
+        except LookupError as error:
+            return jsonify({'success': False, 'error': str(error)}), 404
+        if len(rows) > 500:
+            return jsonify({'success': False, 'error': '시리즈 스캔은 한 번에 최대 500권까지 가능합니다.'}), 400
+        book_ids = [int(row['id']) for row in rows]
 
         library_ids = {row['library_id'] for row in rows if row['library_id'] is not None}
-        task_kwargs = {'db_type': db_type, 'book_ids': book_ids}
+        task_kwargs = {
+            'db_type': db_type,
+            'book_ids': book_ids,
+            'scope': target_scope,
+        }
         if len(rows) == len(book_ids) and len(library_ids) == 1:
             task_kwargs['library_id'] = next(iter(library_ids))
         if len(book_ids) == 1:
             task_kwargs['book_title'] = str(rows[0]['title'] or '').strip()
+
+        if force_scan:
+            task_kwargs['force'] = True
+            if target_scope == 'series':
+                if len(raw_book_ids) != 1:
+                    return jsonify({'success': False, 'error': '시리즈 폴더 강제 스캔은 시리즈 카드 한 개만 선택해 실행할 수 있습니다.'}), 400
+
+                anchor_id = book_ids[0] if len(book_ids) == 1 else int(raw_book_ids[0])
+                cursor.execute(
+                    "SELECT id, library_id, title, series_name, file_path FROM books "
+                    "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (anchor_id,),
+                )
+                anchor = cursor.fetchone()
+                if not anchor or anchor['library_id'] is None:
+                    return jsonify({'success': False, 'error': '시리즈의 라이브러리 정보를 찾을 수 없습니다.'}), 404
+                if not str(anchor['series_name'] or '').strip():
+                    return jsonify({'success': False, 'error': '시리즈명이 없는 도서는 시리즈 폴더 강제 스캔을 할 수 없습니다.'}), 400
+
+                from repositories.category_repository import CategoryRepository
+                library = CategoryRepository.get_library_by_id(db_type, anchor['library_id'])
+                scan_target = _resolve_series_scan_target(
+                    anchor['file_path'], library.get('physical_path') if library else None
+                )
+                if not scan_target:
+                    return jsonify({
+                        'success': False,
+                        'error': '도서 파일의 상위 폴더를 라이브러리 경로에서 확인할 수 없습니다.',
+                    }), 400
+
+                task_kwargs.update({
+                    'scan_mode': 'force_series_path',
+                    **scan_target,
+                    'db_path': get_db_path_for_scan(db_type),
+                    'library_id': int(anchor['library_id']),
+                    'series_name': str(anchor['series_name']).strip(),
+                    'book_title': str(anchor['series_name']).strip(),
+                })
 
         from services.scanner_queue import scanner_queue
         if not scanner_queue.enqueue('batch_book_scan', **task_kwargs):
@@ -201,13 +333,19 @@ def enqueue_batch_book_scan():
                 'error': '같은 다중 도서 스캔 작업이 이미 실행 중이거나 대기 중입니다.',
             }), 409
 
+        if force_scan and target_scope == 'series':
+            message = f'시리즈 폴더 강제 스캔을 대기열에 추가했습니다. 미등록 권도 탐색합니다: {task_kwargs["series_name"]}'
+        elif force_scan and target_scope == 'book':
+            message = f'선택한 {len(book_ids)}권의 강제 재스캔을 대기열에 추가했습니다.'
+        elif target_scope == 'series':
+            message = f'시리즈 전체 {len(book_ids)}권의 즉시 스캔을 대기열에 추가했습니다.'
+        elif len(book_ids) == 1:
+            message = '도서 즉시 스캔을 대기열에 추가했습니다.'
+        else:
+            message = f'선택한 {len(book_ids)}개 작품의 스캔을 대기열에 추가했습니다.'
         return jsonify({
             'success': True,
-            'message': (
-                '도서 스캔을 대기열에 추가했습니다. 스캔 활동에서 진행 상황을 확인할 수 있습니다.'
-                if len(book_ids) == 1 else
-                f'선택한 {len(book_ids)}개 작품의 스캔을 대기열에 추가했습니다. 스캔 활동에서 진행 상황을 확인할 수 있습니다.'
-            ),
+            'message': message + ' 스캔 활동에서 진행 상황을 확인할 수 있습니다.',
         }), 202
     except Exception as error:
         return jsonify({'success': False, 'error': str(error)}), 500

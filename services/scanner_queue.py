@@ -61,6 +61,20 @@ class ScannerQueue:
 
     def _get_task_key(self, task_type, kwargs):
         if task_type == 'lazy_scan':
+            db_type = str(kwargs.get('db_type') or 'general')
+            series_name = str(kwargs.get('series_name') or '').strip()
+            library_id = kwargs.get('library_id')
+            if series_name and library_id is not None:
+                target = f"{db_type}:{library_id}:{series_name}"
+                target_hash = hashlib.sha256(target.encode('utf-8')).hexdigest()[:16]
+                return f'lazy_scan_series_{target_hash}'
+            if library_id is not None:
+                return f'lazy_scan_library_{db_type}_{library_id}'
+            book_ids = kwargs.get('book_ids')
+            if book_ids is not None:
+                normalized_ids = ','.join(sorted(str(book_id) for book_id in book_ids))
+                target_hash = hashlib.sha256(f'{db_type}:{normalized_ids}'.encode('utf-8')).hexdigest()[:16]
+                return f'lazy_scan_books_{target_hash}'
             return 'lazy_scan'
         elif task_type in ('library_scan', 'cover_scan'):
             db_type = kwargs.get('db_type', 'general')
@@ -70,6 +84,11 @@ class ScannerQueue:
             db_type = kwargs.get('db_type', 'general')
             book_ids = kwargs.get('book_ids') or []
             normalized_ids = ','.join(sorted(str(book_id) for book_id in book_ids))
+            target_path = str(kwargs.get('target_path') or '').strip()
+            if target_path:
+                normalized_ids = f"path:{target_path}"
+            elif kwargs.get('force'):
+                normalized_ids = f"force:{normalized_ids}"
             target_hash = hashlib.sha256(normalized_ids.encode('utf-8')).hexdigest()[:16]
             return f"batch_book_scan_{db_type}_{target_hash}"
         elif task_type == 'gdrive_copy':
@@ -174,6 +193,7 @@ class ScannerQueue:
                     kwargs = json.loads(row_run['kwargs']) if row_run['kwargs'] else {}
                 except:
                     kwargs = {}
+                kwargs.pop('_lazy_scan_progress', None)
                 status['running'] = {
                     'type': row_run['task_type'],
                     'key': row_run['task_key'],
@@ -188,6 +208,7 @@ class ScannerQueue:
                     kwargs = json.loads(row['kwargs']) if row['kwargs'] else {}
                 except:
                     kwargs = {}
+                kwargs.pop('_lazy_scan_progress', None)
                 status['pending'].append({
                     'type': row['task_type'],
                     'key': row['task_key'],
@@ -203,6 +224,7 @@ class ScannerQueue:
                     kwargs = json.loads(row['kwargs']) if row.get('kwargs') else {}
                 except (TypeError, ValueError, json.JSONDecodeError):
                     kwargs = {}
+                kwargs.pop('_lazy_scan_progress', None)
                 status['recent_book_scans'].append({
                     'id': row['id'],
                     'type': row['task_type'],
@@ -623,9 +645,9 @@ def _process_lazy_scan(sq, task_id, **kwargs):
             sq.log(f"⏱️ 세션 시간 한도(7200초) 도달로 서브-배치 세션 #{sub_batch_count} 강제 종료. 다음 분량을 계속 처리합니다.")
             try:
                 from repositories.scanner_queue_repository import ScannerQueueRepository
-                task = ScannerQueueRepository.get_task_by_key('lazy_scan')
-                if task and task.get('id'):
-                    ScannerQueueRepository.update_task_status(task['id'], 'exit_pending', stage=f'시간 한도 재기동 (배치 #{sub_batch_count})')
+                ScannerQueueRepository.update_task_status(
+                    task_id, 'exit_pending', stage=f'시간 한도 재기동 (배치 #{sub_batch_count})'
+                )
             except Exception as st_err:
                 sq.log(f"[Lazy-Scanner] Intermediate status update warning: {st_err}")
             if _lazy_scan_should_yield_to_priority_task(sq, sub_batch_count):
@@ -635,9 +657,9 @@ def _process_lazy_scan(sq, task_id, **kwargs):
             sq.log(f"⚡ 서브-배치 세션 #{sub_batch_count} 마감 (RAM 환수 완료). 다음 분량을 계속 처리합니다.")
             try:
                 from repositories.scanner_queue_repository import ScannerQueueRepository
-                task = ScannerQueueRepository.get_task_by_key('lazy_scan')
-                if task and task.get('id'):
-                    ScannerQueueRepository.update_task_status(task['id'], 'exit_pending', stage=f'RAM 환수 재기동 (배치 #{sub_batch_count})')
+                ScannerQueueRepository.update_task_status(
+                    task_id, 'exit_pending', stage=f'RAM 환수 재기동 (배치 #{sub_batch_count})'
+                )
             except Exception as st_err:
                 sq.log(f"[Lazy-Scanner] Intermediate status update warning: {st_err}")
             if _lazy_scan_should_yield_to_priority_task(sq, sub_batch_count):
@@ -665,10 +687,46 @@ def _update_batch_book_scan_stage(sq, task_id, stage):
         sq.log(f"Failed to update batch book scan progress: {error}")
 
 
-def _process_batch_book_scan(sq, task_id, db_type='general', book_ids=None, **_kwargs):
-    """선택 도서를 순차 재스캔하며 현재 순번/작품명을 큐 진행 단계에 기록한다."""
+def _process_batch_book_scan(
+    sq,
+    task_id,
+    db_type='general',
+    book_ids=None,
+    scan_mode=None,
+    target_path=None,
+    db_path=None,
+    library_id=None,
+    series_name=None,
+    path_scope=None,
+    gdrive_subpath=None,
+    force=False,
+    **_kwargs,
+):
+    """선택 도서를 재스캔하고 문서 표지는 격리된 한 번의 배치로 추출한다."""
     from repositories.book_scan_repository import BookScanRepository
     from services.book_scan_service import BookScanService
+    from utils.drive_helper import is_remote_path
+
+    if scan_mode == 'force_series_path':
+        if not target_path or not db_path or library_id is None:
+            raise ValueError('시리즈 폴더 강제 스캔에 필요한 경로 정보가 없습니다.')
+        display_name = str(series_name or '시리즈').strip() or '시리즈'
+        _update_batch_book_scan_stage(
+            sq,
+            task_id,
+            f'시리즈 폴더 강제 스캔 중 · {display_name} · 신규 권/메타데이터 탐색',
+        )
+        from tools.scanner.core import scan_library_path
+        scan_options = {}
+        if path_scope is not None:
+            scan_options['path_scope'] = path_scope
+        if gdrive_subpath is not None:
+            scan_options['gdrive_subpath'] = gdrive_subpath
+        scan_library_path(db_path, int(library_id), target_path, force=True, **scan_options)
+        summary = f'시리즈 폴더 강제 스캔 완료 · {display_name} · 신규 권 검색 및 기존 권 갱신 완료'
+        _update_batch_book_scan_stage(sq, task_id, summary)
+        sq.log(summary)
+        return
 
     ids = []
     for raw_id in book_ids or []:
@@ -681,22 +739,71 @@ def _process_batch_book_scan(sq, task_id, db_type='general', book_ids=None, **_k
     if not ids:
         raise ValueError('다중 스캔 작업에 유효한 도서 ID가 없습니다.')
 
-    succeeded = 0
-    failures = []
     total = len(ids)
-    for index, book_id in enumerate(ids, start=1):
-        title = f'도서 ID {book_id}'
+    books = {}
+    for book_id in ids:
         try:
             book = BookScanRepository.get_book_basic_info_raw(db_type, book_id)
-            if book and book.get('title'):
-                title = str(book['title']).strip() or title
+            books[book_id] = book or {}
         except Exception as lookup_error:
+            books[book_id] = {}
             sq.log(f"Batch scan title lookup failed for book_id={book_id}: {lookup_error}")
 
+    def get_title(book_id):
+        book = books.get(book_id) or {}
+        return str(book.get('title') or '').strip() or f'도서 ID {book_id}'
+
+    isolated_document_ids = []
+    for book_id in ids:
+        book = books.get(book_id) or {}
+        file_path = str(book.get('file_path') or '')
+        file_format = str(book.get('file_format') or '').lower()
+        is_pdf = file_format == 'pdf' or file_path.lower().endswith('.pdf')
+        is_epub = file_format == 'epub' or file_path.lower().endswith('.epub')
+        try:
+            is_remote = bool(int(book.get('library_is_remote') or 0))
+        except (TypeError, ValueError):
+            is_remote = is_remote_path(file_path)
+        if is_pdf or (is_epub and is_remote):
+            isolated_document_ids.append(book_id)
+
+    succeeded = 0
+    failures = []
+    if isolated_document_ids:
         _update_batch_book_scan_stage(
             sq,
             task_id,
-            f'선택 도서 스캔 {index}/{total} · {title} (완료 {index - 1}/{total})',
+            f'EPUB/PDF 표지 일괄 추출 시작 · 0/{len(isolated_document_ids)}권',
+        )
+        try:
+            _document_ok, document_message, document_covers = BookScanService.scan_document_books(
+                db_type,
+                isolated_document_ids,
+                task_id=task_id,
+            )
+            sq.log(f"Isolated EPUB/PDF batch scan finished: {document_message}")
+            for book_id in isolated_document_ids:
+                if (document_covers or {}).get(book_id):
+                    succeeded += 1
+                else:
+                    failure = f'{get_title(book_id)}: EPUB/PDF 표지를 추출하지 못했습니다.'
+                    failures.append(failure)
+                    sq.log(f"Batch document cover scan failed: {failure}")
+        except Exception as scan_error:
+            for book_id in isolated_document_ids:
+                failure = f'{get_title(book_id)}: {scan_error}'
+                failures.append(failure)
+                sq.log(f"Batch document cover scan raised an exception: {failure}")
+
+    completed = len(isolated_document_ids)
+    for index, book_id in enumerate(ids, start=1):
+        if book_id in isolated_document_ids:
+            continue
+        title = get_title(book_id)
+        _update_batch_book_scan_stage(
+            sq,
+            task_id,
+            f'{"강제 재스캔" if force else "선택 도서 스캔"} {index}/{total} · {title} (완료 {completed}/{total})',
         )
         try:
             success, message, _cover_image = BookScanService.scan_single_book(db_type, book_id)
@@ -710,8 +817,9 @@ def _process_batch_book_scan(sq, task_id, db_type='general', book_ids=None, **_k
             failure = f'{title}: {scan_error}'
             failures.append(failure)
             sq.log(f"Batch book scan raised an exception: {failure}")
+        completed += 1
 
-    single_title = f' · {title}' if total == 1 else ''
+    single_title = f' · {get_title(ids[0])}' if total == 1 else ''
     summary = f'선택 도서 스캔 완료{single_title} · 성공 {succeeded}/{total}, 실패 {len(failures)}'
     _update_batch_book_scan_stage(sq, task_id, summary)
     sq.log(summary)

@@ -28,6 +28,9 @@ def _base_meta():
         'tags': '',
         'books_lv': '',
         'publication_status': '',
+        'document_series_name': '',
+        'document_volume_index': None,
+        'document_volume_count': None,
         'cover_artist': '',
         'teams': '',
         'locations': '',
@@ -257,3 +260,4 @@ from .kavita_yaml import parse_kavita_yaml
 from .series_json import parse_series_json
 from .comicinfo_xml import parse_comicinfo_from_cbz
 from .audio_json import parse_audio_json
+from .document_metadata import parse_embedded_metadata, merge_embedded_metadata

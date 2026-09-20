@@ -1,6 +1,6 @@
 /* search_shortcut_manager.js – 검색 창 포커싱, 단축키(Alt+`) 및 미디어 타입 핫키 전담 모듈 */
 import { filterBooks } from './book_list.js';
-import { switchLibraryType } from './library_type_toggle.js';
+import { switchLibraryType } from './library_type_toggle.js?rev=20260919-library-content-kind-v1';
 
 let searchShortcutConfig = { ctrlKey: false, altKey: true, shiftKey: false, metaKey: false, key: '`', code: 'Backquote', display: 'Alt + `' };
 

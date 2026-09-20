@@ -10,7 +10,7 @@ import { changeDashboardTheme, populateCustomThemeOptions, rescanCustomThemesUi,
 import { startCoverStorageMigration } from './cover_storage_settings.js';
 import { getTempShortcut, setTempShortcut, initShortcutRecorderEvents } from './shortcut_recorder.js';
 import { runVaapiCheck, triggerLazyScanNow } from './system_actions.js';
-import { loadHomeDashboardLayout } from '../dashboard.js?v=20260917-home-widget-plugin-ui-v1';
+import { loadHomeDashboardLayout } from '../dashboard.js?v=20260918-home-return-cache-v1';
 
 function initGeneralDelegation() {
   if (window.__generalDelegationBound) return;
@@ -214,7 +214,8 @@ export async function loadInitialSystemSettings() {
     console.error('[Settings] 최초 시스템 설정 로딩 실패:', e);
   }
 
-  migrateLocalOnlyUserSettingsOnce();
+  // 기존 localStorage 설정을 서버에 옮기는 작업은 홈 화면 초기화를 막지 않는다.
+  void migrateLocalOnlyUserSettingsOnce();
 }
 
 // DASHBOARD_THEME / SHOW_DASHBOARD_INSIGHTS는 예전엔 localStorage에만 저장됐다.

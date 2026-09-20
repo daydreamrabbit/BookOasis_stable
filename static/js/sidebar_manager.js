@@ -225,20 +225,21 @@ function forceIosHeaderRepaint() {
 // 다른 트리거 경로에도 적용한다.
 function resetScrollIfHeaderHidden() {
   if (!isMobileLayout()) return;
-  const header = document.querySelector('.sidebar-header-wrapper');
+  const sidebarHeader = document.querySelector('.sidebar-header-wrapper');
+  const libraryHeader = document.querySelector('.library-header');
   const mainContent = document.querySelector('.library-main-content');
-  // .sidebar-header-wrapper(로고/햄버거)는 .library-sidebar 안에 있어 실제 스크롤
-  // 컨테이너인 .library-main-content 내부 스크롤과는 무관하다 - 그래서 이 rect
-  // 조건만으로는 안드로이드 Chrome에서 검색창(.library-header 첫 줄)이
-  // .library-main-content.scrollTop이 0이 아닌 채로 시작해 화면 밖으로 밀리는
-  // 케이스를 못 잡는다(로고는 제자리인데 검색창만 가려짐). 그래서 scrollTop을
-  // 별도로 항상 확인해 되돌린다.
-  if (mainContent && mainContent.scrollTop !== 0) {
-    mainContent.scrollTop = 0;
-  }
-  if (!header) return;
-  const rect = header.getBoundingClientRect();
-  if (rect.bottom <= 0 || rect.top < -4) {
+  const isOutOfView = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.bottom <= 0 || rect.top < -4;
+  };
+  const libraryScrollTop = Number(mainContent?.scrollTop || 0);
+  // .library-header는 목록 스크롤에 따라 정상적으로 화면 위로 사라진다. 이때
+  // 목록 자체를 0으로 되돌리면 라이브러리 전환이나 창 포커스 복귀 때마다 튄다.
+  // 목록이 맨 위인데도 헤더가 가려진 경우에만 문서 스크롤 위치를 복구한다.
+  const appShellOutOfView = isOutOfView(sidebarHeader)
+    || (libraryScrollTop === 0 && isOutOfView(libraryHeader));
+  if (appShellOutOfView) {
     // y=0 대신 y=1로 스크롤: iOS Safari는 스크롤 위치가 정확히 0일 때 주소창을
     // 완전히 펼치며 페이지 콘텐츠 위에 겹쳐 그리는 버그가 있다. 1px만 남겨두면
     // 주소창이 겹치지 않으면서도 사실상 맨 위와 동일하게 보인다.

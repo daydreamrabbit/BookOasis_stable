@@ -85,7 +85,7 @@ def _run_db_self_recovery(db_type):
         print(f"[Scanner-SelfHealing ERROR] Auto recovery failed: {rec_err}")
 
 @scanner_print_control_decorator
-def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refresh=False):
+def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refresh=False, progress_callback=None):
     """Scan library path and sync DB with file system (force full reindex if force=True)"""
     print(f"🚀🚀🚀 [ScannerEngine] Core scan_library EXECUTING! DB Path={db_path}, Library ID={library_id}, Path='{physical_path}', Force={force}")
     
@@ -195,7 +195,10 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
 
     conn = database.get_connection(db_type)
     try:
-        _scan_library_internal(conn, db_path, library_id, physical_path, force, db_type, target_paths, is_remote, threads_to_use, library_errors)
+        _scan_library_internal(
+            conn, db_path, library_id, physical_path, force, db_type, target_paths,
+            is_remote, threads_to_use, library_errors, progress_callback=progress_callback
+        )
     finally:
         try:
             conn.close()
@@ -212,7 +215,15 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
             print(f"[Scanner ERROR] Scan report save failed: {report_err}")
 
 @scanner_print_control_decorator
-def scan_library_path(db_path, library_id, target_path, force=False, skip_vfs_refresh=False):
+def scan_library_path(
+    db_path,
+    library_id,
+    target_path,
+    force=False,
+    skip_vfs_refresh=False,
+    path_scope=None,
+    gdrive_subpath=None,
+):
     """Scan a single book/series subfolder within a library and register just those books
     (used by the 'add one book/series then scan it in' API, as opposed to a full periodic scan)."""
     print(f"🎯 [ScannerEngine] Single-path scan EXECUTING! DB Path={db_path}, Library ID={library_id}, Target='{target_path}', Force={force}")
@@ -261,7 +272,8 @@ def scan_library_path(db_path, library_id, target_path, force=False, skip_vfs_re
         _scan_library_internal(
             conn, db_path, library_id, target_path, force, db_type,
             [target_path], is_remote, threads_to_use, library_errors,
-            path_scope=canonical_path(target_path)
+            path_scope=path_scope or canonical_path(target_path),
+            gdrive_subpath=gdrive_subpath,
         )
     finally:
         try:

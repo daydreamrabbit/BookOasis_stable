@@ -66,6 +66,22 @@ export function unmountIndexScrollbar() {
 
 let isJumping = false;
 
+function captureJumpContext() {
+  return {
+    type: state.currentLibraryType,
+    libraryId: String(state.currentLibraryId || ''),
+    search: state.searchQuery || '',
+    sort: state.currentSortDirection || 'asc',
+    genres: JSON.stringify((state.filterGenres || []).map(normalizeMetadataToken).filter(Boolean)),
+    tags: JSON.stringify((state.filterTags || []).map(normalizeMetadataToken).filter(Boolean)),
+  };
+}
+
+function isSameJumpContext(context) {
+  const current = captureJumpContext();
+  return Object.keys(context).every((key) => context[key] === current[key]);
+}
+
 // 새로 로드된(단일 페이지) 그리드에서 해당 오프셋의 카드로 스크롤 이동
 function scrollToCardOffset(offsetInPage) {
   setTimeout(() => {
@@ -96,11 +112,12 @@ async function handleIndexClick(char) {
     return;
   }
 
-  if (isJumping) return;
+  if (isJumping || state.isLoading || state.isLoadingPrevious) return;
   isJumping = true;
   if (scrollbarEl) scrollbarEl.classList.add('is-loading');
 
   try {
+    const jumpContext = captureJumpContext();
     const limit = state.LIMIT || 60;
     const result = await api.fetchJumpPosition({
       type: state.currentLibraryType,
@@ -118,8 +135,16 @@ async function handleIndexClick(char) {
       return;
     }
 
-    // 대상 페이지만 바로 불러와서 교체하고(중간 페이지들은 건너뜀), 그 안의 정확한 위치로 스크롤한다.
-    await loadBooksList(false, result.page);
+    // 다른 라이브러리/검색 결과로 이동한 뒤 늦게 도착한 응답이 새 화면을 덮지 않게 한다.
+    if (!isSameJumpContext(jumpContext)) return;
+
+    // 서버가 초성 위치 계산에 사용한 동일한 정렬 결과에서 목적 페이지까지 반환한다.
+    // 기존 그리드는 응답 도착 전까지 유지하고, 일반 목록 재조회/전체 로딩 문구는 생략한다.
+    await loadBooksList(false, result.page, {
+      preloadedData: result,
+      keepCurrentGrid: true,
+      skipTotals: true,
+    });
     scrollToCardOffset(result.offset_in_page);
   } catch (e) {
     console.error('[Index-Scrollbar] 초성 바로가기 실패:', e);

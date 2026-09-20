@@ -50,6 +50,7 @@ export const state = {
   detailSeriesName: '',
   detailLibraryId: null,
   detailRepresentativeBookId: null,
+  detailBookIds: [],
   detailDisplayTitle: '',
   
   // 로그인 사용자 세션 정보

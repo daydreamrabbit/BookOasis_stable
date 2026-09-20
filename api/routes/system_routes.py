@@ -84,9 +84,32 @@ def index():
         print(f"[Index] 홈 대시보드 초기 레이아웃 계산 실패, 클래식 레이아웃으로 폴백: {e}")
         home_layout = {'mode': 'classic', 'widgets': [], 'catalog': []}
 
+    home_widget_initial_data = {}
+    if home_layout.get('mode') == 'plugin':
+        try:
+            from services.metadata_factory import MetadataFactory
+            for widget in home_layout.get('widgets', []):
+                if widget.get('kind') != 'plugin' or widget.get('hidden') or not widget.get('initial_data'):
+                    continue
+                plugin_id = str(widget.get('plugin_id') or '').strip()
+                if not plugin_id:
+                    continue
+                try:
+                    provider = MetadataFactory.get_provider_by_id(plugin_id)
+                    result = provider.get_dashboard_data('general', limit=widget.get('limit', 10))
+                    if not isinstance(result, dict) or not result.get('success'):
+                        continue
+                    MetadataFactory.add_dashboard_ui_bundle(plugin_id, result)
+                    home_widget_initial_data[widget.get('id')] = result
+                except Exception as e:
+                    print(f"[Index] 홈 위젯 초기 데이터 로드 실패 ({plugin_id}): {e}")
+        except Exception as e:
+            print(f"[Index] 홈 위젯 초기 데이터 조회 준비 실패: {e}")
+
     return render_template(
         'index.html', active_page='media_library', settings=settings,
         view_log_enabled=view_log_enabled, develop_mode=develop_mode, home_layout=home_layout,
+        home_widget_initial_data=home_widget_initial_data,
     )
 
 @system_bp.route('/api/system/status', methods=['GET'])
@@ -128,10 +151,21 @@ def get_system_status():
             elif task_type == 'cover_scan':
                 running_tasks.append(f"[{target_disp} ({db_t})] 표지 전용 스캔 진행 중...")
             elif task_type == 'lazy_scan':
-                running_tasks.append("[전체 시스템] Lazy Scanner 실행 중...")
+                series_name = str(kwargs.get('series_name') or '').strip()
+                if series_name:
+                    running_tasks.append(f"[{target_disp} · {series_name}] Lazy Scanner 실행 중...")
+                elif lib_id is not None:
+                    running_tasks.append(f"[{target_disp} ({db_t})] Lazy Scanner 실행 중...")
+                else:
+                    running_tasks.append("[전체 시스템] Lazy Scanner 실행 중...")
             elif task_type == 'batch_book_scan':
-                selected_count = len(kwargs.get('book_ids') or [])
-                running_tasks.append(f"[선택 도서 {selected_count}권] 메타데이터/표지 스캔 진행 중...")
+                if kwargs.get('scan_mode') == 'force_series_path':
+                    series_name = str(kwargs.get('series_name') or '시리즈').strip()
+                    running_tasks.append(f"[{series_name}] 시리즈 폴더 강제 스캔 진행 중...")
+                else:
+                    selected_count = len(kwargs.get('book_ids') or [])
+                    prefix = '강제 재스캔' if kwargs.get('force') else '도서 스캔'
+                    running_tasks.append(f"[선택 도서 {selected_count}권] {prefix} 진행 중...")
             else:
                 running_tasks.append("백그라운드 작업 진행 중...")
 

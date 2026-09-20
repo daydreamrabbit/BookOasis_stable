@@ -1158,6 +1158,9 @@ body {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
+    /* 오른쪽 초성 바로가기의 표시 여부와 관계없이 같은 폭을 예약해
+       정렬 변경 시 헤더와 그리드가 좌우로 흔들리지 않게 한다. */
+    padding-right: 40px;
     padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
     box-sizing: border-box;
     /* grid_pruning.js가 뷰포트 위쪽에서 카드를 정리/복원할 때 scrollTop을 직접 정확히
@@ -1463,11 +1466,16 @@ body {
 
 /* 필터/정렬 아이콘 전용 버튼 - 텍스트 라벨이 숨겨지므로 정사각형 아이콘 버튼으로 압축 */
 #btn-open-filter,
-#btn-lib-sort {
+#btn-lib-sort,
+#btn-toggle-library-types {
     width: 34px;
     height: 34px;
     padding: 0 !important;
     justify-content: center;
+}
+
+#btn-toggle-library-types {
+    display: none;
 }
 
 .scan-activity-wrap {
@@ -4562,6 +4570,40 @@ body {
   opacity: 0.45;
   border: 1px dashed var(--app-accent) !important;
   background: color-mix(in srgb, var(--app-accent) 5%, transparent) !important;
+}
+
+/* 홈 위젯 배치 잠금은 플러그인 배치 모드에서만 표시한다. */
+#home-widget-lock-bar {
+  display: none;
+}
+
+.home-widget-stack--plugin-mode + #home-widget-lock-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.6rem;
+}
+
+.home-widget-lock-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--app-text-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.home-widget-lock-toggle:hover {
+  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
+}
+
+.home-widget-lock-toggle--unlocked {
+  border-color: color-mix(in srgb, var(--app-accent) 55%, transparent);
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 10%, transparent);
 }
 
 /* 홈 화면 플러그인 배치 모드 - "+ 위젯 추가" 카탈로그 (아직 레이아웃에 없는 home_widget 플러그인) */

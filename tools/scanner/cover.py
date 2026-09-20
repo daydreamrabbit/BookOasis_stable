@@ -7,9 +7,10 @@ import urllib.parse
 import base64
 import io
 import re
+import threading
 import xml.etree.ElementTree as ET
 from PIL import Image
-from tools.scanner.folder_image import find_common_cover, find_individual_cover, find_common_banner
+from tools.scanner.folder_image import find_batch_cover, find_common_cover, find_individual_cover, find_common_banner
 from services.cover_storage_service import get_covers_dir
 
 SUPPORTED_IMAGE_FORMATS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif')
@@ -29,6 +30,7 @@ COVER_THUMB_MAX_H = 660
 # 실제 표시 폭(상세 페이지 본문 너비, 대략 900~1100px)의 레티나(x2) 기준.
 BANNER_THUMB_MAX_W = 1600
 BANNER_THUMB_MAX_H = 700
+MAX_REMOTE_COVER_BYTES = 64 * 1024 * 1024
 
 
 def save_as_thumbnail_webp(img, dest_path, quality=80, max_w=COVER_THUMB_MAX_W, max_h=COVER_THUMB_MAX_H):
@@ -37,8 +39,93 @@ def save_as_thumbnail_webp(img, dest_path, quality=80, max_w=COVER_THUMB_MAX_W, 
     img.thumbnail((max_w, max_h), Image.LANCZOS)
     img.save(dest_path, "WEBP", quality=quality)
 
-def extract_epub_cover_direct(epub_path, dest_path):
-    """Search cover image in EPUB file, convert to WebP format and save to dest_path"""
+
+def _extract_remote_archive_cover(file_path, local_cover_path):
+    """Bounded remote ZIP read: fetch just its natural-first image entry for the cover."""
+    from utils.sort_helper import natural_sort_key
+    from tools.scanner.metadata.comicinfo_xml import _remote_parse_timeout_seconds
+
+    result = []
+
+    def read_first_image():
+        try:
+            with zipfile.ZipFile(file_path, 'r') as archive:
+                images = sorted(
+                    (item for item in archive.infolist()
+                     if not item.is_dir()
+                     and item.filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'))),
+                    key=lambda item: natural_sort_key(item.filename),
+                )
+                if not images:
+                    result.append(None)
+                    return
+                # Avoid allocating unbounded memory for a malformed/oversized archive entry.
+                with archive.open(images[0], 'r') as image_file:
+                    image_data = image_file.read(MAX_REMOTE_COVER_BYTES + 1)
+                if len(image_data) > MAX_REMOTE_COVER_BYTES:
+                    raise ValueError('첫 페이지 이미지가 64 MiB 제한을 초과했습니다.')
+                result.append(image_data)
+        except Exception as error:
+            result.append(error)
+
+    timeout = _remote_parse_timeout_seconds()
+    worker = threading.Thread(target=read_first_image, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        print(f"[Scanner-Cover] 원격 아카이브 첫 페이지 읽기 시간 초과 ({timeout:.1f}s): {file_path}")
+        return False
+    if not result or isinstance(result[0], Exception) or not result[0]:
+        detail = result[0] if result and isinstance(result[0], Exception) else '이미지 항목 없음'
+        print(f"[Scanner-Cover] 원격 아카이브 첫 페이지 읽기 실패: {file_path}: {detail}")
+        return False
+
+    image_data = result[0]
+    try:
+        with Image.open(io.BytesIO(image_data)) as image:
+            save_as_thumbnail_webp(image, local_cover_path)
+    except Exception as error:
+        print(f"[Scanner-Cover] 원격 첫 페이지 WebP 변환 실패, 원본 이미지를 저장합니다: {error}")
+        with open(local_cover_path, 'wb') as cover_file:
+            cover_file.write(image_data)
+    return True
+
+
+def get_folder_batch_cover(folder_path, library_id, force=False):
+    """Create or reuse one shared WebP for a folder's exact ``cover.jpg`` sidecar."""
+    source_path = find_batch_cover(folder_path)
+    if not source_path:
+        return None
+
+    try:
+        source_stat = os.stat(source_path)
+        folder_key = os.path.normcase(os.path.normpath(os.path.abspath(folder_path)))
+        folder_hash = hashlib.md5(folder_key.encode('utf-8')).hexdigest()
+        source_signature = f"{source_stat.st_mtime_ns:x}_{source_stat.st_size:x}"
+        cover_filename = f"folder_{folder_hash}_{source_signature}.webp"
+
+        if library_id is not None:
+            dest_dir = os.path.join(get_covers_dir(), str(library_id))
+            db_cover_path = f"{library_id}/{cover_filename}"
+        else:
+            dest_dir = get_covers_dir()
+            db_cover_path = cover_filename
+        os.makedirs(dest_dir, exist_ok=True)
+        local_cover_path = os.path.join(dest_dir, cover_filename)
+
+        if not force and os.path.isfile(local_cover_path) and os.path.getsize(local_cover_path) > 0:
+            return db_cover_path
+
+        with Image.open(source_path) as img:
+            save_as_thumbnail_webp(img, local_cover_path)
+        print(f"[Scanner-Cover] Shared folder cover generated: '{source_path}' -> '{local_cover_path}'")
+        return db_cover_path
+    except Exception as e:
+        print(f"[Scanner-Cover] Shared folder cover processing failed ('{source_path}'): {e}")
+        return None
+
+def extract_epub_cover_direct(epub_path, dest_path, metadata_out=None, opf_read_out=None):
+    """Extract an EPUB cover, optionally collecting metadata from the same OPF read."""
     try:
         with zipfile.ZipFile(epub_path, 'r') as zf:
             # 1) Get rootfile path from META-INF/container.xml
@@ -57,6 +144,16 @@ def extract_epub_cover_direct(epub_path, dest_path):
             opf_dir = os.path.dirname(opf_path)
             opf_content = zf.read(opf_path)
             opf_root = ET.fromstring(opf_content)
+
+            if isinstance(opf_read_out, dict):
+                opf_read_out['parsed'] = True
+
+            if isinstance(metadata_out, dict):
+                try:
+                    from tools.scanner.metadata.document_metadata import parse_epub_opf_metadata
+                    metadata_out.update(parse_epub_opf_metadata(opf_root))
+                except Exception as metadata_error:
+                    print(f"[Scanner-EPUB-Cover] OPF metadata extraction failed: {metadata_error}")
             
             # Define XML namespaces
             ns_opf = {
@@ -396,7 +493,7 @@ def cleanup_unreferenced_generated_banners(cache_paths, referenced_paths, librar
     return removed
 
 
-def get_series_cover_fallback(series_name, folder_path, force=False, is_remote=False, filename=None, file_path=None, library_id=None):
+def get_series_cover_fallback(series_name, folder_path, force=False, is_remote=False, filename=None, file_path=None, library_id=None, allow_remote_archive_read=False, epub_metadata_out=None, epub_opf_read_out=None):
     """Check if cache cover corresponding to series name (or individual book filename) exists,
     If cover.jpg/png etc exists in folder, encode it to WebP and save to covers/{library_id} directory.
     If not, force extract first image from folder (or specified archive) as WebP cover (overwrite if force=True)
@@ -428,6 +525,14 @@ def get_series_cover_fallback(series_name, folder_path, force=False, is_remote=F
     
     if not force and os.path.exists(local_cover_path) and os.path.getsize(local_cover_path) > 0:
         return db_cover_path
+
+    if is_remote and allow_remote_archive_read:
+        if not target_path_seed or not target_path_seed.lower().endswith(('.zip', '.cbz')):
+            return None
+        if _extract_remote_archive_cover(target_path_seed, local_cover_path):
+            print(f"[Scanner-Cover] 원격 아카이브 첫 페이지 표지 저장 완료: {target_path_seed} -> {local_cover_path}")
+            return db_cover_path
+        return None
         
     # -- [Branch 1] Search individual book (filename) 1:1 mapped cover file --
     cand_path = find_individual_cover(folder_path, filename) if filename else None
@@ -483,7 +588,12 @@ def get_series_cover_fallback(series_name, folder_path, force=False, is_remote=F
             img_ext = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
             
             if target_file_path.lower().endswith('.epub'):
-                if extract_epub_cover_direct(target_file_path, local_cover_path):
+                if extract_epub_cover_direct(
+                    target_file_path,
+                    local_cover_path,
+                    metadata_out=epub_metadata_out,
+                    opf_read_out=epub_opf_read_out,
+                ):
                     print(f"[Scanner-Cover-Auto] EPUB cover auto extraction complete: '{target_file_path}' -> '{local_cover_path}'")
                     return db_cover_path
             elif target_file_path.lower().endswith('.pdf'):

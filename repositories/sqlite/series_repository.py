@@ -13,7 +13,7 @@ class SeriesRepository:
         return False
 
     @staticmethod
-    def fetch_books_for_grouping(db_type, library_id, search_query='', favorite_only=False, genre_filters=None, tag_filters=None, user_id=None, role=None, limit=None, offset=None, sort='asc'):
+    def fetch_books_for_grouping(db_type, library_id, search_query='', favorite_only=False, genre_filters=None, tag_filters=None, user_id=None, role=None, limit=None, offset=None, sort='asc', lightweight=False):
         """시리즈 그룹핑 렌더링에 필요한 기본 도서 레코드 목록 조회 (WAL 락 경합 시 지수 백오프 자동 재시도)
 
         sort='desc'일 때 SQL 자체를 제목 내림차순으로 뒤집는다. 예전에는 항상 오름차순으로
@@ -33,7 +33,7 @@ class SeriesRepository:
 
         if db_type == 'audiobook':
             where = ["COALESCE(a.is_deleted, 0) = 0"]
-            params = [safe_user_id]
+            params = [] if lightweight else [safe_user_id]
             if favorite_only:
                 where.append("a.is_favorite = 1")
             if library_id and str(library_id) not in ('all', 'favorite', 'history', 'home'):
@@ -63,8 +63,10 @@ class SeriesRepository:
                 )
                 params.append(user_id)
 
-            sql = f"""
-                SELECT a.id, a.title AS series_name, '' AS series_alias, a.title, '' AS title_alias,
+            if lightweight:
+                select_sql = "SELECT a.id, a.title AS series_name, a.title, '' AS title_alias, a.folder_path AS file_path, 'audiobook' AS file_format, a.library_id"
+            else:
+                select_sql = """SELECT a.id, a.title AS series_name, '' AS series_alias, a.title, '' AS title_alias,
                        a.author, a.folder_path AS file_path, 'audiobook' AS file_format,
                        CONCAT('/api/media/audiobooks/', a.id, '/cover') AS cover_image,
                        a.updated_at AS cover_updated_at,
@@ -74,7 +76,8 @@ class SeriesRepository:
                        COALESCE((
                            SELECT MAX(ap.is_completed) FROM audiobook_progress ap
                            WHERE ap.audiobook_id = a.id AND ap.user_id = ?
-                       ), 0) AS is_completed
+                       ), 0) AS is_completed"""
+            sql = f"""{select_sql}
                 FROM audiobooks a
                 WHERE {' AND '.join(where)}
                 ORDER BY {"a.created_at " + date_dir if is_date_sort else "a.library_id ASC, a.title " + title_dir}, a.id ASC
@@ -87,7 +90,7 @@ class SeriesRepository:
                     params.append(int(offset))
         elif db_type == 'video':
             where = ["COALESCE(v.is_deleted, 0) = 0"]
-            params = [safe_user_id]
+            params = [] if lightweight else [safe_user_id]
             if favorite_only:
                 where.append("v.is_favorite = 1")
             if library_id and str(library_id) not in ('all', 'favorite', 'history', 'home'):
@@ -114,8 +117,10 @@ class SeriesRepository:
                 )
                 params.append(user_id)
 
-            sql = f"""
-                SELECT v.id, v.title AS series_name, '' AS series_alias, v.title, '' AS title_alias,
+            if lightweight:
+                select_sql = "SELECT v.id, v.title AS series_name, v.title, '' AS title_alias, v.folder_path AS file_path, 'video' AS file_format, v.library_id"
+            else:
+                select_sql = """SELECT v.id, v.title AS series_name, '' AS series_alias, v.title, '' AS title_alias,
                        '' AS author, v.folder_path AS file_path, 'video' AS file_format,
                        CONCAT('/api/media/videos/', v.id, '/cover') AS cover_image,
                        v.updated_at AS cover_updated_at,
@@ -125,7 +130,8 @@ class SeriesRepository:
                        COALESCE((
                            SELECT MAX(vp.is_completed) FROM video_progress vp
                            WHERE vp.video_id = v.id AND vp.user_id = ?
-                       ), 0) AS is_completed
+                       ), 0) AS is_completed"""
+            sql = f"""{select_sql}
                 FROM videos v
                 WHERE {' AND '.join(where)}
                 ORDER BY {"v.created_at " + date_dir if is_date_sort else "v.library_id ASC, v.title " + title_dir}, v.id ASC
@@ -193,20 +199,31 @@ class SeriesRepository:
                 outer_where.append("EXISTS (SELECT 1 FROM user_favorites uf WHERE uf.book_id = b.id AND uf.user_id = ?)")
                 params.append(safe_user_id)
 
-            sql = f"""
-                SELECT b.id, b.series_name, b.series_alias, b.title, b.title_alias, b.author, b.file_path, b.file_format,
-                       b.cover_image, b.cover_updated_at, COALESCE(b.cover_align, 'center') AS cover_align,
-                       0 AS is_favorite,
-                       b.created_at,
-                       b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       {book_metadata_exists_sql('b')} AS has_metadata,
-                       rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
+            if lightweight:
+                select_sql = """
+                    SELECT b.id, b.series_name, b.title, b.title_alias,
+                           b.file_path, b.file_format, b.library_id,
+                           rep.series_book_count AS series_book_count
+                """
+            else:
+                select_sql = f"""
+                    SELECT b.id, b.series_name, b.series_alias, b.title, b.title_alias, b.author, b.file_path, b.file_format,
+                           b.cover_image, b.cover_updated_at, COALESCE(b.cover_align, 'center') AS cover_align,
+                           0 AS is_favorite,
+                           b.created_at,
+                           b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                           {book_metadata_exists_sql('b')} AS has_metadata,
+                           rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
+                """
+            representative_sql = (
+                "MIN(b2.id)"
+                if lightweight
+                else "COALESCE(MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END), MIN(b2.id))"
+            )
+            sql = f"""{select_sql}
                 FROM books b
                 INNER JOIN (
-                    SELECT COALESCE(
-                        MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END),
-                        MIN(b2.id)
-                    ) AS rep_id,
+                    SELECT {representative_sql} AS rep_id,
                     COUNT(*) AS series_book_count,
                     MAX(b2.created_at) AS series_latest_added
                     FROM books b2
@@ -226,7 +243,10 @@ class SeriesRepository:
                     params.append(int(offset))
 
         from repositories.sqlite.user_repository import UserRepository
-        fav_set = UserRepository.get_user_favorite_book_ids(db_type, safe_user_id) if safe_user_id else set()
+        fav_set = (
+            UserRepository.get_user_favorite_book_ids(db_type, safe_user_id)
+            if safe_user_id and not lightweight else set()
+        )
 
         max_attempts = 4
         for attempt in range(1, max_attempts + 1):
@@ -258,6 +278,23 @@ class SeriesRepository:
                     time.sleep(wait_sec)
                     continue
                 raise e
+
+    @staticmethod
+    def fetch_books_by_ids(db_type, book_ids, user_id=None, role=None):
+        """초성 점프 대상 대표 도서의 카드 정보를 조회한다."""
+        ids = [int(book_id) for book_id in (book_ids or []) if str(book_id).isdigit()]
+        if not ids:
+            return []
+        rows = SeriesRepository.fetch_books_for_grouping(
+            db_type,
+            'all',
+            user_id=user_id,
+            role=role,
+            limit=None,
+            offset=None,
+        )
+        row_by_id = {row.get('id'): row for row in rows}
+        return [row_by_id[book_id] for book_id in ids if book_id in row_by_id]
 
     @staticmethod
     def fetch_library_totals_bulk(db_type):

@@ -111,6 +111,7 @@ def get_media_list():
 @login_required
 def get_media_list_jump_position():
     """초성(가나다) 바로가기: 대상 글자로 시작하는 첫 항목의 페이지/오프셋을 계산해 반환"""
+    t_start = time.perf_counter()
     db_type = request.args.get('type', 'general')
     if not check_adult_permission(db_type):
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
@@ -143,8 +144,18 @@ def get_media_list_jump_position():
             user_id=user_id,
             role=role
         )
+        print(
+            f"[API-PROFILE] GET /api/media/list/jump "
+            f"(type={db_type}, lib={library_id}, char={target_char}) -> "
+            f"TOTAL HTTP RESPONSE: {(time.perf_counter() - t_start) * 1000:.1f}ms"
+        )
         return jsonify({'success': True, **result})
     except Exception as e:
+        print(
+            f"[API-PROFILE] GET /api/media/list/jump failed "
+            f"(type={db_type}, lib={library_id}, char={target_char}) -> "
+            f"{(time.perf_counter() - t_start) * 1000:.1f}ms: {e}"
+        )
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @media_library_routes_bp.route('/api/media/list-totals', methods=['GET'])
