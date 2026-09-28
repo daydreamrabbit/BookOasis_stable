@@ -1,3 +1,5 @@
+import { getTxtPageScrollLeft, setTxtPageScrollLeft } from './txt_page_utils.js?rev=20260922-reader-session-v45';
+
 /**
  * startIndex 주변에서 실제 내용(비공백 5자 이상)이 포함된 30자 앵커 텍스트를 탐색.
  * 앞에서 실패하면 뒤(startIndex+1 방향)로 최대 100자까지 탐색 후 반환.
@@ -91,7 +93,7 @@ export function getTxtAnchorInfoByMode({
   } catch (e) {}
 
   const maxScroll = scrollWrapper.scrollWidth - scrollWrapper.clientWidth;
-  const ratio = maxScroll > 0 ? scrollWrapper.scrollLeft / maxScroll : 0;
+  const ratio = maxScroll > 0 ? getTxtPageScrollLeft(scrollWrapper) / maxScroll : 0;
   const startIndex = Math.floor(cleanText.length * ratio);
   // 공백/특수문자만 있는 구간을 피해 실제 의미있는 텍스트가 나오는 위치를 앞뒤로 탐색
   const anchorText = _findMeaningfulAnchor(cleanText, startIndex, 30);
@@ -160,7 +162,7 @@ export function restoreTxtAnchorInfoByMode({
 
     const colWidth = getPageAdvanceWidth(scrollWrapper);
     const pageIndex = Math.floor(matchedElem.offsetTop / scrollWrapper.clientHeight);
-    scrollWrapper.scrollLeft = pageIndex * colWidth;
+    setTxtPageScrollLeft(scrollWrapper, pageIndex * colWidth);
     return true;
   }
 
@@ -188,7 +190,7 @@ export function restoreTxtAnchorInfoByMode({
       const ratio = matchIndex / cleanText.length;
       const colWidth = getPageAdvanceWidth(scrollWrapper);
       const maxScroll = scrollWrapper.scrollWidth - scrollWrapper.clientWidth;
-      scrollWrapper.scrollLeft = Math.round((maxScroll * ratio) / colWidth) * colWidth;
+      setTxtPageScrollLeft(scrollWrapper, Math.round((maxScroll * ratio) / colWidth) * colWidth);
       return true;
     }
   }

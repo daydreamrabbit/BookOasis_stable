@@ -7,12 +7,19 @@ if MEDIA_SERVER_DIR not in sys.path:
     sys.path.append(MEDIA_SERVER_DIR)
 
 import gc
-from tools.scanner.metadata import parse_info_xml, parse_kavita_yaml, parse_series_json, parse_comicinfo_from_cbz, merge_local_metadata, is_consonant_folder
-from tools.scanner.cover import get_series_cover_fallback, get_imgdir_cover, extract_cover_from_b64, download_cover_from_url, get_folder_banner
+from tools.scanner.metadata import (
+    parse_info_xml, parse_kavita_yaml, parse_series_json, parse_comicinfo_from_cbz,
+    parse_embedded_metadata, merge_embedded_metadata, merge_local_metadata,
+    merge_metadata_links, is_consonant_folder,
+)
+from tools.scanner.cover import get_series_cover_fallback, get_imgdir_cover, extract_cover_from_b64, download_cover_from_url, get_folder_banner, get_folder_batch_cover
+from tools.scanner.folder_image import COMMON_BANNER_NAMES, find_common_banner
 from tools.scanner.offset import collect_zip_offsets_data
 from tools.scanner.path_utils import canonical_path, join_canonical
+from embedded_metadata_version import EMBEDDED_METADATA_FORMATS
 
 SUPPORTED_FORMATS = ('.zip', '.cbz', '.epub', '.pdf', '.txt')
+SUPPORTED_METADATA_TITLE_FORMATS = ('.zip', '.cbz', '.epub', '.pdf')
 SUPPORTED_IMAGE_FORMATS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif')
 IMGDIR_VIRTUAL_FILENAME = '__folder__.imgdir'
 
@@ -119,12 +126,71 @@ def _normalize_series_text(name):
     return re.sub(r'^\[(?:단행|연재|소설|만화|웹툰|일반)\]\s*', '', str(name)).strip()
 
 
-def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote=False, library_id=None, db_files_cache=None, library_root=None, gdrive_file_ids=None, db_type=None, db_book_ids=None):
+def _merge_comicinfo_fallback(target, comicinfo):
+    """Fill only blank per-book fields from that archive's ComicInfo.xml."""
+    if not isinstance(target, dict) or not isinstance(comicinfo, dict):
+        return
+    for key in (
+        'title', 'author', 'localized_series', 'cover_artist', 'teams', 'locations',
+        'characters', 'publisher', 'summary', 'release_date', 'genre', 'tags',
+        'books_lv', 'link',
+    ):
+        value = comicinfo.get(key)
+        if not value:
+            continue
+        if key == 'link':
+            target[key] = merge_metadata_links(target.get(key, ''), value)
+        elif not target.get(key):
+            target[key] = value
+
+
+def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote=False, library_id=None, db_files_cache=None, library_root=None, gdrive_file_ids=None, db_type=None, db_book_ids=None, cancel_checker=None, db_banner_missing=None, db_banner_images=None, use_folder_cover=False, db_cover_images=None, progress_callback=None, db_metadata_title_unchecked=None, db_embedded_metadata_outdated=None, **_compat_kwargs):
     """Independent I/O scan task per folder (DB independent, pure FS/I/O scaling)"""
     root = canonical_path(root)
+    db_book_ids = db_book_ids or {}
+    db_cover_images = db_cover_images or {}
+    db_banner_missing = db_banner_missing or set()
+    db_banner_images = db_banner_images or {}
+    db_metadata_title_unchecked = db_metadata_title_unchecked or set()
+    # Keep the older name accepted by direct callers and tests while the
+    # engine uses the more precise version-based name.
+    db_embedded_metadata_outdated = (
+        db_embedded_metadata_outdated
+        or _compat_kwargs.get('db_embedded_metadata_outdated')
+        or set()
+    )
     print(f"[Scanner-DEBUG-Task] 📂 entering process_folder_task - folder: '{root}'")
+
+    def report_progress(event, current=None):
+        if not callable(progress_callback):
+            return
+        try:
+            progress_callback(event, current=current)
+        except Exception:
+            # Progress reporting is advisory and must never interrupt scanning.
+            pass
+
+    report_progress('folder_start', root)
+
+    def cancellation_requested():
+        if not callable(cancel_checker):
+            return False
+        try:
+            return bool(cancel_checker())
+        except Exception:
+            # Cancellation is best-effort and must never turn a readable
+            # folder into a scan failure when a status probe is unavailable.
+            return False
+
+    if cancellation_requested():
+        print(f"[Scanner-Cancel] Folder skipped before processing: '{root}'")
+        return None
     
-    media_files = [f for f in files if f.lower().endswith(SUPPORTED_FORMATS)]
+    from utils.sort_helper import natural_sort_key
+    media_files = sorted(
+        (f for f in files if f.lower().endswith(SUPPORTED_FORMATS)),
+        key=natural_sort_key,
+    )
     image_files = [f for f in files if f.lower().endswith(SUPPORTED_IMAGE_FORMATS)]
     has_imgdir_candidate = bool(image_files) and not media_files
     if not media_files and not has_imgdir_candidate:
@@ -161,10 +227,57 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             print(f"[Scanner-DEBUG-Task] ⚠️ Failed to get mtime for folder '{root}': {e}")
             dir_mtime = None
 
+    # rclone/CIFS/NFS mounts expose ordinary filesystem paths and can read small
+    # sidecar images directly. gdrive:// is an API-backed virtual path, not a
+    # mounted directory, so keep its staged-metadata behavior.
+    can_read_folder_banner = not (is_remote and root.startswith(('gdrive:', 'gdrive://')))
+    imgdir_virtual_path = join_canonical(root, IMGDIR_VIRTUAL_FILENAME)
+
+    # When enabled, one folder reference is used for every volume. The exact
+    # cover.jpg sidecar wins; otherwise an already valid cover from the first
+    # volume is used as the shared fallback. This avoids reopening archives
+    # merely to create duplicate thumbnails.
+    batch_cover_image = None
+    shared_cover_image = None
+    can_read_folder_cover = can_read_folder_banner
+    if use_folder_cover and can_read_folder_cover:
+        try:
+            batch_cover_image = get_folder_batch_cover(root, library_id, force=force)
+        except Exception as cover_error:
+            print(f"[Scanner-DEBUG-Task] ⚠️ Shared folder cover processing failed ('{root}'): {cover_error}")
+        shared_cover_image = batch_cover_image
+
+    if use_folder_cover and not shared_cover_image:
+        from services.cover_storage_service import get_covers_dir
+        for filename in media_files:
+            candidate_path = canonical_path(_full_path_for(root, filename, gdrive_file_ids))
+            candidate_cover = db_cover_images.get(candidate_path)
+            if not candidate_cover or candidate_cover == 'NO_COVER':
+                continue
+            candidate_file = os.path.join(get_covers_dir(), candidate_cover)
+            try:
+                if os.path.isfile(candidate_file) and os.path.getsize(candidate_file) > 0:
+                    shared_cover_image = candidate_cover
+                    break
+            except OSError:
+                continue
+
+    folder_book_paths = [
+        canonical_path(_full_path_for(root, filename, gdrive_file_ids))
+        for filename in media_files
+    ]
+    if has_imgdir_candidate:
+        folder_book_paths.append(canonical_path(imgdir_virtual_path))
+    folder_cover_recheck_needed = bool(
+        use_folder_cover and shared_cover_image and db_book_ids and any(
+            path in db_book_ids and db_cover_images.get(path) != shared_cover_image
+            for path in folder_book_paths
+        )
+    )
+
     # 2. Early skip if files are unchanged (mtime & size match DB cache)
     skipped_files = set()
     imgdir_skip = False
-    imgdir_virtual_path = join_canonical(root, IMGDIR_VIRTUAL_FILENAME)
     if not force and db_files_cache:
         for filename in media_files:
             full_path = _full_path_for(root, filename, gdrive_file_ids)
@@ -176,6 +289,22 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                     
                     if int(c_mtime) == int(p_mtime) and c_size == p_size:
                         file_ext = os.path.splitext(filename)[1].lower()
+                        if (
+                            full_path in db_metadata_title_unchecked
+                            and file_ext in SUPPORTED_METADATA_TITLE_FORMATS
+                        ):
+                            # Existing unchanged rows from older scanners have not
+                            # had a chance to populate metadata_title yet.
+                            # Process them once; the DB marker is set after the
+                            # result is committed, even when the file has no title.
+                            continue
+                        if (
+                            full_path in db_embedded_metadata_outdated
+                            and file_ext.lstrip('.') in EMBEDDED_METADATA_FORMATS
+                        ):
+                            # A legacy row can look complete in its headline
+                            # fields while newer embedded fields were never read.
+                            continue
                         if file_ext in ('.zip', '.cbz') and not is_remote and full_path not in db_offsets_cached:
                             continue
                         # TXT는 오프셋/표지 강제 재시도가 필요 없으므로 mtime/size 동일 시 바로 스킵
@@ -211,7 +340,43 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             and (not has_imgdir_candidate or imgdir_skip)
         )
         if all_files_skipped:
-            if not has_yaml and not has_xml:
+            cached_paths_missing_banner = set(db_banner_missing or ())
+            has_cached_book_without_banner = bool(
+                can_read_folder_banner
+                and cached_paths_missing_banner.intersection(folder_book_paths)
+            )
+            has_cached_book_with_banner = any(
+                db_banner_images.get(full_path) for full_path in folder_book_paths
+            )
+            banner_sidecar_listed = any(
+                filename.lower() in COMMON_BANNER_NAMES for filename in files
+            )
+            banner_source_candidate = banner_sidecar_listed
+            if (has_cached_book_without_banner or has_cached_book_with_banner) and not banner_source_candidate:
+                try:
+                    banner_source_candidate = bool(find_common_banner(root))
+                except Exception as banner_probe_error:
+                    # Let the normal extraction path report the read failure.
+                    print(f"[Scanner-DEBUG-Task] ⚠️ Banner sidecar probe failed ('{root}'): {banner_probe_error}")
+                    banner_source_candidate = True
+
+            # Folder mtimes do not change when an existing sidecar is edited in
+            # place, and mounted rclone paths deliberately have unknown (0)
+            # mtimes. Recheck folders with a stored banner, a visible sidecar,
+            # or remote YAML so normal scans detect replacement/removal.
+            banner_recheck_needed = bool(
+                can_read_folder_banner
+                and (
+                    has_cached_book_with_banner
+                    or banner_source_candidate
+                    or (is_remote and has_yaml)
+                )
+            )
+            if banner_recheck_needed:
+                print(f"[Scanner-DEBUG-Task] 🖼️ Checking folder banner source during normal scan: '{root}'")
+            elif folder_cover_recheck_needed:
+                print(f"[Scanner-DEBUG-Task] 🖼️ Applying changed shared cover to cached books: '{root}'")
+            elif not has_yaml and not has_xml:
                 print(f"[Scanner-DEBUG-Task] ⚡ [Ultra-fast skip] All files unchanged (mtime/size match) - folder: '{root}'")
                 return None
             else:
@@ -221,7 +386,8 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                         c_dir_mtime, c_meta_mtime = cached_mtimes
                         if int(c_dir_mtime) == int(dir_mtime) and int(c_meta_mtime) == int(meta_mtime):
                             print(f"[Scanner-DEBUG-Task] ⚡ [Ultra-fast skip] All files unchanged and meta mtime unchanged - folder: '{root}'")
-                            return None
+                            if not banner_recheck_needed and not folder_cover_recheck_needed:
+                                return None
                         else:
                             print(f"[Scanner-DEBUG-Task] ⚠️ [Ultra-fast skip failed] mtime changed (dir: {int(c_dir_mtime)}->{int(dir_mtime)}, meta: {int(c_meta_mtime)}->{int(meta_mtime)}) - folder: '{root}'")
 
@@ -238,6 +404,25 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
 
     parser_warnings = merged_meta.pop('parser_warnings', [])
 
+    banner_source_checked = can_read_folder_banner
+    banner_sidecar_listed = any(
+        filename.lower() in COMMON_BANNER_NAMES for filename in files
+    )
+    banner_source_present = bool(merged_meta.get('banner_b64')) or banner_sidecar_listed
+    has_cached_book_with_banner = any(
+        db_banner_images.get(full_path) for full_path in folder_book_paths
+    )
+    if can_read_folder_banner and has_cached_book_with_banner and not banner_source_present:
+        try:
+            banner_source_present = banner_source_present or bool(find_common_banner(root))
+        except Exception as banner_probe_error:
+            # An I/O failure must preserve the old DB reference instead of
+            # interpreting an unreadable remote source as intentional removal.
+            banner_source_checked = False
+            print(f"[Scanner-DEBUG-Task] ⚠️ Banner source probe failed ('{root}'): {banner_probe_error}")
+    if has_yaml and parser_warnings:
+        banner_source_checked = False
+
     meta_has_data = bool(
         merged_meta['author'] or merged_meta['publisher'] or
         merged_meta['summary'] or merged_meta['release_date'] or
@@ -248,14 +433,15 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
     is_series_folder = bool(merged_meta.get('has_yaml') and merged_meta.get('is_webtoon'))
     is_json_only_webtoon = bool(not merged_meta.get('has_yaml') and merged_meta.get('is_webtoon'))
     series_cover_url = merged_meta.get('cover_image_url', '') if is_json_only_webtoon else ''
-    shared_cover_image = None
+    # shared_cover_image may already contain cover.jpg or the first cached
+    # volume cover. If not, the first successful extraction below becomes it.
 
     # 배너는 표지와 달리 권마다 다를 필요 없는 시리즈/폴더 단위 히어로 이미지라, 폴더당
     # 한 번만 확보해 그 폴더의 모든 도서 결과에 동일하게 반영한다 (공유 드라이브 도서관리
     # 담당자와 합의된 범위: 메타 YAML의 banner 필드 우선, 없으면 폴더 내 loose banner.<ext>,
     # 둘 다 없으면 표지처럼 zip/epub 내부를 강제로 뒤지지 않고 그냥 비워둔다).
     shared_banner_image = None
-    if not is_remote and media_files:
+    if can_read_folder_banner and media_files:
         try:
             banner_seed_path = _full_path_for(root, media_files[0], gdrive_file_ids)
             shared_banner_image = get_folder_banner(banner_seed_path, root, banner_b64=merged_meta.get('banner_b64'), force=force, library_id=library_id)
@@ -266,12 +452,27 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
     results = []
     errors = list(parser_warnings)
     for filename in media_files:
+        if cancellation_requested():
+            print(f"[Scanner-Cancel] Folder stopped before file processing: '{root}'")
+            return None
         full_path = _full_path_for(root, filename, gdrive_file_ids)
+        # Folder metadata is shared, but ComicInfo.xml belongs to this archive.
+        # Keep a per-book copy so one volume cannot leak its rating/author into
+        # the sibling volumes in the same series folder.
+        book_meta = dict(merged_meta)
+        book_meta['cover_b64_map'] = merged_meta.get('cover_b64_map', {})
         _, ext = os.path.splitext(filename)
         file_format = ext.replace('.', '').lower()
 
         skip = False
-        if not force and not meta_has_data and full_path in db_meta_full and full_path in db_offsets_cached:
+        if (
+            not force
+            and not meta_has_data
+            and full_path in db_meta_full
+            and full_path in db_offsets_cached
+            and full_path not in db_metadata_title_unchecked
+            and full_path not in db_embedded_metadata_outdated
+        ):
             skip = True
         elif filename in skipped_files:
             skip = True
@@ -279,15 +480,27 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
         cover_image = None
         offsets_data = []
         offset_only = False  # Cover/meta complete, offset-only fast path flag
+        needs_folder_cover_update = bool(
+            batch_cover_image
+            and db_book_ids
+            and canonical_path(full_path) in db_book_ids
+            and db_cover_images.get(canonical_path(full_path)) != batch_cover_image
+        )
+        folder_cover_only_update = bool(skip and needs_folder_cover_update)
 
         if skip:
-            pass  # Fully cached book — skip all processing
+            if folder_cover_only_update:
+                cover_image = batch_cover_image
+            # Fully cached book — only emit a minimal cover update when its shared
+            # folder-cover reference differs from the configured sidecar.
 
         elif (
             not force and
             not meta_has_data and
             full_path in db_meta_full and
             full_path not in db_offsets_cached and
+            full_path not in db_metadata_title_unchecked and
+            full_path not in db_embedded_metadata_outdated and
             file_format in ('zip', 'cbz') and
             (not is_remote or root.startswith(('gdrive:', 'gdrive://')))
         ):
@@ -297,6 +510,9 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             # Only read ZIP central directory (collect offsets) - Minimize I/O
             # (gdrive:// 가상 경로면 전체 다운로드 없이 Range 요청만으로 처리 — _compute_offsets 참조)
             offset_only = True
+            if needs_folder_cover_update:
+                folder_cover_only_update = True
+                cover_image = batch_cover_image
             try:
                 offsets_data = _compute_offsets(full_path, filename, is_remote, root, gdrive_file_ids)
                 if offsets_data:
@@ -316,52 +532,79 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             # ── [General Path] Cover extraction + Offset collection ──
             print(f"[Scanner-DEBUG-Task]   - File processing started: '{filename}'")
             try:
-                # [ComicInfo.xml parsing] If local file and CBZ format, extract metadata internally
-                # Skip remote paths due to high I/O cost -> delegated to Lazy Scanner
-                if not is_remote and file_format in ('cbz', 'zip') and (
-                    not merged_meta['author'] or not merged_meta['summary'] or not merged_meta.get('genre') or not merged_meta.get('tags')
-                    or not merged_meta.get('cover_artist') or not merged_meta.get('teams')
-                    or not merged_meta.get('locations') or not merged_meta.get('characters')
-                    or not merged_meta.get('books_lv')
+                embedded_metadata_checked = file_format in EMBEDDED_METADATA_FORMATS and (
+                    is_remote and root.startswith(('gdrive:', 'gdrive://'))
+                )
+                if cancellation_requested():
+                    print(f"[Scanner-Cancel] File skipped before metadata processing: '{filename}'")
+                    return None
+                # A mounted rclone/FUSE path can be opened like a local ZIP;
+                # only API-backed gdrive:// paths must defer archive reads.
+                can_read_comicinfo = not (is_remote and root.startswith(('gdrive:', 'gdrive://')))
+                comicinfo_fields = (
+                    'title', 'author', 'localized_series', 'cover_artist', 'teams',
+                    'locations', 'characters', 'publisher', 'summary',
+                    'release_date', 'genre', 'tags', 'books_lv', 'link',
+                )
+                if file_format in ('cbz', 'zip') and can_read_comicinfo and any(
+                    not book_meta.get(key) for key in comicinfo_fields
                 ):
                     try:
-                        comicinfo = parse_comicinfo_from_cbz(full_path)
-                        if comicinfo['author'] and not merged_meta['author']:
-                            merged_meta['author'] = comicinfo['author']
+                        comicinfo_status = {}
+                        comicinfo = parse_comicinfo_from_cbz(
+                            full_path, is_remote=is_remote, status_out=comicinfo_status
+                        )
+                        _merge_comicinfo_fallback(book_meta, comicinfo)
+                        embedded_metadata_checked = bool(comicinfo_status.get('parsed'))
+                        if comicinfo.get('author') and book_meta.get('author') == comicinfo['author']:
                             print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml author fallback: {comicinfo['author']}")
-                        if comicinfo.get('cover_artist') and not merged_meta.get('cover_artist'):
-                            merged_meta['cover_artist'] = comicinfo['cover_artist']
-                        if comicinfo.get('teams') and not merged_meta.get('teams'):
-                            merged_meta['teams'] = comicinfo['teams']
-                        if comicinfo.get('locations') and not merged_meta.get('locations'):
-                            merged_meta['locations'] = comicinfo['locations']
-                        if comicinfo.get('characters') and not merged_meta.get('characters'):
-                            merged_meta['characters'] = comicinfo['characters']
-                        if comicinfo.get('books_lv') and not merged_meta.get('books_lv'):
-                            merged_meta['books_lv'] = comicinfo['books_lv']
-                        if comicinfo['publisher'] and not merged_meta['publisher']:
-                            merged_meta['publisher'] = comicinfo['publisher']
-                        if comicinfo['summary'] and not merged_meta['summary']:
-                            merged_meta['summary'] = comicinfo['summary']
-                        if comicinfo['release_date'] and not merged_meta['release_date']:
-                            merged_meta['release_date'] = comicinfo['release_date']
-                        if comicinfo.get('genre') and not merged_meta.get('genre'):
-                            merged_meta['genre'] = comicinfo['genre']
-                        if comicinfo.get('tags') and not merged_meta.get('tags'):
-                            merged_meta['tags'] = comicinfo['tags']
+                        if comicinfo.get('books_lv') and book_meta.get('books_lv') == comicinfo['books_lv']:
+                            print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml AgeRating fallback: {comicinfo['books_lv']}")
                     except Exception as ce:
                         print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml parsing skipped: {ce}")
+                elif file_format in ('cbz', 'zip') and can_read_comicinfo:
+                    embedded_metadata_checked = True
+
+                defer_local_epub_metadata = (
+                    file_format == 'epub'
+                    and not is_remote
+                    and not root.startswith(('gdrive:', 'gdrive://'))
+                )
+                epub_embedded_meta = {}
+                epub_opf_read = {}
+                embedded_status = {}
+                if (
+                    file_format in ('epub', 'pdf')
+                    and not defer_local_epub_metadata
+                    and not (is_remote and root.startswith(('gdrive:', 'gdrive://')))
+                ):
+                    embedded_meta = parse_embedded_metadata(
+                        full_path, file_format, is_remote=is_remote, status_out=embedded_status
+                    )
+                    embedded_metadata_checked = bool(embedded_status.get('parsed'))
+                    if embedded_meta:
+                        merge_embedded_metadata(book_meta, embedded_meta)
+                        print(
+                            f"[Scanner-DEBUG-Task]     - {file_format.upper()} embedded metadata loaded: "
+                            f"{', '.join(sorted(embedded_meta))}"
+                        )
+
+                if cancellation_requested():
+                    print(f"[Scanner-Cancel] File skipped before cover processing: '{filename}'")
+                    return None
 
                 # Convert keys to lowercase to prevent case issues in Linux
                 filename_lower = filename.lower()
-                b64_keys_lower = {k.lower(): v for k, v in merged_meta['cover_b64_map'].items()}
+                b64_keys_lower = {k.lower(): v for k, v in book_meta['cover_b64_map'].items()}
                 
-                if filename_lower in b64_keys_lower:
+                if batch_cover_image:
+                    cover_image = batch_cover_image
+                elif filename_lower in b64_keys_lower:
                     print(f"[Scanner-DEBUG-Task]     - YAML b64 cover decoding started")
                     cover_image = extract_cover_from_b64(full_path, b64_keys_lower[filename_lower], force=force, library_id=library_id)
                 
                 if not cover_image:
-                    if (is_series_folder or is_json_only_webtoon) and shared_cover_image:
+                    if (use_folder_cover or is_series_folder or is_json_only_webtoon) and shared_cover_image:
                         print(f"[Scanner-DEBUG-Task]     - Series cover (thumbnail) cloned")
                         cover_image = shared_cover_image
                     elif is_json_only_webtoon and series_cover_url:
@@ -369,10 +612,39 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                         cover_image = download_cover_from_url(full_path, series_cover_url, force=force, library_id=library_id)
                     else:
                         print(f"[Scanner-DEBUG-Task]     - Fallback cover extraction started")
-                        cover_image = get_series_cover_fallback(series_name, root, force=force, is_remote=is_remote, filename=filename, file_path=full_path, library_id=library_id)
+                        cover_image = get_series_cover_fallback(
+                            series_name,
+                            root,
+                            force=force,
+                            is_remote=is_remote,
+                            filename=filename,
+                            file_path=full_path,
+                            library_id=library_id,
+                            epub_metadata_out=epub_embedded_meta if defer_local_epub_metadata else None,
+                            epub_opf_read_out=epub_opf_read if defer_local_epub_metadata else None,
+                        )
+
+                if defer_local_epub_metadata:
+                    if not epub_opf_read.get('parsed'):
+                        # If a sidecar or loose image supplied the cover, the archive
+                        # was not opened by cover extraction; parse OPF once now.
+                        embedded_status = {}
+                        epub_embedded_meta = parse_embedded_metadata(
+                            full_path, 'epub', is_remote=False, status_out=embedded_status
+                        )
+                    else:
+                        embedded_status = {'parsed': True}
+                    embedded_metadata_checked = bool(
+                        epub_opf_read.get('parsed') or embedded_status.get('parsed')
+                    )
+                    if epub_embedded_meta:
+                        merge_embedded_metadata(book_meta, epub_embedded_meta)
+                        print(f"[Scanner-DEBUG-Task]     - EPUB embedded metadata loaded: {', '.join(sorted(epub_embedded_meta))}")
                 
                 # Save first successful cover as shared thumbnail for series folder regardless of source
-                if (is_series_folder or is_json_only_webtoon) and cover_image and not shared_cover_image:
+                if use_folder_cover and cover_image and not shared_cover_image:
+                    shared_cover_image = cover_image
+                elif (is_series_folder or is_json_only_webtoon) and cover_image and not shared_cover_image:
                     shared_cover_image = cover_image
 
                 # Real-time check if extracted cover is 0 bytes
@@ -440,6 +712,9 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                 })
 
             try:
+                if cancellation_requested():
+                    print(f"[Scanner-Cancel] File skipped before offset processing: '{filename}'")
+                    return None
                 if file_format in ('zip', 'cbz') and (force or full_path not in db_offsets_cached):
                     print(f"[Scanner-DEBUG-Task]     - Offset analysis started: '{filename}'")
                     offsets_data = _compute_offsets(full_path, filename, is_remote, root, gdrive_file_ids)
@@ -470,21 +745,42 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             'title': None,
             'cover_image': cover_image,
             'banner_image': shared_banner_image,
+            'clear_banner': bool(
+                banner_source_checked
+                and db_banner_images.get(full_path)
+                and not banner_source_present
+            ),
             'offsets_data': offsets_data,
             'skip': skip,
             'offset_only': offset_only,  # Whether it's offset-only fast path
+            'embedded_metadata_checked': (
+                embedded_metadata_checked if not skip and not offset_only else False
+            ),
+            'folder_cover_only': folder_cover_only_update,
             'file_mtime': f_mtime,
             'file_size': f_size,
+            'merged_meta': {
+                key: value for key, value in book_meta.items()
+                if key not in ('cover_b64_map', 'parser_warnings')
+            },
         })
+        report_progress('item_done', full_path)
 
     if has_imgdir_candidate:
         # 이미지 폴더(imgdir)는 "현재 폴더=책", "부모 폴더=시리즈" 규칙을 사용한다.
         parent_folder = os.path.basename(os.path.dirname(root.rstrip('/')))
         imgdir_series_name = _normalize_series_text(parent_folder) if parent_folder else series_name
         imgdir_title = os.path.basename(root)
-        imgdir_cover = None
+        imgdir_folder_cover_only_update = bool(
+            imgdir_skip
+            and batch_cover_image
+            and db_book_ids
+            and imgdir_virtual_path in db_book_ids
+            and db_cover_images.get(canonical_path(imgdir_virtual_path)) != batch_cover_image
+        )
+        imgdir_cover = batch_cover_image
         imgdir_banner = shared_banner_image
-        if not imgdir_skip:
+        if not imgdir_skip and not imgdir_cover:
             try:
                 imgdir_cover = get_imgdir_cover(root, imgdir_virtual_path, force=force, library_id=library_id)
             except Exception as e:
@@ -495,7 +791,7 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                     'error_type': 'NoCover',
                     'message': f"IMGDIR cover extraction failed: {str(e)}"
                 })
-            if imgdir_banner is None and not is_remote:
+            if imgdir_banner is None and can_read_folder_banner:
                 try:
                     imgdir_banner = get_folder_banner(imgdir_virtual_path, root, banner_b64=merged_meta.get('banner_b64'), force=force, library_id=library_id)
                 except Exception as e:
@@ -521,6 +817,11 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             'title': imgdir_title,
             'cover_image': imgdir_cover,
             'banner_image': imgdir_banner,
+            'clear_banner': bool(
+                banner_source_checked
+                and db_banner_images.get(imgdir_virtual_path)
+                and not banner_source_present
+            ),
             'offsets_data': [],
             'skip': imgdir_skip,
             'offset_only': False,
@@ -542,8 +843,13 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
         'meta_mtime': meta_mtime
     }
 
-def process_folder_covers(parent_dir, folder_rows, is_remote, library_id):
+def process_folder_covers(parent_dir, folder_rows, is_remote, library_id, use_folder_cover=False):
     """Extract covers by folder. Share to rest if first book succeeds."""
+    from utils.sort_helper import natural_sort_key
+    folder_rows = sorted(
+        folder_rows,
+        key=lambda row: natural_sort_key(str(row['file_path'])),
+    )
     merged_meta = merge_local_metadata(parent_dir, is_remote=is_remote)
     
     is_series = bool(merged_meta.get('has_yaml') and merged_meta.get('is_webtoon'))
@@ -553,6 +859,38 @@ def process_folder_covers(parent_dir, folder_rows, is_remote, library_id):
     
     shared_cover = None
     results = []
+
+    if use_folder_cover and not (is_remote and parent_dir.startswith(('gdrive:', 'gdrive://'))):
+        # cover.jpg is the explicit folder-level source. It is generated once
+        # and every unlocked book stores the same DB reference.
+        shared_cover = get_folder_batch_cover(parent_dir, library_id, force=True)
+
+    if use_folder_cover and not shared_cover:
+        # No sidecar: reuse the first valid existing reference. This makes
+        # enabling the option cheap and avoids extracting a second copy.
+        from services.cover_storage_service import get_covers_dir
+        for row in folder_rows:
+            existing_cover = row['cover_image'] if 'cover_image' in row.keys() else None
+            if not existing_cover or existing_cover == 'NO_COVER':
+                continue
+            existing_path = os.path.join(get_covers_dir(), existing_cover)
+            try:
+                if os.path.isfile(existing_path) and os.path.getsize(existing_path) > 0:
+                    shared_cover = existing_cover
+                    break
+            except OSError:
+                continue
+
+    if use_folder_cover and shared_cover:
+        shared_results = []
+        for row in folder_rows:
+            try:
+                metadata_locked = int(row['metadata_locked'] or 0)
+            except (KeyError, IndexError, TypeError):
+                metadata_locked = 0
+            if not metadata_locked:
+                shared_results.append((row['id'], shared_cover))
+        return shared_results
     
     for row in folder_rows:
         book_id = row['id']
@@ -573,7 +911,7 @@ def process_folder_covers(parent_dir, folder_rows, is_remote, library_id):
             cover_image = extract_cover_from_b64(file_path, b64_keys_lower[filename_lower], force=True, library_id=library_id)
         
         # 2) Reuse already shared cover (if series folder) - no file access needed
-        if not cover_image and (is_series or is_json_only) and shared_cover:
+        if not cover_image and shared_cover:
             print(f"[Scanner-Covers] Series cover cloned: '{filename}'")
             cover_image = shared_cover
         
@@ -595,11 +933,12 @@ def process_folder_covers(parent_dir, folder_rows, is_remote, library_id):
 
         
         # Cache upon first successful shared cover
-        if (is_series or is_json_only) and cover_image and not shared_cover:
+        if use_folder_cover and cover_image and not shared_cover:
+            shared_cover = cover_image
+        elif (is_series or is_json_only) and cover_image and not shared_cover:
             shared_cover = cover_image
         
         if cover_image:
             results.append((book_id, cover_image))
     
     return results
-

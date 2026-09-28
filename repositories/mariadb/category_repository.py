@@ -30,11 +30,10 @@ def _dynamic_insert(cursor, table, row, overrides=None, exclude=('id',)):
 class CategoryRepository:
     @staticmethod
     def get_library_groups(db_type):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name, icon, color, sort_order FROM library_groups ORDER BY sort_order ASC, name ASC")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, icon, color, sort_order FROM library_groups ORDER BY sort_order ASC, name ASC")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -104,12 +103,74 @@ class CategoryRepository:
             conn.close()
 
     @staticmethod
-    def get_plugin_group_assignments(db_type):
+    def get_library_kinds(db_type):
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT code, name, is_builtin, sort_order FROM library_kinds ORDER BY sort_order ASC, name ASC")
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def add_library_kind(db_type, code, name):
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
-        cursor.execute("SELECT plugin_id, group_id, sort_order FROM plugin_group_assignments")
-        rows = cursor.fetchall()
-        conn.close()
+        try:
+            cursor.execute(
+                "INSERT INTO library_kinds (code, name, is_builtin, sort_order) VALUES (%s, %s, 0, COALESCE((SELECT next_order FROM (SELECT MAX(sort_order) + 1 AS next_order FROM library_kinds) kinds), 0))",
+                (code, name)
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def edit_library_kind(db_type, code, name):
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE library_kinds SET name = %s WHERE code = %s", (name, code))
+            if cursor.rowcount == 0:
+                raise ValueError('속성을 찾을 수 없습니다.')
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def delete_library_kind(db_type, code):
+        """기본 속성이나 사용 중인 속성은 삭제하지 않는다(사용 중이면 몇 개 카테고리가 쓰는지 알려 준다)."""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT is_builtin FROM library_kinds WHERE code = %s", (code,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError('속성을 찾을 수 없습니다.')
+            if int(row['is_builtin'] or 0) == 1:
+                raise ValueError('기본 속성은 삭제할 수 없습니다. 이름만 바꿀 수 있습니다.')
+            cursor.execute("SELECT COUNT(*) AS used FROM libraries WHERE content_kind = %s", (code,))
+            used = int(cursor.fetchone()['used'] or 0)
+            if used > 0:
+                raise ValueError(f'{used}개 카테고리가 이 속성을 사용 중이라 삭제할 수 없습니다.')
+            cursor.execute("DELETE FROM library_kinds WHERE code = %s", (code,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_plugin_group_assignments(db_type):
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT plugin_id, group_id, sort_order FROM plugin_group_assignments")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -136,28 +197,26 @@ class CategoryRepository:
 
     @staticmethod
     def get_all_libraries(db_type):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM libraries ORDER BY sort_order ASC, name ASC")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM libraries ORDER BY sort_order ASC, name ASC")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def get_libraries_by_user_permissions(db_type, user_id):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT l.* FROM libraries l
-            JOIN user_category_permissions p ON l.id = p.library_id
-            WHERE p.user_id = %s AND p.has_access = 1
-            ORDER BY l.sort_order ASC, l.name ASC
-            """,
-            (user_id,)
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT l.* FROM libraries l
+                JOIN user_category_permissions p ON l.id = p.library_id
+                WHERE p.user_id = %s AND p.has_access = 1
+                ORDER BY l.sort_order ASC, l.name ASC
+                """,
+                (user_id,)
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -177,19 +236,27 @@ class CategoryRepository:
             conn.close()
 
     @staticmethod
-    def add_library(db_type, name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id=None, gdrive_copy_remote=None, gdrive_view_local_mirror_path=None, cover_aspect_ratio='4:3', hide_title=0):
+    def add_library(db_type, name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id=None, gdrive_copy_remote=None, gdrive_view_local_mirror_path=None, cover_aspect_ratio='4:3', hide_title=0, content_kind='unspecified', use_folder_cover=0, grant_existing_users=False):
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
             cursor.execute(
                 """
                 INSERT INTO libraries
-                (name, physical_path, scan_status, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title)
-                VALUES (%s, %s, 'ready', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (name, physical_path, scan_status, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, use_folder_cover, content_kind)
+                VALUES (%s, %s, 'ready', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title)
+                (name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, use_folder_cover, content_kind)
             )
             lib_id = cursor.lastrowid
+            if grant_existing_users:
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO user_category_permissions (user_id, library_id, has_access)
+                    SELECT id, %s, 1 FROM users
+                    """,
+                    (lib_id,),
+                )
             conn.commit()
             return lib_id
         except Exception as e:
@@ -199,17 +266,18 @@ class CategoryRepository:
             conn.close()
 
     @staticmethod
-    def edit_library(db_type, library_id, name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id=None, gdrive_copy_remote=None, gdrive_view_local_mirror_path=None, cover_aspect_ratio='4:3', hide_title=0):
+    def edit_library(db_type, library_id, name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id=None, gdrive_copy_remote=None, gdrive_view_local_mirror_path=None, cover_aspect_ratio='4:3', hide_title=0, content_kind=None, use_folder_cover=0):
+        """content_kind=None이면 기존 속성을 유지한다(인자를 생략한 호출이 값을 지우지 않도록)."""
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
             cursor.execute(
                 """
                 UPDATE libraries
-                SET name = %s, physical_path = %s, is_remote = %s, rclone_rc_url = %s, icon = %s, color = %s, hide_cover = %s, group_id = %s, gdrive_copy_remote = %s, gdrive_view_local_mirror_path = %s, cover_aspect_ratio = %s, hide_title = %s
+                SET name = %s, physical_path = %s, is_remote = %s, rclone_rc_url = %s, icon = %s, color = %s, hide_cover = %s, group_id = %s, gdrive_copy_remote = %s, gdrive_view_local_mirror_path = %s, cover_aspect_ratio = %s, hide_title = %s, use_folder_cover = %s, content_kind = COALESCE(%s, content_kind)
                 WHERE id = %s
                 """,
-                (name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, library_id)
+                (name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, use_folder_cover, content_kind, library_id)
             )
             conn.commit()
         except Exception as e:
@@ -268,6 +336,7 @@ class CategoryRepository:
             cursor.execute("DELETE FROM user_progress WHERE book_id IN (SELECT id FROM books WHERE library_id = %s)", (library_id,))
             cursor.execute("DELETE FROM user_reading_log WHERE book_id IN (SELECT id FROM books WHERE library_id = %s)", (library_id,))
             cursor.execute("DELETE FROM user_favorites WHERE book_id IN (SELECT id FROM books WHERE library_id = %s)", (library_id,))
+            cursor.execute("DELETE FROM tts_progress WHERE book_id IN (SELECT id FROM books WHERE library_id = %s)", (library_id,))
             cursor.execute("DELETE FROM books WHERE library_id = %s", (library_id,))
             
             cursor.execute("SELECT physical_path FROM libraries WHERE id = %s", (library_id,))
@@ -291,34 +360,32 @@ class CategoryRepository:
 
     @staticmethod
     def get_library_by_id(db_type, library_id):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM libraries WHERE id = %s", (library_id,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM libraries WHERE id = %s", (library_id,))
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def check_duplicate_name(db_type, name):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM libraries WHERE name = %s", (name,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM libraries WHERE name = %s", (name,))
+            row = cursor.fetchone()
         return row['id'] if row else None
 
     @staticmethod
-    def insert_library_raw(db_type, name, physical_path, cron_schedule, last_scanned_at, scan_status, is_remote, vfs_refresh_before_scan, rclone_rc_url, icon, color, hide_cover, gdrive_copy_remote=None, gdrive_view_local_mirror_path=None, cover_aspect_ratio='4:3', hide_title=0):
+    def insert_library_raw(db_type, name, physical_path, cron_schedule, last_scanned_at, scan_status, is_remote, vfs_refresh_before_scan, rclone_rc_url, icon, color, hide_cover, gdrive_copy_remote=None, gdrive_view_local_mirror_path=None, cover_aspect_ratio='4:3', hide_title=0, use_folder_cover=0, content_kind='unspecified'):
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
             cursor.execute(
                 """
                 INSERT INTO libraries
-                (name, physical_path, cron_schedule, last_scanned_at, scan_status, is_remote, vfs_refresh_before_scan, rclone_rc_url, icon, color, hide_cover, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (name, physical_path, cron_schedule, last_scanned_at, scan_status, is_remote, vfs_refresh_before_scan, rclone_rc_url, icon, color, hide_cover, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, use_folder_cover, content_kind)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (name, physical_path, cron_schedule, last_scanned_at, scan_status, is_remote, vfs_refresh_before_scan, rclone_rc_url, icon, color, hide_cover, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title)
+                (name, physical_path, cron_schedule, last_scanned_at, scan_status, is_remote, vfs_refresh_before_scan, rclone_rc_url, icon, color, hide_cover, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, use_folder_cover, content_kind)
             )
             lib_id = cursor.lastrowid
             conn.commit()
@@ -331,11 +398,10 @@ class CategoryRepository:
 
     @staticmethod
     def get_books_by_library_raw(db_type, library_id):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM books WHERE library_id = %s", (library_id,))
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM books WHERE library_id = %s", (library_id,))
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -377,6 +443,11 @@ class CategoryRepository:
                 for row in cursor_src.fetchall():
                     _dynamic_insert(cursor_dst, 'user_favorites', dict(row), overrides={'book_id': new_book_id})
 
+                # 기존 읽기 진행 상태 이관과 같은 ID 매핑으로 TTS 듣기/읽기 위치도 승계한다.
+                cursor_src.execute("SELECT * FROM tts_progress WHERE book_id = %s", (old_book_id,))
+                for row in cursor_src.fetchall():
+                    _dynamic_insert(cursor_dst, 'tts_progress', dict(row), overrides={'book_id': new_book_id})
+
             cursor_src.execute("SELECT * FROM user_category_permissions WHERE library_id = %s", (library_id,))
             for row in cursor_src.fetchall():
                 _dynamic_insert(cursor_dst, 'user_category_permissions', dict(row), overrides={'library_id': new_lib_id})
@@ -386,6 +457,7 @@ class CategoryRepository:
                 cursor_src.execute("DELETE FROM user_progress WHERE book_id = %s", (old_book_id,))
                 cursor_src.execute("DELETE FROM user_reading_log WHERE book_id = %s", (old_book_id,))
                 cursor_src.execute("DELETE FROM user_favorites WHERE book_id = %s", (old_book_id,))
+                cursor_src.execute("DELETE FROM tts_progress WHERE book_id = %s", (old_book_id,))
                 
             cursor_src.execute("DELETE FROM books WHERE library_id = %s", (library_id,))
             cursor_src.execute("DELETE FROM user_category_permissions WHERE library_id = %s", (library_id,))
@@ -404,11 +476,10 @@ class CategoryRepository:
 
     @staticmethod
     def get_libraries_name_and_path(db_type):
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name, physical_path FROM libraries")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name, physical_path FROM libraries")
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -430,13 +501,6 @@ class CategoryRepository:
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
-            cursor.execute("SELECT role FROM users WHERE id = %s", (user_id,))
-            user_row = cursor.fetchone()
-            if user_row:
-                role = user_row['role'] if isinstance(user_row, dict) else user_row[0]
-                if role == 'admin':
-                    return True
-
             cursor.execute(
                 "SELECT 1 FROM user_category_permissions WHERE user_id = %s AND library_id = %s AND has_access = 1",
                 (user_id, library_id)

@@ -6,11 +6,12 @@ import { renderDetailHeader, renderVolumesList, renderRecommendList } from '../d
 import { updateCurrentCategoryIndicator } from '../category_indicator.js';
 import { detailVolumeViewState } from './volume_controller.js';
 import { encodeDetailParams } from '../url_obfuscator.js';
-import { bindDetailInteractions } from './interactions.js';
-import { createBookCard } from '../ui.js';
+import { bindDetailInteractions } from './interactions.js?rev=20260927-tts-listen-v1';
+import { createBookCard } from '../ui.js?v=20260922-series-progress-v1';
 import './volume_context_menu.js';
 
 bindDetailInteractions();
+let detailRequestSerial = 0;
 
 if (!document.body.dataset.detailBackDelegated) {
   document.body.dataset.detailBackDelegated = '1';
@@ -26,6 +27,7 @@ if (!document.body.dataset.detailBackDelegated) {
 export async function openBookDetail(event, seriesName, libraryId, representativeBookId = null, displayTitle = '') {
   const detailView = document.getElementById('book-detail-view');
   if (!detailView) return;
+  const requestSerial = ++detailRequestSerial;
 
   // 현재 탭에서의 상세 뷰 활성 세션 기록 (새 탭 진입 보안 구분을 위함)
   try {
@@ -55,17 +57,9 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
     console.log(`[Scroll-Debug] PRESERVED existing scroll position: ${state.scrollPositions ? state.scrollPositions['last_pos'] : 0}px (Detail view already open)`);
   }
 
-  // 로딩 표시
-  detailView.innerHTML = `
-    <button class="btn-back-to-list" data-role="detail-back-to-list">
-      <i class="fa-solid fa-arrow-left"></i> ${i18n.t('modal.go_back')}
-    </button>
-    <div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> ${i18n.t('modal.loading_detail')}</div>
-  `;
-  switchActiveView('detail');
-
   try {
     const data = await api.fetchMediaDetail(state.currentLibraryType, activeLibId, safeSeriesName, representativeBookId);
+    if (requestSerial !== detailRequestSerial) return;
 
     if (data.success) {
       const meta = data.meta;
@@ -74,6 +68,7 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
       state.detailSeriesName = safeSeriesName;
       state.detailLibraryId = actualLibraryId;
       state.detailRepresentativeBookId = representativeBookId || (books.length > 0 ? books[0].id : null);
+      state.detailBookIds = books.map(book => Number(book.id)).filter(Number.isFinite);
       state.detailDisplayTitle = safeDisplayTitle;
       state.detailMeta = meta;
       updateCurrentCategoryIndicator(actualLibraryId);
@@ -100,6 +95,34 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
           console.error(`[Detail] 플러그인 상세뷰 번들 로드 실패 (${detailViewPluginId}):`, err);
         }
       }
+      if (requestSerial !== detailRequestSerial) return;
+
+      // Opt-in providers can prepare their authoritative metadata before the
+      // detail DOM is replaced, so exclusions and dates never flash old values.
+      let initialDetailData = null;
+      if (pluginDetailBundle?.initial_data_mode) {
+        const params = new URLSearchParams({
+          type: state.currentLibraryType || 'general',
+          book_id: String(books[0]?.id || meta.id || ''),
+          mode: pluginDetailBundle.initial_data_mode,
+          limit: '18',
+        });
+        const response = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(detailViewPluginId)}/data?${params}`, {
+          cache: 'no-store', signal: AbortSignal.timeout(60000),
+        });
+        initialDetailData = await response.json();
+        if (!response.ok || !initialDetailData.success) throw new Error('상세정보 준비에 실패했습니다.');
+        if (requestSerial !== detailRequestSerial) return;
+      }
+
+      const mainContent = document.querySelector('.library-main-content');
+      const pluginDetailActive = Boolean(pluginDetailBundle);
+      if (mainContent) mainContent.classList.toggle('detail-plugin-view', pluginDetailActive);
+      const mediaContainer = mainContent?.closest('.media-library-container');
+      if (mediaContainer) mediaContainer.classList.toggle('detail-plugin-view', pluginDetailActive);
+      const mainWrapper = mainContent?.closest('.main-wrapper');
+      if (mainWrapper) mainWrapper.classList.toggle('detail-plugin-view', pluginDetailActive);
+      detailView.classList.toggle('detail-plugin-view', pluginDetailActive);
 
       let mainContentHtml;
       if (pluginDetailBundle) {
@@ -119,9 +142,6 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
       }
 
       detailView.innerHTML = `
-        <button class="btn-back-to-list" data-role="detail-back-to-list">
-          <i class="fa-solid fa-arrow-left"></i> ${i18n.t('modal.go_back')}
-        </button>
         <div class="detail-page-layout">
           <div class="detail-page-main" id="detail-page-main-content">
             ${mainContentHtml}
@@ -130,15 +150,32 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
         </div>
       `;
 
+      // Suppress native image/link drag ghosts without blocking text selection.
+      detailView.ondragstart = (event) => {
+        if (event.target.closest?.('img') || event.target.querySelector?.('img')) event.preventDefault();
+      };
+
       if (pluginDetailBundle && pluginDetailBundle.js) {
         try {
           const mainEl = document.getElementById('detail-page-main-content');
           const scriptFn = new Function('pluginId', 'container', 'context', pluginDetailBundle.js);
-          scriptFn(detailViewPluginId, mainEl, { meta, books, seriesName: safeSeriesName, libraryId: actualLibraryId });
+          scriptFn(detailViewPluginId, mainEl, {
+            meta,
+            books,
+            initialDetailData,
+            seriesName: safeSeriesName,
+            libraryId: actualLibraryId,
+            type: state.currentLibraryType || 'general',
+          });
         } catch (err) {
           console.error(`[Detail] 플러그인 상세뷰 스크립트 실행 오류 (${detailViewPluginId}):`, err);
         }
       }
+
+      // 데이터와 상세 번들을 모두 준비한 뒤 화면을 전환한다. 클릭 직후
+      // 코어의 로딩 버튼이나 플러그인의 빈 프레임이 잠깐 보이지 않는다.
+      switchActiveView('detail');
+      updateCurrentCategoryIndicator(actualLibraryId);
 
       // 도서 상세 사이드바 위젯(플러그인) 로드 - 본문 렌더링을 막지 않도록 논블로킹으로 로드.
       // 예전엔 "이 작가의 다른 도서"가 코어에 하드코딩돼 있었으나, 플러그인 개발자들이
@@ -202,10 +239,28 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
           };
           try {
             const res = await api.fetchRatingWidget(libType, ratingContext);
-            if (!res.success) return; // 활성 provider 없음 - 기존 정적 별 유지
-            renderInteractiveRatingStars(scoreRoot, libType, ratingContext, res);
+            if (res.success) {
+              renderInteractiveRatingStars(scoreRoot, libType, ratingContext, res);
+              return;
+            }
+            if (libType !== 'general') return;
+            // 일반도서에서는 조회가 일시적으로 실패해도 별표를 정적 텍스트로
+            // 남기지 않는다. 클릭 시 제출 API의 오류를 알려 재시도할 수 있게 한다.
+            console.warn('[Detail] 별점 조회가 실패했습니다:', res.error || '알 수 없는 오류');
+            renderInteractiveRatingStars(scoreRoot, libType, ratingContext, {
+              average: 0,
+              count: 0,
+              my_rating: Math.max(0, Math.min(5, Math.round((Number(meta.score) || 0) / 20 * 2) / 2)),
+            });
           } catch (err) {
             console.error('[Detail] 별점 위젯 로드 실패:', err);
+            if (libType === 'general' && scoreRoot.isConnected) {
+              renderInteractiveRatingStars(scoreRoot, libType, ratingContext, {
+                average: 0,
+                count: 0,
+                my_rating: Math.max(0, Math.min(5, Math.round((Number(meta.score) || 0) / 20 * 2) / 2)),
+              });
+            }
           }
         })();
       }
@@ -292,30 +347,51 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
         type: currentType
       });
       const detailHash = `#detail?${obfuscatedQuery}`;
+      const previousHistoryState = history.state;
+      const previousReturnState = previousHistoryState?.view === 'detail'
+        ? (previousHistoryState.returnState || null)
+        : (previousHistoryState && typeof previousHistoryState === 'object' ? previousHistoryState : null);
+      const returnLibraryId = previousReturnState?.libraryId ?? state.currentLibraryId;
+      const savedReturnScroll = state.scrollPositions?.[String(returnLibraryId)]
+        ?? state.scrollPositions?.last_pos
+        ?? 0;
+      const returnState = previousReturnState
+        ? {
+          ...previousReturnState,
+          scrollTop: previousReturnState.scrollTop ?? Number(savedReturnScroll),
+        }
+        : null;
+      const detailHistoryState = {
+        view: 'detail',
+        type: currentType,
+        series: safeSeriesName,
+        libraryId: actualLibraryId,
+        sourceLibraryId: state.currentLibraryId || actualLibraryId,
+        repBookId: repIdForHistory || null,
+        displayTitle: displayTitleForHistory || null,
+        returnState,
+      };
 
       if (!window.location.hash.startsWith('#detail')) {
-        history.pushState({ view: 'detail', type: currentType, series: safeSeriesName, libraryId: actualLibraryId, repBookId: repIdForHistory || null, displayTitle: displayTitleForHistory || null }, '', detailHash);
+        history.pushState(detailHistoryState, '', detailHash);
       } else {
-        history.replaceState({ view: 'detail', type: currentType, series: safeSeriesName, libraryId: actualLibraryId, repBookId: repIdForHistory || null, displayTitle: displayTitleForHistory || null }, '', detailHash);
+        history.replaceState(detailHistoryState, '', detailHash);
       }
 
       if (!isAlreadyOpen) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } else {
+      switchActiveView('detail');
       detailView.innerHTML = `
-        <button class="btn-back-to-list" data-role="detail-back-to-list">
-          <i class="fa-solid fa-arrow-left"></i> ${i18n.t('modal.go_back')}
-        </button>
         <div class="loading-spinner">${i18n.t('modal.load_detail_fail', {error: data.error || ''})}</div>
       `;
     }
   } catch (e) {
+    if (requestSerial !== detailRequestSerial) return;
     console.error('[detail] openBookDetail 에러:', e);
+    switchActiveView('detail');
     detailView.innerHTML = `
-      <button class="btn-back-to-list" data-role="detail-back-to-list">
-        <i class="fa-solid fa-arrow-left"></i> ${i18n.t('modal.go_back')}
-      </button>
       <div class="loading-spinner">${i18n.t('modal.load_detail_error')}</div>
     `;
   }
@@ -340,6 +416,7 @@ function escapeHtml(str) {
 function renderInteractiveRatingStars(root, libType, ratingContext, widgetData) {
   const COMMIT_DELAY_MS = 400; // 표준 더블클릭 간격보다 넉넉히 길게 잡아 오조작을 줄인다
   let pendingTimer = null;
+  let previewRating = null;
 
   const starClass = (state) => {
     if (state === 'full') return 'fa-solid fa-star is-filled';
@@ -358,6 +435,16 @@ function renderInteractiveRatingStars(root, libType, ratingContext, widgetData) 
       starsHtml += `<i class="detail-score-star ${starClass(state)}" data-rating="${i}"></i>`;
     }
     root.innerHTML = `<span class="detail-score-interactive"${disabled ? ' data-disabled="1"' : ''}>${starsHtml}</span>${avgText}`;
+  };
+
+  const paintPreview = (rating) => {
+    const shown = Math.max(0, Math.min(5, Math.round((Number(rating) || 0) * 2) / 2));
+    root.querySelectorAll('.detail-score-star').forEach((starEl) => {
+      const starIndex = Number(starEl.dataset.rating);
+      if (!Number.isFinite(starIndex)) return;
+      const state = shown >= starIndex ? 'full' : (shown >= starIndex - 0.5 ? 'half' : 'empty');
+      starEl.className = `detail-score-star ${starClass(state)}`;
+    });
   };
 
   draw(widgetData, false);
@@ -397,6 +484,37 @@ function renderInteractiveRatingStars(root, libType, ratingContext, widgetData) 
       pendingTimer = null;
       commit(halfRating);
     }, COMMIT_DELAY_MS);
+  });
+
+  root.addEventListener('pointerover', (event) => {
+    const starEl = event.target.closest?.('.detail-score-star');
+    if (!starEl || root.querySelector('[data-disabled="1"]')) return;
+    const starIndex = parseInt(starEl.dataset.rating, 10);
+    if (!Number.isFinite(starIndex)) return;
+    previewRating = starIndex;
+    paintPreview(previewRating);
+  });
+
+  root.addEventListener('pointerleave', () => {
+    if (root.querySelector('[data-disabled="1"]')) return;
+    previewRating = null;
+    paintPreview(widgetData.my_rating);
+  });
+
+  root.addEventListener('focusin', (event) => {
+    const starEl = event.target.closest?.('.detail-score-star');
+    if (!starEl || root.querySelector('[data-disabled="1"]')) return;
+    const starIndex = parseInt(starEl.dataset.rating, 10);
+    if (!Number.isFinite(starIndex)) return;
+    previewRating = starIndex;
+    paintPreview(previewRating);
+  });
+
+  root.addEventListener('focusout', (event) => {
+    if (event.relatedTarget && root.contains(event.relatedTarget)) return;
+    if (root.querySelector('[data-disabled="1"]')) return;
+    previewRating = null;
+    paintPreview(widgetData.my_rating);
   });
 
   root.addEventListener('dblclick', (event) => {
@@ -466,6 +584,15 @@ function renderDetailSidebarWidgetItem(item, fallbackLibraryId) {
 
 // 상세 뷰 → 그리드 뷰/대시보드 복귀
 export function goBackToList(triggerBack = true) {
+  ++detailRequestSerial;
+  const mainContent = document.querySelector('.library-main-content');
+  const detailView = document.getElementById('book-detail-view');
+  if (mainContent) mainContent.classList.remove('detail-plugin-view');
+  const mediaContainer = mainContent?.closest('.media-library-container');
+  if (mediaContainer) mediaContainer.classList.remove('detail-plugin-view');
+  const mainWrapper = mainContent?.closest('.main-wrapper');
+  if (mainWrapper) mainWrapper.classList.remove('detail-plugin-view');
+  if (detailView) detailView.classList.remove('detail-plugin-view');
   updateCurrentCategoryIndicator(state.currentLibraryId);
 
   const isMobileLayout = window.matchMedia('(max-width: 1200px)').matches;
@@ -514,6 +641,11 @@ export function goBackToList(triggerBack = true) {
     } catch (e) {
       console.warn('[goBackToList] failed to restore scroll', e);
     }
+  }
+
+  // 상세를 보는 동안 스캔이 끝났다면 그사이 무효화된 목록만 지금 다시 불러온다.
+  if (state.currentLibraryId !== 'home' && typeof window.refreshBooksListIfStale === 'function') {
+    window.refreshBooksListIfStale();
   }
 
   // 상세 뷰 해시(#detail)가 남아있는 경우 브라우저 외부/홈으로 튕김(history.back) 없이 해시만 안전하게 제거

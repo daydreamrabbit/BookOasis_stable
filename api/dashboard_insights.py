@@ -28,7 +28,11 @@ def get_dashboard_insights():
         currently_reading = []
         history_books = []
         try:
-            history_books = ReadingHistoryService.get_history(db_type, user_id=user_id) or []
+            history_books = ReadingHistoryService.get_history(
+                db_type,
+                user_id=user_id,
+                content_rating_max=session.get('content_rating_max', 18),
+            ) or []
             for b in history_books:
                 is_comp = b.get('is_completed', 0) == 1
                 pages_read = b.get('pages_read', 0)

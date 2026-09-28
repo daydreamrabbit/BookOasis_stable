@@ -10,6 +10,6 @@ from tools.scanner.metadata import (
 	parse_series_json,
 	parse_comicinfo_from_cbz,
 )
-from tools.scanner.cover import get_series_cover_fallback, extract_cover_from_b64, download_cover_from_url
+from tools.scanner.cover import get_series_cover_fallback, extract_cover_from_b64, download_cover_from_url, get_folder_banner
 from tools.scanner.offset import collect_zip_offsets, collect_zip_offsets_data
 from tools.scanner.vfs import trigger_vfs_refresh

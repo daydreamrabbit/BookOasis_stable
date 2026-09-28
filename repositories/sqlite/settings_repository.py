@@ -12,11 +12,10 @@ class SettingsRepository:
     @staticmethod
     def get_value(key):
         """특정 설정 키에 대응하는 값 조회"""
-        conn = database.get_connection('general')
-        cursor = conn.cursor()
-        cursor.execute("SELECT `value` FROM settings WHERE `key` = ?", (key,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('general') as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT `value` FROM settings WHERE `key` = ?", (key,))
+            row = cursor.fetchone()
         return row['value'] if row else None
 
     @staticmethod
@@ -40,31 +39,28 @@ class SettingsRepository:
     @staticmethod
     def get_all_settings():
         """general 데이터베이스의 모든 설정 딕셔너리 반환"""
-        conn = database.get_connection('general')
-        cursor = conn.cursor()
-        cursor.execute("SELECT `key`, `value` FROM settings")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('general') as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT `key`, `value` FROM settings")
+            rows = cursor.fetchall()
         return {row['key']: row['value'] for row in rows}
 
     @staticmethod
     def get_settings_by_prefix(prefix):
         """지정된 접두어로 시작하는 설정 키-값 딕셔너리 반환"""
-        conn = database.get_connection('general')
-        cursor = conn.cursor()
-        cursor.execute("SELECT `key`, `value` FROM settings WHERE `key` LIKE ?", (f"{prefix}%",))
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('general') as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT `key`, `value` FROM settings WHERE `key` LIKE ?", (f"{prefix}%",))
+            rows = cursor.fetchall()
         return {row['key']: row['value'] for row in rows}
 
     @staticmethod
     def get_user_value(user_id, key):
         """특정 사용자의 개인화(override) 설정 값 조회"""
-        conn = database.get_connection('general')
-        cursor = conn.cursor()
-        cursor.execute("SELECT `value` FROM user_settings WHERE user_id = ? AND `key` = ?", (user_id, key))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('general') as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT `value` FROM user_settings WHERE user_id = ? AND `key` = ?", (user_id, key))
+            row = cursor.fetchone()
         return row['value'] if row else None
 
     @staticmethod
@@ -89,9 +85,8 @@ class SettingsRepository:
     @staticmethod
     def get_all_user_settings(user_id):
         """특정 사용자의 모든 개인화(override) 설정 딕셔너리 반환"""
-        conn = database.get_connection('general')
-        cursor = conn.cursor()
-        cursor.execute("SELECT `key`, `value` FROM user_settings WHERE user_id = ?", (user_id,))
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('general') as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT `key`, `value` FROM user_settings WHERE user_id = ?", (user_id,))
+            rows = cursor.fetchall()
         return {row['key']: row['value'] for row in rows}

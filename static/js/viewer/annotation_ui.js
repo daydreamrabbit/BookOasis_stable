@@ -24,6 +24,13 @@ const BUTTON_ID = 'annotation-add-btn';
 const TOGGLE_ID = 'annotation-mode-toggle';
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_THRESHOLD = 10;
+const HIGHLIGHT_COLORS = [
+  ['#f4d35e', '노랑'],
+  ['#c9d84a', '연두'],
+  ['#c77dff', '보라'],
+  ['#65d6d0', '청록'],
+  ['#f28b82', '분홍'],
+];
 
 let bound = false;
 let getTxtChunksFn = () => [];
@@ -33,6 +40,7 @@ let longPressTimer = null;
 let longPressStartX = 0;
 let longPressStartY = 0;
 let suppressClickUntil = 0;
+let selectionGestureStartedOnText = false;
 
 function getModalRoot() {
   return document.getElementById('media-viewer-modal') || document.body;
@@ -85,13 +93,10 @@ function syncToggleButtonVisual() {
 }
 
 export function setHighlightMode(active) {
-  // 모바일은 기능 자체가 비활성화 상태(initAnnotationSelectionUI에서 이벤트 바인딩을
-  // 아예 건너뜀) — 실제로 켜져도 선택/추가/삭제가 하나도 안 먹는 반쪽짜리 상태가 되는
-  // 걸 막기 위해, 켜는 시도 자체를 여기서 한 번 더 막는다(방어적 게이트).
-  if (active && getViewerPlatformProfile().isMobileDevice) return;
   highlightModeActive = !!active;
   const hotspot = document.getElementById('common-viewer-hotspot');
-  if (hotspot) hotspot.style.pointerEvents = highlightModeActive ? 'none' : 'auto';
+  const isSelectableText = ['epub', 'txt'].includes(String(state.currentViewerFormat || '').toLowerCase());
+  if (hotspot) hotspot.style.pointerEvents = (highlightModeActive || isSelectableText) ? 'none' : 'auto';
   syncToggleButtonVisual();
   if (!highlightModeActive) {
     hideButton();
@@ -109,7 +114,8 @@ export function setHighlightMode(active) {
 export function resetHighlightMode() {
   highlightModeActive = false;
   const hotspot = document.getElementById('common-viewer-hotspot');
-  if (hotspot) hotspot.style.pointerEvents = 'auto';
+  const isSelectableText = ['epub', 'txt'].includes(String(state.currentViewerFormat || '').toLowerCase());
+  if (hotspot) hotspot.style.pointerEvents = isSelectableText ? 'none' : 'auto';
   syncToggleButtonVisual();
   hideButton();
   hideAnnotationContextMenu();
@@ -135,19 +141,30 @@ export function setAnnotationUiEnabled(enabled) {
 function ensureButton() {
   let btn = document.getElementById(BUTTON_ID);
   if (btn) return btn;
-  btn = document.createElement('button');
+  btn = document.createElement('div');
   btn.id = BUTTON_ID;
-  btn.type = 'button';
-  btn.className = 'context-menu';
-  btn.textContent = '🖍️ 형광펜 추가';
-  btn.style.cssText = [
-    'display:none', 'padding:8px 14px', 'background:#1e293b', 'color:#fbbf24',
-    'border:1px solid rgba(251,191,36,0.5)', 'border-radius:8px', 'font-size:0.85rem',
-    'font-weight:600', 'cursor:pointer', 'box-shadow:0 4px 12px rgba(0,0,0,0.35)',
-    'white-space:nowrap',
-  ].join(';');
+  btn.className = 'viewer-selection-menu';
+  btn.setAttribute('role', 'toolbar');
+  btn.setAttribute('aria-label', '선택한 텍스트 메뉴');
+  btn.innerHTML = `
+    <div class="viewer-selection-colors" aria-label="형광펜 색상">
+      ${HIGHLIGHT_COLORS.map(([color, label]) => `<button type="button" data-selection-color="${color}" aria-label="${label} 형광펜" title="${label} 형광펜" style="--selection-color:${color}"></button>`).join('')}
+    </div>
+    <button type="button" class="viewer-selection-action" data-selection-action="memo"><i class="fa-regular fa-note-sticky"></i><span>메모 추가</span></button>
+    <button type="button" class="viewer-selection-action" data-selection-action="search"><i class="fa-solid fa-magnifying-glass"></i><span>본문 검색</span></button>`;
   getModalRoot().appendChild(btn);
-  btn.addEventListener('click', onAddHighlightClick);
+  // 메뉴 버튼을 누르는 순간 브라우저 선택이 해제되지 않게 한다.
+  btn.addEventListener('mousedown', (event) => event.preventDefault());
+  btn.addEventListener('click', (event) => {
+    const colorButton = event.target.closest('[data-selection-color]');
+    if (colorButton) {
+      createPendingAnnotation({ color: colorButton.dataset.selectionColor });
+      return;
+    }
+    const action = event.target.closest('[data-selection-action]')?.dataset.selectionAction;
+    if (action === 'memo') return addMemoToPendingSelection();
+    if (action === 'search') return searchPendingSelection();
+  });
   return btn;
 }
 
@@ -161,16 +178,49 @@ function findChunkEl(node) {
   return el ? el.closest('.txt-chunk[data-idx], .txt-scroll-chunk[data-idx]') : null;
 }
 
+function isPointOnChunkText(chunk, clientX, clientY) {
+  if (!chunk || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return false;
+  // caretRangeFromPoint()는 Chromium에서 첫 포인터 입력 시 ELEMENT_NODE를 반환하는
+  // 경우가 있어 실제 글자 위 드래그까지 빈 영역으로 오판한다. 텍스트 노드별 렌더링
+  // 사각형을 직접 검사하면 도구 모음 표시 상태나 포커스 유무에 영향을 받지 않는다.
+  const walker = document.createTreeWalker(chunk, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  let node;
+  while ((node = walker.nextNode())) {
+    if (!(node.textContent || '').trim()) continue;
+    range.selectNodeContents(node);
+    if ([...range.getClientRects()].some((rect) => (
+      clientX >= rect.left - 2 && clientX <= rect.right + 2
+      && clientY >= rect.top - 2 && clientY <= rect.bottom + 2
+    ))) return true;
+  }
+  return false;
+}
+
 function isReaderOverlayOpen() {
   const menu = document.getElementById('comic-overlay-menu');
   return !!menu && menu.style.display !== 'none';
 }
 
-function handleSelectionEnd() {
-  if (!highlightModeActive) return;
+let selectionEndGeneration = 0;
+function handleSelectionEnd(event) {
+  const generation = ++selectionEndGeneration;
+  const modal = document.getElementById('media-viewer-modal');
+  const area = document.getElementById('txt-content-area');
+  if (!modal || getComputedStyle(modal).display === 'none' || !area?.contains(event.target)
+      || event.target.closest?.('input, textarea, select, button, [contenteditable="true"]')) return;
+  const startedOnText = selectionGestureStartedOnText;
+  selectionGestureStartedOnText = false;
   // 선택이 브라우저 내부적으로 확정되기까지 짧은 지연 후 확인 (touchend 직후엔 아직 비어있는 경우 있음)
   setTimeout(() => {
+    if (generation !== selectionEndGeneration || getComputedStyle(modal).display === 'none') return;
     const sel = window.getSelection();
+    // selectstart 단계에서 preventDefault()하면 첫 드래그 자체가 취소될 수 있다. 네이티브
+    // 선택은 항상 먼저 완료시키고, 실제 글자 위에서 시작하지 않은 제스처만 사후 정리한다.
+    if (!startedOnText) {
+      hideButton();
+      return;
+    }
     if (!sel || sel.isCollapsed || sel.rangeCount === 0 || sel.toString().trim().length === 0) {
       hideButton();
       return;
@@ -181,8 +231,9 @@ function handleSelectionEnd() {
       hideButton();
       return;
     }
-    const chunkEl = findChunkEl(range.commonAncestorContainer);
-    if (!chunkEl) {
+    const startChunk = findChunkEl(range.startContainer);
+    const endChunk = findChunkEl(range.endContainer);
+    if (!startChunk || startChunk !== endChunk) {
       hideButton();
       return;
     }
@@ -193,16 +244,16 @@ function handleSelectionEnd() {
       return;
     }
 
-    pending = { range: range.cloneRange(), chunkEl };
+    pending = { range: range.cloneRange(), chunkEl: startChunk, quote: sel.toString().trim() };
     const rect = range.getBoundingClientRect();
     const btn = ensureButton();
     // 선택 영역 "아래"에 띄운다. iOS/Android 네이티브 선택 툴바(복사/찾아보기 등)는
     // 공간이 있으면 항상 선택 위쪽에 뜨므로, 아래쪽에 두면 겹칠 확률이 훨씬 낮아진다.
     positionMenuAtPoint(btn, rect.left, rect.bottom + 10);
-  }, 10);
+  }, getViewerPlatformProfile().isMobileDevice ? 180 : 10);
 }
 
-async function onAddHighlightClick() {
+async function createPendingAnnotation({ color = '#f4d35e', note = null } = {}) {
   if (!pending) return;
   const { range, chunkEl } = pending;
   hideButton();
@@ -218,7 +269,7 @@ async function onAddHighlightClick() {
     payload = {
       format: 'epub', chapter_idx: chunkIdx,
       start_offset: anchor.start, end_offset: anchor.end,
-      quote: anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix,
+      quote: anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix, color, note,
     };
   } else {
     // TXT: 청크 로컬(렌더) 오프셋을 그 청크의 raw 시작 오프셋 기준 근사치로 변환해
@@ -228,7 +279,7 @@ async function onAddHighlightClick() {
     payload = {
       format: 'txt', chapter_idx: null,
       start_offset: chunkStartRaw + anchor.start, end_offset: chunkStartRaw + anchor.end,
-      quote: anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix,
+      quote: anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix, color, note,
     };
   }
 
@@ -242,7 +293,7 @@ async function onAddHighlightClick() {
     });
     const data = await res.json();
     if (data && data.success) {
-      const created = { id: data.annotation_id, book_id: bookId, user_id: null, color: '#fbbf24', note: null, plugin_marker: null, ...payload };
+      const created = { id: data.annotation_id, book_id: bookId, user_id: null, plugin_marker: null, ...payload };
       addAnnotationLocal(created);
       wrapRangeWithMark(range, { id: created.id, color: created.color });
     } else if (typeof window.showToast === 'function') {
@@ -251,6 +302,22 @@ async function onAddHighlightClick() {
   } catch (e) {
     console.error('[Annotation] create failed', e);
   }
+}
+
+function addMemoToPendingSelection() {
+  if (!pending) return;
+  const note = window.prompt('선택한 문장에 남길 메모를 입력하세요.');
+  if (note === null) return;
+  createPendingAnnotation({ color: '#f4d35e', note: note.trim() || null });
+}
+
+async function searchPendingSelection() {
+  const query = String(pending?.quote || '').trim();
+  if (!query) return;
+  hideButton();
+  window.getSelection()?.removeAllRanges();
+  const { openViewerSearchPanel } = await import('./ridi_panels.js?rev=20260922-reader-session-v45');
+  openViewerSearchPanel(query);
 }
 
 async function deleteAnnotationById(annotationId) {
@@ -345,14 +412,6 @@ export function initAnnotationSelectionUI(getTxtChunks) {
   if (typeof getTxtChunks === 'function') getTxtChunksFn = getTxtChunks;
   resetHighlightMode();
 
-  // 모바일에서는 형광펜 기능 자체를 비활성화한다. 항상 떠 있는 버튼(본문 가림) → 두
-  // 손가락 탭(Android Chrome이 contextmenu로 가로채 신뢰성 없음) → 롱프레스(네이티브
-  // 단어 선택 드래그와 충돌) 순으로 시도했지만 매번 새로운 사이드이펙트가 나와, 근본
-  // 원인(모바일 터치 제스처 공간이 이미 OS 몸짓들로 꽉 차 있어 새 제스처를 안전하게
-  // 얹을 자리가 없음)을 받아들이고 기능 자체를 끄기로 결정함(2026-08-22, 사용자 지시).
-  // 데스크톱(마우스 우클릭 기반)은 이런 충돌이 없어 그대로 유지한다.
-  if (getViewerPlatformProfile().isMobileDevice) return;
-
   configureAnnotationContextMenu({ onDelete: deleteAnnotationById });
   ensureToggleButton();
   if (bound) return;
@@ -361,11 +420,32 @@ export function initAnnotationSelectionUI(getTxtChunks) {
   document.addEventListener('mouseup', handleSelectionEnd);
   document.addEventListener('touchend', handleSelectionEnd);
   document.addEventListener('mousedown', (event) => {
+    selectionEndGeneration += 1;
+    selectionGestureStartedOnText = false;
     const btn = document.getElementById(BUTTON_ID);
-    if (btn && !btn.contains(event.target)) hideButton();
+    const clickedSelectionMenu = btn && btn.contains(event.target);
+    if (!clickedSelectionMenu) hideButton();
     const menu = document.getElementById('annotation-context-menu');
     if (menu && !menu.contains(event.target)) hideAnnotationContextMenu();
+    const modal = document.getElementById('media-viewer-modal');
+    if (!clickedSelectionMenu && modal?.style.display === 'flex' && modal.contains(event.target)) {
+      const inText = event.target?.closest?.('.txt-chunk[data-idx], .txt-scroll-chunk[data-idx]');
+      selectionGestureStartedOnText = !!inText
+        && !event.target.closest('img, svg, canvas, video')
+        && isPointOnChunkText(inText, event.clientX, event.clientY);
+      const onReaderControl = event.target?.closest?.('button, input, select, textarea, a, [contenteditable="true"]');
+      if (!selectionGestureStartedOnText && !onReaderControl) window.getSelection()?.removeAllRanges();
+    }
   }, true);
+  document.addEventListener('touchstart', (event) => {
+    selectionEndGeneration += 1;
+    const touch = event.touches?.[0];
+    const chunk = event.target?.closest?.('.txt-chunk[data-idx], .txt-scroll-chunk[data-idx]');
+    const modal = document.getElementById('media-viewer-modal');
+    selectionGestureStartedOnText = !!modal && getComputedStyle(modal).display !== 'none' && !!touch && !!chunk
+      && !event.target.closest('img, svg, canvas, video')
+      && isPointOnChunkText(chunk, touch.clientX, touch.clientY);
+  }, { passive: true, capture: true });
 
   document.addEventListener('click', onMarkClick, true);
   // PC 우클릭: 형광펜 모드 중 하이라이트 위에서만 커스텀 메뉴(플러그인 항목 + 삭제)를 띄우고

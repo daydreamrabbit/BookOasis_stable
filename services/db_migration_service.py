@@ -204,6 +204,13 @@ _SCHEMA_SQL = """
         sort_order INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS library_kinds (
+        code TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        is_builtin INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS libraries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
@@ -223,7 +230,9 @@ _SCHEMA_SQL = """
         gdrive_copy_remote TEXT DEFAULT NULL,
         gdrive_view_local_mirror_path TEXT DEFAULT NULL,
         cover_aspect_ratio TEXT DEFAULT '4:3',
-        hide_title INTEGER DEFAULT 0
+        hide_title INTEGER DEFAULT 0,
+        use_folder_cover INTEGER NOT NULL DEFAULT 0,
+        content_kind TEXT NOT NULL DEFAULT 'unspecified'
     );
 
     CREATE TABLE IF NOT EXISTS plugin_group_assignments (
@@ -251,6 +260,9 @@ _SCHEMA_SQL = """
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         library_id INTEGER REFERENCES libraries(id),
         title TEXT NOT NULL,
+        metadata_title TEXT,
+        metadata_title_checked INTEGER NOT NULL DEFAULT 0,
+        embedded_metadata_version INTEGER NOT NULL DEFAULT 0,
         series_name TEXT,
         author TEXT,
         isbn TEXT,
@@ -279,6 +291,10 @@ _SCHEMA_SQL = """
         deleted_at DATETIME DEFAULT NULL,
         metadata_locked INTEGER DEFAULT 0,
         series_alias TEXT,
+        localized_series TEXT,
+        document_series_name TEXT,
+        document_volume_index REAL DEFAULT NULL,
+        document_volume_count INTEGER DEFAULT NULL,
         title_alias TEXT,
         file_mtime REAL DEFAULT 0.0,
         file_size INTEGER DEFAULT 0,
@@ -447,6 +463,26 @@ _SCHEMA_SQL = """
         last_epub_percent INTEGER DEFAULT 0,
         last_epub_fingerprint TEXT,
         last_epub_updated_at DATETIME
+    );
+
+    CREATE TABLE IF NOT EXISTS tts_progress (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        listen_chapter INTEGER,
+        listen_offset INTEGER,
+        listen_text_len INTEGER,
+        listen_anchor TEXT,
+        listen_updated_ms INTEGER,
+        read_chapter INTEGER,
+        read_offset INTEGER,
+        read_text_len INTEGER,
+        read_anchor TEXT,
+        read_updated_ms INTEGER,
+        voice TEXT,
+        steps INTEGER,
+        speed REAL,
+        UNIQUE(book_id, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS book_annotations (
@@ -706,6 +742,20 @@ def _connect_and_init_schema(db_type, schema):
     try:
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
+        if database.is_mariadb_mode():
+            # 신규 테이블 DDL은 MariaDB 방언의 MARIADB_CENTRAL_SCHEMA에만 정확히 정의돼 있다.
+            # SQLite용 schema는 TEXT PRIMARY KEY 등으로 MariaDB에서 실패하므로(과거엔 조용히
+            # 무시돼 신규 테이블이 누락됨), db_schema_updater를 거치지 않는 시작 경로에서도
+            # 중앙 스키마를 먼저 적용한다.
+            from tools.db_schema_updater import MARIADB_CENTRAL_SCHEMA
+            for stmt in (s.strip() for s in MARIADB_CENTRAL_SCHEMA.split(';')):
+                if not stmt:
+                    continue
+                try:
+                    cursor._cursor.execute(stmt)
+                except Exception as ddl_err:
+                    print(f"[DB-Migration ERROR] '{db_type}' 중앙 스키마 적용 실패: {ddl_err} | {stmt[:80]!r}")
+            conn.commit()
         cursor.executescript(schema)
         conn.commit()
     except Exception as conn_err:
@@ -846,7 +896,10 @@ def _seed_settings_and_admin(conn, cursor, db_type):
             ('BOOK_THUMBNAIL_WIDTH', '160'),
             ('PAGE_LIMIT', '60'),
             ('VIEWER_FONT_SIZE', '18'),
-            ('VIEWER_FONT_FAMILY', 'sans-serif'),
+            ('VIEWER_FONT_FAMILY', 'pretendard'),
+            ('VIEWER_THEME', 'dark'),
+            ('VIEWER_LINE_HEIGHT', '1.8'),
+            ('VIEWER_PARAGRAPH_SPACING', '1.0'),
             ('DB_POOL_SIZE', '49'),
             ('SCANNER_WRITE_LOG', '1'),
             ('LAZY_SCAN_CRON', '0 3 * * *'),
@@ -899,14 +952,8 @@ def _seed_settings_and_admin(conn, cursor, db_type):
 
         conn.commit()
 
-        # 초기 admin 계정 시딩
-        cursor.execute("SELECT COUNT(*) FROM users")
-        if cursor.fetchone()[0] == 0:
-            from werkzeug.security import generate_password_hash
-            admin_hash = generate_password_hash('admin')
-            cursor.execute("INSERT INTO users (username, password_hash, role, is_default_password, has_adult_access, has_audiobook_access) VALUES ('admin', ?, 'admin', 1, 1, 1)", (admin_hash,))
-            conn.commit()
-            print(f"[DB-Migration] {db_type} DB - admin/admin initial account created")
+        # 신규 설치의 관리자 계정은 /login 최초 설정 화면에서 사용자가 직접 만든다.
+        # 기존 DB의 계정은 그대로 유지하며 마이그레이션 단계에서 고정 admin/admin을 만들지 않는다.
 
         # Legacy books.is_favorite -> user_favorites 1회 시드
         # 기존 전역 즐겨찾기 데이터를 모든 사용자 초기값으로 복제한 뒤, 이후부터는 계정별로 독립 운용
@@ -948,6 +995,67 @@ def _seed_category_permissions(conn, cursor):
         print(f"[DB-Migration ERROR] user_category_permissions seeding failed: {seed_err}")
 
 
+# 카테고리 속성(libraries.content_kind)의 기본 종류. 코드는 플러그인이 기댈 수 있는 공통 값이라 고정하고
+# (관리자는 이름만 바꿀 수 있고 삭제할 수 없다), 관리자가 추가한 종류는 그 설치에서만 의미가 있다.
+BUILTIN_LIBRARY_KINDS = (
+    ('manga', '만화'),
+    ('novel', '소설'),
+    ('book', '도서'),
+    ('manhwa', '웹툰'),
+)
+
+
+def _seed_library_kinds(conn, cursor, db_type):
+    """도서 세션(general/adult)에 기본 속성 종류를 심는다. 코드 기준으로 멱등이며, 관리자가 바꾼 이름은 덮어쓰지
+    않는다. 오디오북/영상 세션은 빈 목록으로 시작한다."""
+    if db_type not in ('general', 'adult'):
+        return
+    try:
+        # 잘못 기본값으로 추가됐던 webtoon 코드는 올바른 공통 코드 manhwa로 통합한다.
+        # 라이브러리 연결을 먼저 옮긴 뒤 잘못된 유형 행을 제거해 선택지와 플러그인 판정을 일치시킨다.
+        cursor.execute(
+            "UPDATE libraries SET content_kind = ? WHERE content_kind = ?",
+            ('manhwa', 'webtoon')
+        )
+        cursor.execute("DELETE FROM library_kinds WHERE code = ?", ('webtoon',))
+        # 직전 버전이 기존 manhwa를 충돌 회피용 이름으로 바꾼 경우 원래 표시명을 복구한다.
+        cursor.execute(
+            "UPDATE library_kinds SET name = ? WHERE code = ? AND name = ?",
+            ('웹툰', 'manhwa', '웹툰 (manhwa)')
+        )
+
+        # 예전 버전에서 기본값이던 잡지는 더 이상 기본 유형이 아니다. 사용 중이지 않으면
+        # 목록에서 제거하고, 사용 중이면 데이터 손실을 막기 위해 삭제 가능한 사용자 유형으로 남긴다.
+        cursor.execute(
+            "DELETE FROM library_kinds WHERE code = ? AND is_builtin = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM libraries WHERE content_kind = ?)",
+            ('magazine', 'magazine')
+        )
+        cursor.execute(
+            "UPDATE library_kinds SET is_builtin = 0 WHERE code = ? AND is_builtin = 1",
+            ('magazine',)
+        )
+        for sort_order, (code, name) in enumerate(BUILTIN_LIBRARY_KINDS, start=1):
+            cursor.execute("SELECT code FROM library_kinds WHERE code = ?", (code,))
+            if cursor.fetchone():
+                # 과거에 사용자가 같은 코드를 추가했다면 이름은 보존하고 기본 유형으로 승격한다.
+                cursor.execute(
+                    "UPDATE library_kinds SET is_builtin = 1, sort_order = ? WHERE code = ?",
+                    (sort_order, code)
+                )
+                continue
+            # 관리자가 같은 이름의 종류를 이미 만들어 둔 경우 UNIQUE 충돌을 피하려고 이름에 코드를 붙인다.
+            cursor.execute("SELECT 1 FROM library_kinds WHERE name = ?", (name,))
+            seed_name = f"{name} ({code})" if cursor.fetchone() else name
+            cursor.execute(
+                "INSERT INTO library_kinds (code, name, is_builtin, sort_order) VALUES (?, ?, 1, ?)",
+                (code, seed_name, sort_order)
+            )
+        conn.commit()
+    except Exception as seed_err:
+        print(f"[DB-Migration ERROR] library_kinds seeding failed ({db_type}): {seed_err}")
+
+
 def _backfill_library_group_default_color(conn, cursor):
     """그룹 색상을 고르는 UI가 아직 없어 지금까지 모든 그룹이 스키마 기본값 '#a855f7'로
     저장돼 테마를 켜도 사이드바 그룹 아이콘만 항상 보라색으로 고정되던 문제를 보정한다.
@@ -964,24 +1072,22 @@ def _backfill_library_group_default_color(conn, cursor):
 
 
 def _rebuild_series_summary_if_needed(conn, db_type):
-    """MariaDB 환경에서 시리즈 요약 테이블이 아직 준비 안 됐으면 최초 1회 생성한다.
+    """시리즈 요약 테이블(series_summary)이 아직 준비 안 됐으면 최초 1회 생성한다.
 
-    주의: is_remote 는 운영자가 UI에서 관리하는 의도값이다. 과거에는 서버 기동 시
-    physical_path 기반 자동 판별로 0 -> 1 보정을 수행했지만, SMB/CIFS/NFS 같은 NAS
-    마운트나 사용자가 수동 해제한 라이브러리까지 다시 체크되는 부작용이 있어 더 이상
-    startup 단계에서 덮어쓰지 않는다.
+    SQLite/MariaDB 둘 다 series_summary/series_summary_state 테이블을 쓴다 - 이게 없으면
+    도서 목록 조회(특히 최신순/과거순 정렬)가 매 요청마다 books 테이블 전체를 실시간
+    GROUP BY로 재집계해야 해서 대형 라이브러리(수만 권)에서 요청당 수 초가 걸린다.
     """
-    # 주의: is_remote 는 운영자가 UI에서 관리하는 의도값이다.
-    # 과거에는 서버 기동 시 physical_path 기반 자동 판별로 0 -> 1 보정을 수행했지만,
-    # SMB/CIFS/NFS 같은 NAS 마운트나 사용자가 수동 해제한 라이브러리까지 다시 체크되는
-    # 부작용이 있어 더 이상 startup 단계에서 덮어쓰지 않는다.
-
+    if db_type == 'audiobook':
+        return
     try:
-        is_mariadb = hasattr(conn, '_conn') or type(conn).__name__.startswith(('Mariadb', 'PooledMariaDB'))
-        if is_mariadb and db_type != 'audiobook':
+        import database
+        if database.is_mariadb_mode():
             from repositories.mariadb.series_repository import SeriesRepository
-            if SeriesRepository.rebuild_summary(db_type, only_if_unready=True):
-                print(f"[DB-Migration] {db_type} DB - initial series summary created")
+        else:
+            from repositories.sqlite.series_repository import SeriesRepository
+        if SeriesRepository.rebuild_summary(db_type, only_if_unready=True):
+            print(f"[DB-Migration] {db_type} DB - initial series summary created")
     except Exception as summary_err:
         print(f"[DB-Migration ERROR] {db_type} series summary initialization failed: {summary_err}")
 
@@ -1130,12 +1236,36 @@ def _ensure_mariadb_columns():
         print(f"  [!] MariaDB 구형 테이블 RENAME 검사 중 오류: {e}")
 
     required_columns = [
+        ('media_general', 'libraries', 'cover_aspect_ratio', "VARCHAR(10) DEFAULT '4:3'"),
+        ('media_adult', 'libraries', 'cover_aspect_ratio', "VARCHAR(10) DEFAULT '4:3'"),
+        ('media_audiobook', 'libraries', 'cover_aspect_ratio', "VARCHAR(10) DEFAULT '4:3'"),
+        ('media_video', 'libraries', 'cover_aspect_ratio', "VARCHAR(10) DEFAULT '4:3'"),
+        ('media_general', 'libraries', 'hide_title', 'INT DEFAULT 0'),
+        ('media_adult', 'libraries', 'hide_title', 'INT DEFAULT 0'),
+        ('media_audiobook', 'libraries', 'hide_title', 'INT DEFAULT 0'),
+        ('media_video', 'libraries', 'hide_title', 'INT DEFAULT 0'),
+        ('media_general', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_adult', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_audiobook', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_video', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_general', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
+        ('media_adult', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
+        ('media_audiobook', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
+        ('media_video', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
         ('media_general', 'libraries', 'group_id', 'BIGINT DEFAULT NULL'),
         ('media_adult', 'libraries', 'group_id', 'BIGINT DEFAULT NULL'),
         ('media_audiobook', 'libraries', 'group_id', 'BIGINT DEFAULT NULL'),
         ('media_general', 'libraries', 'sort_order', 'INT DEFAULT 0'),
         ('media_adult', 'libraries', 'sort_order', 'INT DEFAULT 0'),
         ('media_audiobook', 'libraries', 'sort_order', 'INT DEFAULT 0'),
+        ('media_general', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
+        ('media_adult', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
+        ('media_audiobook', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
+        ('media_video', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
+        ('media_general', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_adult', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_audiobook', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_video', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
         ('media_general', 'libraries', 'gdrive_copy_remote', 'VARCHAR(255) DEFAULT NULL'),
         ('media_adult', 'libraries', 'gdrive_copy_remote', 'VARCHAR(255) DEFAULT NULL'),
         ('media_audiobook', 'libraries', 'gdrive_copy_remote', 'VARCHAR(255) DEFAULT NULL'),
@@ -1155,15 +1285,29 @@ def _ensure_mariadb_columns():
         ('media_audiobook', 'audiobook_tracks', 'file_mtime', 'DOUBLE DEFAULT 0.0'),
         ('media_audiobook', 'audiobook_tracks', 'format', 'VARCHAR(50)'),
         ('media_general', 'books', 'series_alias', 'VARCHAR(500)'),
+        ('media_general', 'books', 'localized_series', 'VARCHAR(500)'),
         ('media_general', 'books', 'title_alias', 'VARCHAR(500)'),
+        ('media_general', 'books', 'metadata_title', 'VARCHAR(500)'),
+        ('media_general', 'books', 'metadata_title_checked', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_general', 'books', 'embedded_metadata_version', 'INT NOT NULL DEFAULT 0'),
         ('media_general', 'books', 'file_mtime', 'DOUBLE DEFAULT 0.0'),
         ('media_general', 'books', 'file_size', 'BIGINT DEFAULT 0'),
         ('media_general', 'books', 'cover_align', "VARCHAR(10) DEFAULT 'center'"),
+        ('media_general', 'books', 'document_series_name', 'VARCHAR(500) DEFAULT NULL'),
+        ('media_general', 'books', 'document_volume_index', 'DOUBLE DEFAULT NULL'),
+        ('media_general', 'books', 'document_volume_count', 'INT DEFAULT NULL'),
         ('media_adult', 'books', 'series_alias', 'VARCHAR(500)'),
+        ('media_adult', 'books', 'localized_series', 'VARCHAR(500)'),
         ('media_adult', 'books', 'title_alias', 'VARCHAR(500)'),
+        ('media_adult', 'books', 'metadata_title', 'VARCHAR(500)'),
+        ('media_adult', 'books', 'metadata_title_checked', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_adult', 'books', 'embedded_metadata_version', 'INT NOT NULL DEFAULT 0'),
         ('media_adult', 'books', 'file_mtime', 'DOUBLE DEFAULT 0.0'),
         ('media_adult', 'books', 'file_size', 'BIGINT DEFAULT 0'),
         ('media_adult', 'books', 'cover_align', "VARCHAR(10) DEFAULT 'center'"),
+        ('media_adult', 'books', 'document_series_name', 'VARCHAR(500) DEFAULT NULL'),
+        ('media_adult', 'books', 'document_volume_index', 'DOUBLE DEFAULT NULL'),
+        ('media_adult', 'books', 'document_volume_count', 'INT DEFAULT NULL'),
         ('media_general', 'collections', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'),
         ('media_adult', 'collections', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'),
         ('media_general', 'users', 'has_video_access', 'INT DEFAULT 1'),
@@ -1297,6 +1441,7 @@ def run_full_migration():
         _create_indexes_and_cleanup_fts(conn, cursor, _INDEXES_SQL)
         _seed_settings_and_admin(conn, cursor, db_type)
         _seed_category_permissions(conn, cursor)
+        _seed_library_kinds(conn, cursor, db_type)
         _backfill_audiobook_last_listened_at(conn, cursor, db_type)
         _backfill_library_group_default_color(conn, cursor)
         if db_type == 'video' and not database.is_mariadb_mode():

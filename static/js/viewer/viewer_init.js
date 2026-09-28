@@ -1,7 +1,7 @@
 // viewer_init.js — 엔트리 포인트 (type=module)
 import * as Settings from './reader_settings.js';
-import * as Renderer from './renderer.js';
-import * as Navigation from './navigation.js';
+import * as Renderer from './renderer.js?rev=20260923-reader-session-v45';
+import * as Navigation from './navigation.js?rev=20260922-reader-session-v45';
 
 export async function initViewer(bookId, pagesRead, totalPages) {
   // 초기 설정

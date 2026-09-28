@@ -1,12 +1,22 @@
 # -*- coding: utf-8 -*-
-from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template, g
+from flask import Blueprint, request, jsonify, session, redirect, url_for, render_template, g, send_file
 from functools import wraps
 import ipaddress
 import os
+import threading
 import database
 from werkzeug.security import generate_password_hash, check_password_hash
 from services.settings_service import SettingsService
+from services.content_rating_service import LEVEL_PORN, get_user_content_rating_max
 from repositories.user_repository import UserRepository
+from services.user_profile_service import (
+    MAX_PROFILE_AVATAR_BYTES,
+    PROFILE_AVATARS,
+    UserProfileService,
+    get_custom_avatar_mimetype,
+    get_custom_avatar_path,
+    save_custom_avatar_image,
+)
 
 from utils.i18n_helper import get_available_languages
 from utils.i18n import _t
@@ -16,6 +26,16 @@ auth_bp = Blueprint('auth', __name__)
 MAX_AUTH_REQUEST_BYTES = 16 * 1024
 MAX_USERNAME_LENGTH = 128
 MAX_PASSWORD_LENGTH = 256
+ACCOUNT_DB_TYPES = ('general', 'adult', 'audiobook', 'video')
+_initial_admin_lock = threading.Lock()
+
+
+def _initial_setup_required():
+    """사용자 테이블이 모두 비어 있는 완전한 신규 설치에서만 최초 설정을 허용한다."""
+    try:
+        return all(len(UserRepository.get_all_users(db_type)) == 0 for db_type in ACCOUNT_DB_TYPES)
+    except Exception:
+        return False
 
 
 def _as_bool(value, default=False):
@@ -97,6 +117,26 @@ def _validate_password_length_only(password):
         return jsonify({'success': False, 'error': f'Password too long (max {MAX_PASSWORD_LENGTH})'}), 400
     return None
 
+
+def _refresh_content_rating_session():
+    """DB에서 현재 사용자의 최신 콘텐츠 등급을 읽어 세션을 동기화한다.
+
+    관리자가 다른 브라우저에서 권한을 변경하면 Flask 세션 쿠키에는 이전
+    content_rating_max가 남을 수 있다. 등급은 노출 여부를 결정하는 보안
+    값이므로, 목록/검색 API가 실행되기 전에 DB의 현재 값을 우선한다.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return
+    try:
+        user = UserRepository.find_by_id('general', int(user_id))
+        if user:
+            session['content_rating_max'] = get_user_content_rating_max(user)
+    except Exception as exc:
+        # 인증 자체를 실패시키지는 않고 기존 세션값을 유지한다. DB 일시 오류
+        # 때문에 로그인 사용자가 앱 전체에서 차단되는 것을 피한다.
+        print(f"[Auth WARNING] Failed to refresh content rating session: {exc}")
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -144,25 +184,16 @@ def webhook_token_required(f):
 
 def check_adult_permission(db_type):
     if db_type == 'adult':
-        # 어드민은 패스, 일반 유저는 세션의 adult 접근 권한으로 판별
-        if session.get('role') == 'admin':
-            return True
         if session.get('has_adult_access') == 1:
             return True
         return False
 
     if db_type == 'audiobook':
-        # 어드민은 패스, 일반 유저는 세션의 audiobook 접근 권한으로 판별
-        if session.get('role') == 'admin':
-            return True
         if session.get('has_audiobook_access') == 1:
             return True
         return False
 
     if db_type == 'video':
-        # 어드민은 패스, 일반 유저는 세션의 video 접근 권한으로 판별
-        if session.get('role') == 'admin':
-            return True
         if session.get('has_video_access') == 1:
             return True
         return False
@@ -170,15 +201,11 @@ def check_adult_permission(db_type):
     return True
 
 def check_download_permission():
-    """파일 다운로드(EPUB/PDF/TXT) 허용 여부 판별 - 어드민은 패스, 일반 유저는 세션의 다운로드 접근 권한으로 판별"""
-    if session.get('role') == 'admin':
-        return True
+    """역할과 관계없이 저장된 파일 다운로드 권한을 판별한다."""
     return session.get('has_download_access') == 1
 
 def check_book_rating_permission(db_type, book_id):
-    """개별 도서의 콘텐츠 등급(books_lv/성인 장르·태그) 열람 권한 판별 - 어드민은 패스"""
-    if session.get('role') == 'admin':
-        return True
+    """역할과 관계없이 개별 도서의 콘텐츠 등급 열람 권한을 판별한다."""
     from services.content_rating_service import ContentRatingService
     return ContentRatingService.can_view_book(db_type, book_id, session.get('content_rating_max', 18))
 
@@ -192,6 +219,7 @@ def check_authentication():
     exempt_paths = [
         url_for('media_api.auth.login'),
         '/login',
+        '/setup',
         '/logout',
         '/change-password',
         # /tv 페이지 셸은 민감 데이터가 없어 비로그인 상태에서도 렌더링을 허용하고,
@@ -240,8 +268,12 @@ def check_authentication():
                         session['has_audiobook_access'] = user.get('has_audiobook_access', 1)
                         session['has_video_access'] = user.get('has_video_access', 1)
                         session['has_download_access'] = user.get('has_download_access', 1)
-                        session['content_rating_max'] = user.get('content_rating_max', 18)
-        
+                        session['content_rating_max'] = get_user_content_rating_max(user)
+
+    # 권한 관리 화면에서 변경한 최대 등급이 다른 브라우저의 기존 세션에도
+    # 즉시 반영되도록, 프록시 로그인/일반 로그인 모두 DB의 최신 값을 동기화한다.
+    _refresh_content_rating_session()
+
     # 1. 미로그인 시 차단
     if 'user_id' not in session:
         if request.path.startswith('/api/'):
@@ -299,7 +331,8 @@ def login():
             session['has_audiobook_access'] = user.get('has_audiobook_access', 1)
             session['has_video_access'] = user.get('has_video_access', 1)
             session['has_download_access'] = user.get('has_download_access', 1)
-            session['content_rating_max'] = user.get('content_rating_max', 18)
+            content_rating_max = get_user_content_rating_max(user)
+            session['content_rating_max'] = content_rating_max
 
             return jsonify({
                 'success': True,
@@ -309,7 +342,7 @@ def login():
                 'has_audiobook_access': user.get('has_audiobook_access', 1),
                 'has_video_access': user.get('has_video_access', 1),
                 'has_download_access': user.get('has_download_access', 1),
-                'content_rating_max': user.get('content_rating_max', 18)
+                'content_rating_max': content_rating_max
             })
         else:
             return jsonify({'success': False, 'error': _t('api.invalid_credentials')}), 401
@@ -317,7 +350,66 @@ def login():
     # GET 요청 시 로그인 템플릿 반환
     if 'user_id' in session:
         return redirect(url_for('media_api.media_admin.system.index'))
-    return render_template('login.html')
+    return render_template('login.html', setup_required=_initial_setup_required())
+
+
+@auth_bp.route('/setup', methods=['POST'])
+def setup_initial_admin():
+    """빈 신규 설치에서 사용자가 지정한 최초 관리자 계정을 모든 미디어 DB에 동기화한다."""
+    oversized = _reject_oversized_auth_request()
+    if oversized:
+        return oversized
+
+    data = request.get_json() or {}
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    confirm_password = str(data.get('confirm_password') or '')
+    length_error = _validate_username_password_lengths(username, password)
+    if length_error:
+        return length_error
+    if not username or not password:
+        return jsonify({'success': False, 'error': '관리자 아이디와 비밀번호를 입력해주세요.'}), 400
+    if len(password) < 4:
+        return jsonify({'success': False, 'error': _t('api.password_length_error')}), 400
+    if password != confirm_password:
+        return jsonify({'success': False, 'error': '비밀번호 확인이 일치하지 않습니다.'}), 400
+
+    created = []
+    with _initial_admin_lock:
+        if not _initial_setup_required():
+            return jsonify({'success': False, 'error': '최초 관리자 설정이 이미 완료되었습니다.'}), 409
+        password_hash = generate_password_hash(password)
+        try:
+            expected_user_id = None
+            for db_type in ACCOUNT_DB_TYPES:
+                user_id = UserRepository.add_user(
+                    db_type, username, password_hash, 'admin', 1, 1, 1, 1,
+                    is_default_password=0,
+                )
+                created.append((db_type, user_id))
+                if expected_user_id is None:
+                    expected_user_id = user_id
+                elif user_id != expected_user_id:
+                    raise RuntimeError('미디어 DB별 사용자 ID가 일치하지 않습니다.')
+        except Exception as exc:
+            for db_type, user_id in reversed(created):
+                try:
+                    UserRepository.delete_user(db_type, user_id)
+                except Exception:
+                    pass
+            return jsonify({'success': False, 'error': f'관리자 계정 생성에 실패했습니다: {exc}'}), 500
+
+    session.clear()
+    session['user_id'] = expected_user_id
+    session['username'] = username
+    session['role'] = 'admin'
+    session['is_default_password'] = 0
+    session['has_adult_access'] = 1
+    session['has_audiobook_access'] = 1
+    session['has_video_access'] = 1
+    session['has_download_access'] = 1
+    session['content_rating_max'] = LEVEL_PORN
+    return jsonify({'success': True})
 
 @auth_bp.route('/logout', methods=['GET'])
 def logout():
@@ -353,6 +445,92 @@ def change_password():
 
     session['is_default_password'] = 0
     return jsonify({'success': True, 'message': _t('api.password_changed_success')})
+
+
+@auth_bp.route('/api/account/profile', methods=['GET'])
+@login_required
+def get_account_profile():
+    """현재 로그인 사용자의 표시 정보와 실제 독서 기록 기반 통계를 반환한다."""
+    user_id = session['user_id']
+    username = session.get('username', '')
+    user = UserRepository.find_by_id('general', user_id) or {}
+    preferences = UserProfileService.get_preferences(user_id, username)
+    compact = request.args.get('compact') == '1'
+    year = request.args.get('year', type=int)
+    if year is not None and (year < 2000 or year > 2100):
+        return jsonify({'success': False, 'error': '조회 연도가 올바르지 않습니다.'}), 400
+    payload = {
+        'success': True,
+        'profile': {
+            'username': username,
+            'role': session.get('role', 'user'),
+            'created_at': str(user.get('created_at') or ''),
+            **preferences,
+        },
+        'avatars': [
+            {'key': key, 'icon': icon} for key, icon in PROFILE_AVATARS.items()
+        ],
+    }
+    if not compact:
+        payload['statistics'] = UserProfileService.get_statistics(
+            user_id,
+            include_adult=session.get('has_adult_access') == 1,
+            year=year,
+        )
+    return jsonify(payload)
+
+
+@auth_bp.route('/api/account/profile', methods=['POST'])
+@login_required
+def update_account_profile():
+    """표시 이름과 서버 동기화되는 프리셋 프로필 이미지를 저장한다."""
+    oversized = _reject_oversized_auth_request()
+    if oversized:
+        return oversized
+    data = request.get_json(silent=True) or {}
+    display_name = str(data.get('display_name') or '').strip()
+    avatar = str(data.get('avatar') or '').strip().lower()
+    if len(display_name) > 40:
+        return jsonify({'success': False, 'error': '표시 이름은 40자까지 입력할 수 있습니다.'}), 400
+    if avatar not in PROFILE_AVATARS and not (avatar == 'custom' and get_custom_avatar_path(session['user_id']).is_file()):
+        return jsonify({'success': False, 'error': '지원하지 않는 프로필 이미지입니다.'}), 400
+    profile = UserProfileService.save_preferences(
+        session['user_id'], session.get('username', ''), display_name, avatar
+    )
+    return jsonify({'success': True, 'profile': profile})
+
+
+@auth_bp.route('/api/account/profile/avatar', methods=['GET'])
+@login_required
+def get_account_profile_avatar():
+    """현재 로그인 계정의 사용자 업로드 프로필 이미지를 반환한다."""
+    path = get_custom_avatar_path(session['user_id'])
+    if not path.is_file():
+        return jsonify({'success': False, 'error': '등록된 프로필 이미지가 없습니다.'}), 404
+    return send_file(path, mimetype=get_custom_avatar_mimetype(session['user_id']), conditional=True, max_age=86400)
+
+
+@auth_bp.route('/api/account/profile/avatar', methods=['POST'])
+@login_required
+def upload_account_profile_avatar():
+    """사용자 이미지를 정규화하여 계정별 프로필 이미지로 저장한다."""
+    # multipart 경계/필드 오버헤드를 감안하되 실제 이미지 데이터는 서비스에서 다시 5MB로 제한한다.
+    if request.content_length is not None and request.content_length > MAX_PROFILE_AVATAR_BYTES + 256 * 1024:
+        return jsonify({'success': False, 'error': '프로필 이미지는 5MB 이하만 사용할 수 있습니다.'}), 413
+    upload = request.files.get('avatar')
+    if upload is None:
+        return jsonify({'success': False, 'error': '이미지 파일을 선택해 주세요.'}), 400
+    display_name = str(request.form.get('display_name') or '').strip()
+    if len(display_name) > 40:
+        return jsonify({'success': False, 'error': '표시 이름은 40자까지 입력할 수 있습니다.'}), 400
+    try:
+        save_custom_avatar_image(session['user_id'], upload.stream)
+        profile = UserProfileService.save_preferences(
+            session['user_id'], session.get('username', ''), display_name, 'custom'
+        )
+    except ValueError as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+    return jsonify({'success': True, 'profile': profile})
 
 # --- 어드민 전용 사용자 관리 API ---
 

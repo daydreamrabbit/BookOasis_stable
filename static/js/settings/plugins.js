@@ -2,6 +2,112 @@
 import { state } from '../state.js';
 import * as api from '../api.js';
 
+const PLUGIN_SETTINGS_ORDER_STORAGE_KEY = 'bookoasis:pluginSettingsOrder';
+const PLUGIN_SETTINGS_ORDER_SETTING_KEY = 'PLUGIN_SETTINGS_ORDER';
+
+function parsePluginOrder(rawValue) {
+  if (Array.isArray(rawValue)) return rawValue.map(String);
+  if (typeof rawValue !== 'string' || !rawValue.trim()) return [];
+  try {
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function getLocalPluginSettingsOrder() {
+  let savedOrder = [];
+  try {
+    savedOrder = parsePluginOrder(localStorage.getItem(PLUGIN_SETTINGS_ORDER_STORAGE_KEY) || '[]');
+  } catch (e) {}
+  return savedOrder;
+}
+
+async function loadSyncedPluginSettingsOrder() {
+  const localOrder = getLocalPluginSettingsOrder();
+  try {
+    const response = typeof window.syncPluginDeskPreferences === 'function'
+      ? await window.syncPluginDeskPreferences(true)
+      : await api.fetchUserSettings();
+    const overrides = response?.overrides || {};
+    if (Object.prototype.hasOwnProperty.call(overrides, PLUGIN_SETTINGS_ORDER_SETTING_KEY)) {
+      const serverOrder = parsePluginOrder(overrides[PLUGIN_SETTINGS_ORDER_SETTING_KEY]);
+      localStorage.setItem(PLUGIN_SETTINGS_ORDER_STORAGE_KEY, JSON.stringify(serverOrder));
+      return serverOrder;
+    }
+    // 기존 브라우저에만 저장돼 있던 순서는 서버 설정이 없는 최초 한 번에 이관한다.
+    if (localOrder.length > 0) {
+      api.updateUserSetting(PLUGIN_SETTINGS_ORDER_SETTING_KEY, JSON.stringify(localOrder)).catch((error) => {
+        console.error('[Plugins-Settings] 기존 플러그인 순서 서버 이관 실패:', error);
+      });
+    }
+  } catch (error) {
+    console.warn('[Plugins-Settings] 서버 플러그인 순서 조회 실패, 로컬 값을 사용합니다.', error);
+  }
+  return localOrder;
+}
+
+function sortPluginsBySavedOrder(plugins, savedOrder) {
+  if (savedOrder.length === 0) return [...plugins];
+  const rank = new Map(savedOrder.map((pluginId, index) => [pluginId, index]));
+  return [...plugins].sort((left, right) => {
+    const leftRank = rank.has(String(left.id)) ? rank.get(String(left.id)) : Number.MAX_SAFE_INTEGER;
+    const rightRank = rank.has(String(right.id)) ? rank.get(String(right.id)) : Number.MAX_SAFE_INTEGER;
+    return leftRank - rightRank;
+  });
+}
+
+function initPluginSettingsCardSorting(container) {
+  if (!container) return;
+
+  const locked = document.querySelector('[data-role="plugin-desk-lock-toggle"]')?.dataset.locked !== '0';
+  container.classList.toggle('plugin-settings-cards-unlocked', !locked);
+  if (container.__pluginSettingsSortable) {
+    container.__pluginSettingsSortable.option('disabled', locked);
+    return;
+  }
+  if (typeof Sortable === 'undefined') return;
+
+  const scrollContainer = container.closest('.library-main-content') || true;
+  container.__pluginSettingsSortable = Sortable.create(container, {
+    animation: 180,
+    draggable: '.plugin-settings-card',
+    handle: '.plugin-settings-card-drag-handle',
+    ghostClass: 'plugin-settings-card-sortable-ghost',
+    disabled: locked,
+    // 설정 화면은 window가 아니라 .library-main-content가 스크롤됩니다. 자동 탐지에만
+    // 맡기면 포인터가 현재 보이는 카드 영역을 벗어나는 순간 스크롤 대상이 끊길 수 있으므로
+    // 실제 스크롤 컨테이너를 명시하고, 마우스와 터치 모두 폴리필 자동 스크롤을 사용합니다.
+    scroll: scrollContainer,
+    scrollSensitivity: 110,
+    scrollSpeed: 18,
+    bubbleScroll: true,
+    forceAutoScrollFallback: true,
+    onEnd: () => {
+      const order = Array.from(container.querySelectorAll(':scope > .plugin-settings-card'))
+        .map(card => card.dataset.pluginSettingsCardId)
+        .filter(Boolean);
+      try {
+        localStorage.setItem(PLUGIN_SETTINGS_ORDER_STORAGE_KEY, JSON.stringify(order));
+      } catch (e) {}
+      api.updateUserSetting(PLUGIN_SETTINGS_ORDER_SETTING_KEY, JSON.stringify(order))
+        .then((result) => {
+          if (!result?.success) throw new Error(result?.error || '플러그인 순서 저장 실패');
+          if (typeof window.syncPluginDeskPreferences === 'function') {
+            window.syncPluginDeskPreferences(true);
+          }
+        })
+        .catch((error) => {
+          console.error('[Plugins-Settings] 플러그인 순서 서버 저장 실패:', error);
+          if (typeof window.showToast === 'function') {
+            window.showToast('플러그인 순서를 서버에 저장하지 못했습니다.', 'error');
+          }
+        });
+    },
+  });
+}
+
 // 플러그인 목록 조회 및 동적 UI 생성
 export async function loadPluginsSettings() {
   console.log('[Plugins-Settings] loadPluginsSettings() 함수 진입');
@@ -16,11 +122,15 @@ export async function loadPluginsSettings() {
 
   try {
     console.log('[Plugins-Settings] api.fetchMetadataPluginsForManagement() API 호출 시작');
-    const data = await api.fetchMetadataPluginsForManagement();
+    const [data, savedOrder] = await Promise.all([
+      api.fetchMetadataPluginsForManagement(),
+      loadSyncedPluginSettingsOrder(),
+    ]);
     console.log('[Plugins-Settings] API 응답 데이터 수신 완료:', data);
     if (data.success && data.plugins && data.plugins.length > 0) {
       container.innerHTML = '';
-      data.plugins.forEach(p => {
+      const orderedPlugins = sortPluginsBySavedOrder(data.plugins, savedOrder);
+      orderedPlugins.forEach(p => {
         const schema = p.config_schema || [];
         const config = p.config || {};
         const hasCustomSettingsUi = !!(p.settings_ui && p.settings_ui.html);
@@ -35,40 +145,37 @@ export async function loadPluginsSettings() {
 
         const card = document.createElement('div');
         card.className = 'plugin-settings-card';
-        card.style.cssText = 'background: rgba(var(--app-panel-rgb), 0.4); border: 1px solid rgba(var(--app-panel-border-rgb), 0.08); border-radius: 8px; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.2rem;';
+        card.dataset.pluginSettingsCardId = String(p.id);
 
-        // 플러그인별 카드 및 폼 템플릿 구성
-        // 접힌 상태(기본값)에서는 이름/ID/토글만 보이는 한 줄 헤더만 남고, 설명·설정 폼·저장 버튼은
-        // 헤더 클릭 시에만 펼쳐지는 본문(.plugin-settings-card-body)으로 숨긴다 — 플러그인 수가 많아지면
-        // (커뮤니티 피드백: 20개만 돼도 스크롤이 너무 길어짐) 카드 하나당 세로 공간이 설명 유무와
-        // 무관하게 항상 커서 생기던 문제를 렌더링 쪽에서만 해결(플러그인 작성자 쪽 변경 불필요).
+        // 접힌 상태에서는 플러그인 이름과 활성화 토글만 보이고, 헤더를 눌렀을 때 설정 본문을 펼칩니다.
         card.innerHTML = `
-              <div class="plugin-settings-card-header" data-role="plugin-card-toggle" data-plugin-id="${p.id}" style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 0; flex-wrap: wrap; gap: 0.8rem; cursor: pointer;">
-                  <div style="display: flex; align-items: center; gap: 0.6rem; min-width: 0;">
-                      <i class="fa-solid fa-chevron-right plugin-settings-card-chevron" data-plugin-chevron="${p.id}" style="color: var(--app-text-muted); font-size: 0.8rem; transition: transform 0.2s; flex-shrink: 0;"></i>
-                      <div style="min-width: 0;">
-                          <h4 style="margin: 0; color: var(--app-text-primary); font-size: 1.05rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+              <div class="plugin-settings-card-header" data-role="plugin-card-toggle" data-plugin-id="${p.id}">
+                  <div class="plugin-settings-card-title-wrap">
+                      <i class="fa-solid fa-chevron-right plugin-settings-card-chevron" data-plugin-chevron="${p.id}"></i>
+                      <div class="plugin-settings-card-title-content">
+                          <h4 class="plugin-settings-card-title">
                               ${escapeHtmlText(p.name)}
-                              ${hasConfigurableBody ? '<span style="font-size: 0.68rem; font-weight: 600; color: #c4b5fd; background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.4); border-radius: 4px; padding: 0.1rem 0.4rem;">설정 있음</span>' : ''}
+                              ${hasConfigurableBody ? '<span class="plugin-settings-card-badge">설정 있음</span>' : ''}
                           </h4>
-                          <span style="font-size: 0.75rem; color: var(--app-text-muted);">플러그인 고유 ID: ${escapeHtmlText(p.id)}</span>
+                          <span class="plugin-settings-card-id">플러그인 고유 ID: ${escapeHtmlText(p.id)}</span>
                       </div>
                   </div>
-                  <!-- ON/OFF 활성화 토글 -->
-                  <div style="display: flex; align-items: center; gap: 0.6rem;" data-role="plugin-toggle-zone">
-                      <span id="plugin-status-text-${p.id}" style="font-size: 0.82rem; color: ${p.enabled ? '#4ade80' : '#94a3b8'}; font-weight: 600;">
+                  <div class="plugin-toggle-zone" data-role="plugin-toggle-zone">
+                      <button type="button" class="plugin-settings-card-drag-handle" title="플러그인 설정 순서 이동" aria-label="${escapeHtmlAttr(p.name)} 플러그인 설정 순서 이동">
+                          <i class="fa-solid fa-grip-vertical" aria-hidden="true"></i>
+                      </button>
+                      <span id="plugin-status-text-${p.id}" class="plugin-toggle-status ${p.enabled ? 'is-enabled' : 'is-disabled'}">
                           ${p.enabled ? '활성화됨' : '비활성화됨'}
                       </span>
-                      <label style="position: relative; display: inline-block; width: 46px; height: 24px; margin: 0;">
-                          <input type="checkbox" class="plugin-toggle-checkbox" data-plugin-id="${p.id}" ${p.enabled ? 'checked' : ''} style="opacity: 0; width: 0; height: 0;">
-                          <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #334155; transition: .3s; border-radius: 24px;" class="toggle-slider"></span>
+                      <label class="plugin-toggle-switch">
+                          <input type="checkbox" class="plugin-toggle-checkbox" data-plugin-id="${p.id}" ${p.enabled ? 'checked' : ''}>
+                          <span class="toggle-slider"></span>
                       </label>
                   </div>
               </div>
 
-              <div class="plugin-settings-card-body" data-plugin-body="${p.id}" style="display: none; flex-direction: column; gap: 1.2rem; border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 1.2rem;">
-                  <!-- 설정값 동적 폼 -->
-                  <form class="plugin-config-form" data-plugin-id="${p.id}" style="display: flex; flex-direction: column; gap: 1.2rem;">
+              <div class="plugin-settings-card-body" data-plugin-body="${p.id}">
+                  <form class="plugin-config-form" data-plugin-id="${p.id}">
                       ${hasCustomSettingsUi ? `
                       <div class="plugin-settings-ui-root" data-plugin-settings-root="${p.id}" data-plugin-config='${escapeHtmlAttr(JSON.stringify(config))}'>
                         ${p.settings_ui.html}
@@ -76,22 +183,22 @@ export async function loadPluginsSettings() {
                       ` : (schema.length > 0 ? schema.map(f => {
                         const curVal = config[f.key];
                         return renderSchemaField(f, curVal);
-                      }).join('') : '<p style="font-size: 0.82rem; color: var(--app-text-muted); margin: 0;">이 플러그인은 별도의 추가 설정값이 필요하지 않습니다.</p>')}
+                      }).join('') : '<p class="plugin-settings-empty">이 플러그인은 별도의 추가 설정값이 필요하지 않습니다.</p>')}
 
                       ${(hasCustomSettingsUi || schema.length > 0) ? `
-                      <div style="margin-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1rem;">
-                          <button type="submit" class="btn-submit" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1.2rem; font-size: 0.82rem;">
+                      <div class="plugin-config-actions">
+                          <button type="submit" class="btn-submit plugin-config-save">
                               <i class="fa-regular fa-floppy-disk"></i> 설정 저장
                           </button>
                       </div>
                       ` : ''}
 
                       ${showSampleUpdateButton ? `
-                      <div style="margin-top: 0.4rem; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 0.9rem; display: flex; flex-direction: column; gap: 0.5rem;">
-                        <button type="button" class="plugin-sample-update-btn" data-plugin-id="${p.id}" style="display: inline-flex; align-items: center; gap: 0.45rem; width: fit-content; padding: 0.5rem 1.0rem; font-size: 0.8rem; border-radius: 6px; border: 1px solid rgba(56,189,248,0.5); background: rgba(2,132,199,0.22); color: #dbeafe; cursor: pointer;">
+                      <div class="plugin-sample-update-panel">
+                        <button type="button" class="plugin-sample-update-btn" data-plugin-id="${p.id}">
                           <i class="fa-solid fa-cloud-arrow-down"></i> 샘플 업데이트 (${p.id})
                         </button>
-                        <span id="plugin-sample-update-status-${p.id}" style="font-size: 0.78rem; color: var(--app-text-muted);">업데이트 가능 조건: 현재 버전 &lt; GitHub 버전</span>
+                        <span id="plugin-sample-update-status-${p.id}" class="plugin-sample-update-status">업데이트 가능 조건: 현재 버전 &lt; GitHub 버전</span>
                       </div>
                       ` : ''}
                   </form>
@@ -106,6 +213,7 @@ export async function loadPluginsSettings() {
 
       // 이벤트 바인딩
       bindPluginEvents();
+      initPluginSettingsCardSorting(container);
       loadDetailViewProviderSettings(data.plugins);
     } else {
       container.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--app-text-muted);">로드된 메타데이터 플러그인이 없습니다.</div>';
@@ -360,7 +468,9 @@ function bindPluginEvents() {
       const body = container.querySelector(`[data-plugin-body="${CSS.escape(pluginId)}"]`);
       const chevron = container.querySelector(`[data-plugin-chevron="${CSS.escape(pluginId)}"]`);
       if (!body) return;
-      const isOpen = body.style.display !== 'none';
+      // 최초 렌더에서는 CSS 클래스가 본문을 숨기므로 body.style.display는 빈 문자열이다.
+      // 인라인 값만 보면 첫 클릭을 열린 상태로 오인해 다시 숨기게 되므로 계산된 상태를 사용한다.
+      const isOpen = window.getComputedStyle(body).display !== 'none';
       body.style.display = isOpen ? 'none' : 'flex';
       if (chevron) chevron.classList.toggle('plugin-settings-card-chevron-open', !isOpen);
     });
@@ -378,7 +488,8 @@ function bindPluginEvents() {
         if (res.success) {
           if (statusText) {
             statusText.innerText = isEnabled ? '활성화됨' : '비활성화됨';
-            statusText.style.color = isEnabled ? '#4ade80' : '#94a3b8';
+            statusText.classList.toggle('is-enabled', isEnabled);
+            statusText.classList.toggle('is-disabled', !isEnabled);
           }
           
           // 플러그인 활성 토글에 따른 전역 검색 플러그인 캐시 무효화 처리
@@ -406,7 +517,7 @@ function bindPluginEvents() {
       
       // 폼 데이터를 딕셔너리로 취합
       const configData = {};
-      const inputs = form.querySelectorAll('input, select');
+      const inputs = form.querySelectorAll('input, select, textarea');
       inputs.forEach(inp => {
         if (inp.name) {
           if (inp.type === 'checkbox') {

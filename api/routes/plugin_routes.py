@@ -318,13 +318,7 @@ def get_dashboard_widget_data_api(plugin_id):
             return jsonify({'success': False, 'error': _t('api.admin_required')}), 403
 
         result = provider.get_dashboard_data(db_type, limit=limit)
-
-        if result.get('success'):
-            dashboard_ui = MetadataFactory._load_plugin_ui_bundle(plugin_id, target='dashboard')
-            if dashboard_ui:
-                result['html'] = dashboard_ui.get('html', '')
-                result['css'] = dashboard_ui.get('css', '')
-                result['js'] = dashboard_ui.get('js', '')
+        MetadataFactory.add_dashboard_ui_bundle(plugin_id, result)
 
         status_code = 200 if result.get('success') else 400
         return jsonify(result), status_code
@@ -583,7 +577,7 @@ def get_category_plugins_api():
         providers = MetadataFactory.get_available_providers(include_view_ui=False, include_settings_ui=False)
 
         perm_map = {}
-        if user_id and user_role != 'admin':
+        if user_id:
             from repositories.settings_repository import SettingsRepository
             perm_map = SettingsRepository.get_settings_by_prefix(f"PERM_CATEGORY_{user_id}_plugin_")
 
@@ -607,7 +601,7 @@ def get_category_plugins_api():
                     continue
 
                 plugin_cat_id = f"plugin_{p.get('id')}"
-                if user_id and user_role != 'admin':
+                if user_id:
                     perm_key = f"PERM_CATEGORY_{user_id}_{plugin_cat_id}"
                     if perm_map.get(perm_key) == '0':
                         continue
@@ -665,6 +659,10 @@ def get_plugin_detail_ui_bundle_api(plugin_id):
         bundle = MetadataFactory._load_plugin_ui_bundle(plugin_id, target='detail')
         if not bundle:
             return jsonify({'success': False, 'error': 'Detail UI bundle not found'}), 404
+        bundle = dict(bundle)
+        initial_mode = provider.detail_view.get('initial_data_mode')
+        if initial_mode:
+            bundle['initial_data_mode'] = str(initial_mode)
         return jsonify({'success': True, 'plugin_id': plugin_id, 'bundle': bundle}), 200
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

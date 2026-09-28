@@ -148,6 +148,9 @@ export async function rescanBook(event, bookId, seriesName, libraryId) {
     const data = await res.json();
 
     if (data.success) {
+      window.dispatchEvent(new CustomEvent('bookoasis:scan-queued', {
+        detail: { type: String(state.currentLibraryType || 'general') }
+      }));
       if (typeof window.showToast === 'function') {
         window.showToast(i18n.t('modal.scan_done'), 'success');
       }

@@ -1,6 +1,6 @@
             <!-- 3. 플러그인 설정 탭 -->
             <div id="settings-tab-plugins" class="settings-tab-content" style="display: none; flex-direction: column; gap: 1.5rem;">
-                <div class="dashboard-section">
+                <div class="dashboard-section" id="plugin-settings-management-section">
                     <div class="section-header" style="margin-bottom: 1.2rem; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
                         <div>
                             <h3 class="section-title" style="margin: 0; color: var(--app-text-primary); font-size: 1.2rem; font-weight: 700;">
@@ -8,11 +8,17 @@
                             </h3>
                             <p style="font-size: 0.82rem; color: var(--app-text-muted); margin: 0.4rem 0 0 0;">서버에 로드된 동적 플러그인의 활성화 여부(ON/OFF) 및 상세 환경설정 값을 일괄 관리합니다.</p>
                         </div>
-                        <button type="button" data-role="open-sample-plugins-modal" style="background: linear-gradient(135deg, var(--app-accent) 0%, color-mix(in srgb, var(--app-accent) 70%, black) 100%); color: var(--app-accent-contrast); border: none; padding: 0.5rem 1rem; border-radius: 6px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem; height: 36px; font-size: 0.85rem; box-shadow: 0 4px 12px color-mix(in srgb, var(--app-accent) 25%, transparent); white-space: nowrap;">
-                            <i class="fa-solid fa-download"></i> 샘플에서 설치
-                        </button>
+                        <div class="plugin-settings-header-actions">
+                            <button type="button" class="plugin-desk-lock-toggle" data-role="plugin-desk-lock-toggle" data-locked="1" title="플러그인 카드 배치 잠금">
+                                <i class="fa-solid fa-lock" aria-hidden="true"></i>
+                                <span>배치 잠금</span>
+                            </button>
+                            <button type="button" data-role="open-sample-plugins-modal" style="background: linear-gradient(135deg, var(--app-accent) 0%, color-mix(in srgb, var(--app-accent) 70%, black) 100%); color: var(--app-accent-contrast); border: none; padding: 0.5rem 1rem; border-radius: 6px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem; height: 36px; font-size: 0.85rem; box-shadow: 0 4px 12px color-mix(in srgb, var(--app-accent) 25%, transparent); white-space: nowrap;">
+                                <i class="fa-solid fa-download"></i> 샘플에서 설치
+                            </button>
+                        </div>
                     </div>
-                    <div id="settings-plugins-container" style="display: flex; flex-direction: column; gap: 1.5rem;">
+                    <div id="settings-plugins-container" class="plugin-settings-container">
                         <!-- JS를 통해 동적 생성 -->
                     </div>
                 </div>
@@ -20,11 +26,13 @@
                 <!-- 도서 상세페이지 렌더러: 세션별로 코어 기본 화면 대신 detail_view를 선언한 플러그인의
                      화면을 쓰도록 선택. 기본값은 항상 '기본(코어)' -->
                 <div class="dashboard-section" id="settings-detail-view-provider-section">
-                    <div class="section-header" style="margin-bottom: 1.2rem;">
-                        <h3 class="section-title" style="margin: 0; color: var(--app-text-primary); font-size: 1.2rem; font-weight: 700;">
-                            <i class="fa-solid fa-book-open-reader" style="color: var(--app-accent); margin-right: 0.5rem;"></i> 도서 상세페이지 렌더러
-                        </h3>
-                        <p style="font-size: 0.82rem; color: var(--app-text-muted); margin: 0.4rem 0 0 0;">세션(카테고리 종류)별로 도서 상세페이지 본문을 코어 기본 화면 대신 <code>detail_view</code>를 선언한 플러그인의 커스텀 화면으로 대체합니다. 기본값은 항상 "기본(코어)"이며, 사이드바 위젯은 이 설정과 무관하게 그대로 유지됩니다.</p>
+                    <div class="section-header" style="margin-bottom: 1.2rem; display:flex; justify-content:space-between; align-items:flex-start; gap:1rem;">
+                        <div>
+                            <h3 class="section-title" style="margin: 0; color: var(--app-text-primary); font-size: 1.2rem; font-weight: 700;">
+                                <i class="fa-solid fa-book-open-reader" style="color: var(--app-accent); margin-right: 0.5rem;"></i> 도서 상세페이지 렌더러
+                            </h3>
+                            <p style="font-size: 0.82rem; color: var(--app-text-muted); margin: 0.4rem 0 0 0;">세션(카테고리 종류)별로 도서 상세페이지 본문을 코어 기본 화면 대신 <code>detail_view</code>를 선언한 플러그인의 커스텀 화면으로 대체합니다. 기본값은 항상 "기본(코어)"이며, 사이드바 위젯은 이 설정과 무관하게 그대로 유지됩니다.</p>
+                        </div>
                     </div>
                     <div id="settings-detail-view-provider-rows" style="display: flex; flex-direction: column; gap: 1rem;">
                         <!-- JS를 통해 동적 생성 (일반/성인/오디오북/영상강좌 4개 행) -->

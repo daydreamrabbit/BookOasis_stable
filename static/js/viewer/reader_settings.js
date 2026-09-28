@@ -5,7 +5,10 @@ export let comicReadingDirection = 'ltr';
 export let tapZoneDirection = 'horizontal';
 export let comicPageStep = 1;
 export let comicSplitSpread = false;
-export let comicFitMode = 'height';
+const VALID_FIT_MODES = new Set(['width', 'height']);
+export let comicFitMode = VALID_FIT_MODES.has(localStorage.getItem('comic_fit_mode'))
+  ? localStorage.getItem('comic_fit_mode')
+  : 'height';
 export let comicScrollWidth = 800; // 스크롤 모드 이미지 너비 (px, 600~900, 50단위)
 
 function getStoredComicReadingDirection() {
@@ -38,15 +41,19 @@ export function setComicPageStep(step) {
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   const safeStep = step === 2 ? 2 : 1;
   if (scrollMode === 'scroll' || comicSplitSpread) {
-    comicPageStep = 1;
-    localStorage.setItem('comic_page_step', '1');
+    // 연속 스크롤에서는 화면상 한 장씩 렌더링하지만, 사용자가 선택한 페이지 모드
+    // 장수 설정까지 1장으로 덮어쓰면 페이지 모드 복귀/재진입 때 2장 설정이 사라진다.
+    // 유효 장수만 1장으로 취급하고 저장된 선호값은 그대로 보존한다.
+    comicPageStep = getStoredComicPageStep();
     syncComicPageStepUI();
+    window.syncViewerControlsForFormat?.();
     return 1;
   }
 
   comicPageStep = safeStep;
   localStorage.setItem('comic_page_step', String(comicPageStep));
   syncComicPageStepUI();
+  window.syncViewerControlsForFormat?.();
   return comicPageStep;
 }
 
@@ -67,6 +74,8 @@ export function toggleComicPageStep() {
 }
 
 function syncComicReadingDirectionUI() {
+  const modal = document.getElementById('media-viewer-modal');
+  if (modal) modal.dataset.readingDirection = comicReadingDirection;
   const btn = document.getElementById('btn-comic-reading-direction');
   const label = document.getElementById('comic-reading-direction-label');
   if (btn) {
@@ -92,6 +101,7 @@ export function setTapZoneDirection(direction) {
   tapZoneDirection = direction === 'vertical' ? 'vertical' : 'horizontal';
   localStorage.setItem('viewer_tap_zone_direction', tapZoneDirection);
   syncTapZoneDirectionUI();
+  showTapZonePreview();
   return tapZoneDirection;
 }
 
@@ -103,7 +113,7 @@ export function toggleTapZoneDirection() {
   return setTapZoneDirection(tapZoneDirection === 'vertical' ? 'horizontal' : 'vertical');
 }
 
-function syncTapZoneDirectionUI() {
+export function syncTapZoneDirectionUI() {
   const hotspot = document.getElementById('common-viewer-hotspot');
   if (hotspot) {
     hotspot.classList.toggle('vertical', tapZoneDirection === 'vertical');
@@ -114,17 +124,43 @@ function syncTapZoneDirectionUI() {
   if (btn) {
     btn.classList.toggle('active', tapZoneDirection === 'vertical');
     btn.title = tapZoneDirection === 'vertical' ? '상/하 탭으로 넘기기' : '좌/우 탭으로 넘기기';
+    const icon = btn.querySelector('i');
+    if (icon) {
+      icon.className = tapZoneDirection === 'vertical'
+        ? 'fa-solid fa-arrows-up-down'
+        : 'fa-solid fa-arrows-left-right';
+    }
   }
   if (label) {
+    // 언어 변경기가 과거의 고정 "좌/우" 키로 다시 덮어쓰지 않도록 현재 상태에
+    // 맞는 키도 함께 갱신한다.
+    label.setAttribute('data-i18n', tapZoneDirection === 'vertical'
+      ? 'viewer.tap_zone_vertical'
+      : 'viewer.tap_zone_horizontal');
     label.textContent = tapZoneDirection === 'vertical' ? '상/하' : '좌/우';
   }
+  document.querySelectorAll('[data-tap-zone-direction]').forEach((button) => {
+    const active = button.dataset.tapZoneDirection === tapZoneDirection;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
 }
 
 export function initTapZoneDirection() {
-  setTapZoneDirection(getStoredTapZoneDirection());
+  tapZoneDirection = getStoredTapZoneDirection();
+  syncTapZoneDirectionUI();
 }
 
-function syncComicPageStepUI() {
+let tapZonePreviewTimer = null;
+export function showTapZonePreview() {
+  const hotspot = document.getElementById('common-viewer-hotspot');
+  if (!hotspot) return;
+  hotspot.classList.add('tap-zone-preview');
+  clearTimeout(tapZonePreviewTimer);
+  tapZonePreviewTimer = window.setTimeout(() => hotspot.classList.remove('tap-zone-preview'), 1200);
+}
+
+export function syncComicPageStepUI() {
   const btn = document.getElementById('btn-comic-page-step');
   const label = document.getElementById('comic-page-step-label');
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
@@ -138,12 +174,11 @@ function syncComicPageStepUI() {
     label.textContent = scrollMode === 'scroll' ? '1장' : `${comicPageStep}장`;
   }
 
-  // 2쪽보기가 아니면 "한 장 밀기" 정렬 보정은 의미가 없다 - 버튼을 숨기고 상태도 리셋한다.
+  // 2쪽보기가 아니면 버튼만 숨긴다. 정렬 선호까지 지우면 스크롤 모드 왕복 후
+  // 표지 단독 정렬이 풀리므로 상태는 보존한다.
   const shiftBtn = document.getElementById('btn-spread-shift');
   if (shiftBtn) shiftBtn.style.display = isTwoPageActive ? '' : 'none';
-  if (!isTwoPageActive && spreadShiftOffset !== 0) {
-    resetSpreadShiftOffset();
-  }
+  window.syncViewerSpreadSettingsUI?.();
 }
 
 // ──────────────────────────────────────────────────
@@ -152,23 +187,30 @@ function syncComicPageStepUI() {
 // 페이지 이동 자체(진행률 저장 기준)는 건드리지 않고 화면에 보여줄 짝만 바꾼다.
 // ──────────────────────────────────────────────────
 
-export let spreadShiftOffset = 0; // 0 또는 1
+export let spreadShiftOffset = 1; // 0 또는 1, 기본값은 표지 단독
 
 export function getSpreadShiftOffset() {
+  return spreadShiftOffset;
+}
+
+export function setSpreadShiftOffset(offset) {
+  const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
+  if (scrollMode === 'scroll' || comicPageStep !== 2) return spreadShiftOffset;
+  spreadShiftOffset = Number(offset) === 1 ? 1 : 0;
+  localStorage.setItem('viewer_spread_cover_alone', spreadShiftOffset === 1 ? '1' : '0');
+  syncSpreadShiftOffsetUI();
   return spreadShiftOffset;
 }
 
 export function toggleSpreadShiftOffset() {
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   if (scrollMode === 'scroll' || comicPageStep !== 2) return spreadShiftOffset; // 2쪽보기가 아니면 무의미
-  spreadShiftOffset = spreadShiftOffset === 0 ? 1 : 0;
-  syncSpreadShiftOffsetUI();
-  return spreadShiftOffset;
+  return setSpreadShiftOffset(spreadShiftOffset === 0 ? 1 : 0);
 }
 
-// 책을 새로 열 때마다 호출해서 이전 책의 정렬 보정이 새 책에 남아있지 않도록 한다.
+// 이름은 하위 호환을 위해 유지한다. 실제로는 사용자가 선택한 표지 정렬을 복원한다.
 export function resetSpreadShiftOffset() {
-  spreadShiftOffset = 0;
+  spreadShiftOffset = localStorage.getItem('viewer_spread_cover_alone') === '0' ? 0 : 1;
   syncSpreadShiftOffsetUI();
 }
 
@@ -176,7 +218,8 @@ function syncSpreadShiftOffsetUI() {
   const btn = document.getElementById('btn-spread-shift');
   if (!btn) return;
   btn.classList.toggle('active', spreadShiftOffset === 1);
-  btn.title = spreadShiftOffset === 1 ? '페이지 정렬 원래대로' : '두 페이지 짝을 한 장 밀어서 보기';
+  btn.title = spreadShiftOffset === 1 ? '표지 단독 정렬 끄기' : '첫 표지는 단독으로, 다음 페이지부터 두 장씩 보기';
+  window.syncViewerSpreadSettingsUI?.();
 }
 
 // ──────────────────────────────────────────────────
@@ -223,6 +266,12 @@ export function initSplitSpread() {
   setComicSplitSpread(getStoredComicSplitSpread());
 }
 
+export function disableLegacySplitSpread() {
+  localStorage.removeItem('comic_split_spread');
+  comicSplitSpread = false;
+  syncComicSplitSpreadUI();
+}
+
 export function initReadingDirection() {
   setComicReadingDirection(getStoredComicReadingDirection());
 }
@@ -231,9 +280,20 @@ export function initPageStep() {
   setComicPageStep(getStoredComicPageStep());
 }
 
-export function setFitMode(mode) {
-  comicFitMode = mode;
+export function syncReaderSettingsUI() {
+  comicPageStep = getStoredComicPageStep();
+  tapZoneDirection = getStoredTapZoneDirection();
+  syncComicPageStepUI();
+  syncTapZoneDirectionUI();
+  syncSpreadShiftOffsetUI();
   syncFitUI();
+}
+
+export function setFitMode(mode) {
+  comicFitMode = VALID_FIT_MODES.has(mode) ? mode : 'height';
+  localStorage.setItem('comic_fit_mode', comicFitMode);
+  syncFitUI();
+  return comicFitMode;
 }
 
 export function getFitMode() { return comicFitMode; }
@@ -248,6 +308,11 @@ function syncFitUI() {
   const btnOverlayWidth = document.getElementById('btn-overlay-fit-width');
   if (btnOverlayHeight) btnOverlayHeight.classList.toggle('active', comicFitMode === 'height');
   if (btnOverlayWidth) btnOverlayWidth.classList.toggle('active', comicFitMode === 'width');
+  document.querySelectorAll('[data-comic-fit-mode]').forEach((button) => {
+    const active = button.dataset.comicFitMode === comicFitMode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
 }
 
 // ──────────────────────────────────────────────────
@@ -310,6 +375,3 @@ function syncScrollWidthUI() {
   if (slider) slider.value = comicScrollWidth;
   if (label)  label.textContent = `${comicScrollWidth}px`;
 }
-
-
-

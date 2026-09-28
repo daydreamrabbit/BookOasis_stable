@@ -303,7 +303,7 @@ function renderReportPage() {
     } else if (err.error_type === 'NoCover') {
       typeBadgeColor = 'rgba(234, 179, 8, 0.15)';
       typeTextColor = '#facc15';
-    } else if (err.error_type === 'OffsetError') {
+    } else if (err.error_type === 'OffsetError' || err.error_type === 'OffsetIndexError') {
       typeBadgeColor = 'rgba(59, 130, 246, 0.15)';
       typeTextColor = '#60a5fa';
     }
@@ -318,6 +318,8 @@ function renderReportPage() {
         msg = (window.i18n.t('scan_errors.ERR_OFFSET_FAIL') || 'Offset analysis failed') + ': ' + msg.substring(10);
       } else if (msg.startsWith('ERR_LAZY_COVER_FAIL: ')) {
         msg = (window.i18n.t('scan_errors.ERR_LAZY_COVER_FAIL') || 'Cover restore failed') + ': ' + msg.substring(21);
+      } else if (msg.startsWith('ERR_LAZY_OFFSET_FAIL: ')) {
+        msg = (window.i18n.t('scan_errors.ERR_LAZY_OFFSET_FAIL') || 'Lazy scan offset indexing failed') + ': ' + msg.substring(22);
       } else if (msg.startsWith('Lazy 스캔 중 표지 복원 실패: ')) {
         msg = (window.i18n.t('scan_errors.ERR_LAZY_COVER_FAIL') || 'Cover restore failed') + ': ' + msg.substring(18);
       }

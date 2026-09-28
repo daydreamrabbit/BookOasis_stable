@@ -102,12 +102,19 @@ def _group_history_items(items):
 
 class ReadingHistoryService:
     @staticmethod
-    def get_history(db_type, user_id=1):
+    def get_history(db_type, user_id=1, content_rating_max=None):
+        def can_view(item):
+            if db_type not in ('general', 'adult') or content_rating_max is None:
+                return True
+            from services.content_rating_service import ContentRatingService
+            return ContentRatingService.can_view_book(db_type, item.get('id'), content_rating_max)
+
         def apply_live_progress(items):
             merged = [
                 _merge_live_progress_from_redis(db_type, user_id, dict(item))
                 for item in (items or [])
             ]
+            merged = [item for item in merged if can_view(item)]
             merged.sort(key=lambda item: str(item.get('last_read_at') or ''), reverse=True)
             return merged
 
@@ -120,7 +127,8 @@ class ReadingHistoryService:
         hide_completed = (row_hide == '1')
 
         # 설정별로 캐시를 분리해 노출 개수 변경을 즉시 반영한다.
-        cache_key = f"cache:history:v8:{db_type}:{user_id}:{limit}:{int(hide_completed)}"
+        rating_key = content_rating_max if db_type in ('general', 'adult') and content_rating_max is not None else 'unrestricted'
+        cache_key = f"cache:history:v9:{db_type}:{user_id}:{limit}:{int(hide_completed)}:{rating_key}"
         cached_data = redis_get(cache_key)
         if cached_data:
             try:
@@ -137,9 +145,9 @@ class ReadingHistoryService:
                         # v5 오디오북/영상 캐시는 total_tracks 필드가 필수이다.
                         # 구버전 캐시(v4 등)는 해당 필드가 없어 카드 수치가 1로 폴백될 수 있다.
                         if 'total_tracks' in first:
-                            return parsed
+                            return [item for item in parsed if can_view(item)]
                     else:
-                        return parsed
+                        return [item for item in parsed if can_view(item)]
             except Exception:
                 pass
 
@@ -180,26 +188,35 @@ class ReadingHistoryService:
 
 
     @staticmethod
-    def get_recently_added(db_type, user_id=None, role=None):
+    def get_recently_added(db_type, user_id=None, role=None, content_rating_max=None):
         # 1. Redis 캐시 확인 (구형 캐시에 series_alias 없으면 DB 재조회)
-        cache_key = f"cache:recent_added:v2:{db_type}:{user_id}:{role}"
+        rating_key = content_rating_max if db_type in ('general', 'adult') and content_rating_max is not None else 'unrestricted'
+        cache_key = f"cache:recent_added:v4:{db_type}:{user_id}:{role}:{rating_key}"
         cached_data = redis_get(cache_key)
         if cached_data:
             try:
                 parsed = json.loads(cached_data)
                 if parsed and isinstance(parsed, list) and (len(parsed) == 0 or 'series_alias' in parsed[0]):
-                    return parsed
+                    from services.content_rating_service import ContentRatingService
+                    return [
+                        item for item in parsed
+                        if db_type not in ('general', 'adult')
+                        or content_rating_max is None
+                        or ContentRatingService.can_view_book(db_type, item.get('id'), content_rating_max)
+                    ]
             except Exception:
                 pass
 
         if role == 'admin':
-            # 관리자: 전체 카테고리 도서 조회
+            # 관리자: 전체 카테고리 도서 조회. 단, 일반/성인 도서의 콘텐츠 등급
+            # 제한은 관리자에게 설정된 최대 허용치에 따라 아래에서 동일하게 적용한다.
             rows = ReadingProgressRepository.fetch_recently_added_all(db_type, user_id)
         else:
             # 일반 유저 또는 user_id=None: 권한 있는 카테고리만 조회
             # user_id=None이면 user_category_permissions JOIN 매칭 없음 → 빈 목록 반환
             rows = ReadingProgressRepository.fetch_recently_added_by_user(db_type, user_id)
             
+        from services.content_rating_service import ContentRatingService
         result = [
             {
                 'id'          : r['id'],
@@ -216,6 +233,9 @@ class ReadingHistoryService:
                 'metadata_locked': r.get('metadata_locked', 0),
             }
             for r in rows
+            if db_type not in ('general', 'adult')
+            or content_rating_max is None
+            or ContentRatingService.can_view_book(db_type, r.get('id'), content_rating_max)
         ]
 
         # 2. Redis 캐시 세팅 (3600초=1시간 만료 설정)

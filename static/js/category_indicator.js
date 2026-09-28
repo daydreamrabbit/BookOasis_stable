@@ -11,11 +11,14 @@ function getSystemCategoryLabel(id) {
 
 export function updateCurrentCategoryIndicator(id, activeItem = null) {
   const indicator = document.getElementById('current-category-indicator');
-  if (!indicator) return;
 
   const targetId = String(id || '');
   const resolvedItem = activeItem || Array.from(document.querySelectorAll('#sidebar-categories .menu-item'))
     .find(item => String(item.dataset.id || item.dataset.categoryId || item.getAttribute('data-category-id') || item.getAttribute('data-id')) === targetId);
+  document.querySelectorAll('#sidebar-categories .menu-item').forEach(item => {
+    item.classList.toggle('active', item === resolvedItem);
+  });
+  if (!indicator) return;
 
   let label = '';
   if (resolvedItem && (resolvedItem.dataset.name || resolvedItem.getAttribute('data-name'))) {

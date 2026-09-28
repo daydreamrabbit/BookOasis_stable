@@ -6,7 +6,6 @@ export function getPageStreamUrl(pageIdx) {
 }
 
 export async function fetchTotalPagesIfNeeded(bookId, currentTotal) {
-  if (currentTotal && currentTotal > 0) return currentTotal;
   try {
     const libType = state.currentLibraryType || 'general';
     const res = await fetch(`/api/media/books/${bookId}/info?type=${libType}`);

@@ -5,10 +5,26 @@ experimental_routes.py - 기존 뷰어 로직과 완전히 분리된 실험적 �
 기존 읽기 전용 API(/api/media/stream, /api/media/books/<id>/info)만 재사용한다.
 """
 import os
-from flask import Blueprint, render_template, request, jsonify, Response
+from flask import Blueprint, render_template, request, jsonify, Response, redirect
 from api.auth import login_required
 
 experimental_bp = Blueprint('experimental', __name__)
+
+
+@experimental_bp.route('/experimental/tts/player', methods=['GET'])
+@login_required
+def tts_player_moved():
+    """이전 실험 플레이어 주소를 정식 듣기 화면으로 연결한다."""
+    query = request.query_string.decode('utf-8', 'ignore')
+    return redirect('/listen' + (f'?{query}' if query else ''))
+
+
+@experimental_bp.route('/experimental/tts/ort/<name>', methods=['GET'])
+@login_required
+def tts_ort_file_legacy(name):
+    """이전 브라우저 캐시의 ORT import URL을 정식 TTS 자산 라우트로 전달한다."""
+    from api.routes.tts_routes import tts_ort_file
+    return tts_ort_file(name)
 
 
 @experimental_bp.route('/experimental/page-turn', methods=['GET'])

@@ -40,9 +40,15 @@ def get_media_libraries():
         visible_group_ids = {library.get('group_id') for library in libraries if library.get('group_id') is not None}
         groups = [
             group for group in CategoryService.get_library_groups(db_type)
-            if role == 'admin' or group.get('id') in visible_group_ids
+            if group.get('id') in visible_group_ids
         ]
-        return jsonify({'success': True, 'libraries': libraries, 'groups': groups})
+        try:
+            kinds = CategoryService.get_library_kinds(db_type)
+        except Exception as kinds_error:
+            # 속성 테이블이 아직 없는 DB(업그레이드 직후 마이그레이션 전)에서도 카테고리 목록은 보여야 한다.
+            print(f"[Libraries] 카테고리 속성 목록 조회 실패(빈 목록으로 대체): {kinds_error}")
+            kinds = []
+        return jsonify({'success': True, 'libraries': libraries, 'groups': groups, 'kinds': kinds})
     except sqlite3.OperationalError as e:
         msg = str(e)
         lock_like = ('locked' in msg.lower()) or ('pool exhausted' in msg.lower()) or ('timeout waiting for connection' in msg.lower())
@@ -72,8 +78,11 @@ def get_media_list():
     tag_filters = _parse_csv_filter_values(request.args.get('tags', ''))
     group_by = request.args.get('group_by', '').strip()
     author_key = request.args.get('author_key', '').strip()
+    # 목록에선 has_metadata를 기본 미계산(null) - 대형 카테고리에서 수 초가 걸리는 비용이라 플러그인 등이 명시적으로 요청할 때만 계산한다.
+    include_has_metadata = request.args.get('include_has_metadata', '').strip().lower() in ('1', 'true', 'yes')
     user_id = session.get('user_id')
     role = session.get('role')
+    content_rating_max = session.get('content_rating_max', 18)
     try:
         page  = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 30))
@@ -81,7 +90,7 @@ def get_media_list():
         page, limit = 1, 30
 
     try:
-        series_list = SeriesService.get_books_list(
+        series_list, has_more = SeriesService.get_books_list(
             db_type,
             library_id,
             page,
@@ -93,9 +102,11 @@ def get_media_list():
             user_id=user_id,
             role=role,
             group_by=group_by,
-            author_key=author_key
+            author_key=author_key,
+            include_has_metadata=include_has_metadata,
+            content_rating_max=content_rating_max,
+            return_has_more=True
         )
-        has_more = len(series_list) > limit
         if has_more:
             series_list = series_list[:limit]
         t_end = time.perf_counter()
@@ -107,10 +118,35 @@ def get_media_list():
             err_msg = '스캔 작업으로 데이터베이스가 잠시 바쁩니다. 잠시 후 다시 시도해 주세요.'
         return jsonify({'success': False, 'error': err_msg}), 500
 
+@media_library_routes_bp.route('/api/media/list/selection-range', methods=['GET'])
+@login_required
+def get_media_selection_range():
+    db_type = request.args.get('type', 'general')
+    if not check_adult_permission(db_type):
+        return jsonify(success=False, error=_t('api.err_no_adult_access')), 403
+    try:
+        anchors = [{'id': int(request.args[f'{side}_id']),
+                    'libraryId': int(request.args[f'{side}_library_id'])} for side in ('start', 'end')]
+        if db_type not in ('general', 'adult') or any(min(a.values()) <= 0 for a in anchors):
+            raise ValueError('올바른 도서를 선택해 주세요.')
+        result = SeriesService.find_jump_position(
+            db_type, request.args.get('library_id'), request.args.get('search', '').strip(),
+            request.args.get('sort', 'asc'), '', 30,
+            genre_filters=_parse_csv_filter_values(request.args.get('genres')),
+            tag_filters=_parse_csv_filter_values(request.args.get('tags')),
+            user_id=session.get('user_id'), role=session.get('role'),
+            content_rating_max=session.get('content_rating_max', 18), selection_anchors=anchors,
+        )
+        return jsonify(success=True, **result)
+    except (ValueError, KeyError) as exc:
+        return jsonify(success=False, error=str(exc)), 400
+
+
 @media_library_routes_bp.route('/api/media/list/jump', methods=['GET'])
 @login_required
 def get_media_list_jump_position():
     """초성(가나다) 바로가기: 대상 글자로 시작하는 첫 항목의 페이지/오프셋을 계산해 반환"""
+    t_start = time.perf_counter()
     db_type = request.args.get('type', 'general')
     if not check_adult_permission(db_type):
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
@@ -122,6 +158,7 @@ def get_media_list_jump_position():
     tag_filters = _parse_csv_filter_values(request.args.get('tags', ''))
     user_id = session.get('user_id')
     role = session.get('role')
+    content_rating_max = session.get('content_rating_max', 18)
     try:
         limit = int(request.args.get('limit', 30))
     except ValueError:
@@ -141,10 +178,21 @@ def get_media_list_jump_position():
             genre_filters=genre_filters,
             tag_filters=tag_filters,
             user_id=user_id,
-            role=role
+            role=role,
+            content_rating_max=content_rating_max,
+        )
+        print(
+            f"[API-PROFILE] GET /api/media/list/jump "
+            f"(type={db_type}, lib={library_id}, char={target_char}) -> "
+            f"TOTAL HTTP RESPONSE: {(time.perf_counter() - t_start) * 1000:.1f}ms"
         )
         return jsonify({'success': True, **result})
     except Exception as e:
+        print(
+            f"[API-PROFILE] GET /api/media/list/jump failed "
+            f"(type={db_type}, lib={library_id}, char={target_char}) -> "
+            f"{(time.perf_counter() - t_start) * 1000:.1f}ms: {e}"
+        )
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @media_library_routes_bp.route('/api/media/list-totals', methods=['GET'])
@@ -167,6 +215,7 @@ def get_media_list_totals():
             tag_filters=tag_filters,
             user_id=session.get('user_id'),
             role=session.get('role'),
+            content_rating_max=session.get('content_rating_max', 18),
         )
         return jsonify({'success': True, **totals})
     except Exception as error:
@@ -183,12 +232,14 @@ def get_media_all_list():
     library_id = request.args.get('library_id')
     user_id = session.get('user_id', 1)
     role = session.get('role')
+    content_rating_max = session.get('content_rating_max', 18)
     try:
         series_list = SeriesService.get_all_books_list(
             db_type,
             library_id,
             user_id=user_id,
-            role=role
+            role=role,
+            content_rating_max=content_rating_max,
         )
         t_end = time.perf_counter()
         print(f"[API-PROFILE] GET /api/media/all-list (type={db_type}, lib={library_id}) -> TOTAL HTTP RESPONSE: {(t_end - t_start)*1000:.1f}ms")
@@ -216,7 +267,8 @@ def get_media_detail():
             library_id,
             user_id=user_id,
             role=role,
-            representative_book_id=representative_book_id
+            representative_book_id=representative_book_id,
+            content_rating_max=session.get('content_rating_max', 18),
         )
         return jsonify({'success': True, 'meta': meta, 'books': books_list})
     except Exception as e:
@@ -260,7 +312,7 @@ def get_media_tags():
     library_id = request.args.get('library_id')
     
     try:
-        tags = LibraryService.get_media_tags(db_type, library_id)
+        tags = LibraryService.get_media_tags(db_type, library_id, session.get('content_rating_max', 18), user_id=session.get('user_id'))
         return jsonify({'success': True, 'tags': tags})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -275,7 +327,7 @@ def get_media_genres():
     library_id = request.args.get('library_id')
     
     try:
-        genres = LibraryService.get_media_genres(db_type, library_id)
+        genres = LibraryService.get_media_genres(db_type, library_id, session.get('content_rating_max', 18), user_id=session.get('user_id'))
         return jsonify({'success': True, 'genres': genres})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -289,7 +341,11 @@ def get_media_history():
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
     user_id = session.get('user_id', 1)
     try:
-        history = ReadingHistoryService.get_history(db_type, user_id=user_id)
+        history = ReadingHistoryService.get_history(
+            db_type,
+            user_id=user_id,
+            content_rating_max=session.get('content_rating_max', 18),
+        )
         return jsonify({'success': True, 'books': history})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -307,7 +363,13 @@ def get_smart_recommendations():
         return jsonify({'success': False, 'error': 'series_name is required'}), 400
     user_id = session.get('user_id', 1)
     try:
-        data = RecommendationService.get_similar_series(db_type, series_name, library_id, user_id=user_id)
+        data = RecommendationService.get_similar_series(
+            db_type,
+            series_name,
+            library_id,
+            user_id=user_id,
+            content_rating_max=session.get('content_rating_max', 18),
+        )
         return jsonify({'success': True, **data})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -322,7 +384,12 @@ def get_media_recently_added():
     try:
         user_id = session.get('user_id')
         role = session.get('role')
-        books = ReadingHistoryService.get_recently_added(db_type, user_id=user_id, role=role)
+        books = ReadingHistoryService.get_recently_added(
+            db_type,
+            user_id=user_id,
+            role=role,
+            content_rating_max=session.get('content_rating_max', 18),
+        )
         return jsonify({'success': True, 'books': books})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

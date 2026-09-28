@@ -117,6 +117,59 @@ class ScannerQueueRepository:
         return dict(row) if row else None
 
     @staticmethod
+    def get_watch_task_result(task_key):
+        """Queue rows are ephemeral; terminal results live in scan_history."""
+        conn = database.get_connection('general')
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM scanner_tasks WHERE task_key = %s ORDER BY id DESC LIMIT 1", (task_key,))
+            row = cursor.fetchone()
+            if row is None:
+                cursor.execute("SELECT status FROM scan_history WHERE task_key = %s ORDER BY id DESC LIMIT 1", (task_key,))
+                row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_task_kwargs(task_id):
+        cursor = None
+        conn = database.get_connection('general')
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT kwargs FROM scanner_tasks WHERE id = %s", (task_id,))
+            row = cursor.fetchone()
+            if not row or not row['kwargs']:
+                return {}
+            try:
+                value = json.loads(row['kwargs'])
+                return value if isinstance(value, dict) else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return {}
+        finally:
+            if cursor:
+                cursor.close()
+            conn.close()
+
+    @staticmethod
+    def update_task_kwargs(task_id, kwargs):
+        conn = database.get_connection('general')
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE scanner_tasks SET kwargs = %s WHERE id = %s AND status IN ('running', 'exit_pending')",
+                (json.dumps(kwargs, ensure_ascii=False), task_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
+
+    @staticmethod
     def insert_task(task_type, task_key, kwargs_json, now_str):
         conn = database.get_connection('general')
         cursor = conn.cursor()
@@ -187,6 +240,24 @@ class ScannerQueueRepository:
             conn.close()
 
     @staticmethod
+    def update_task_stage(task_id, stage):
+        """실행 중 태스크의 진행 단계만 갱신합니다."""
+        conn = database.get_connection('general')
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE scanner_tasks SET stage = %s WHERE id = %s AND status IN ('running', 'exit_pending')",
+                (stage, task_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    @staticmethod
     def fetch_queue_status():
         conn = database.get_connection('general')
         cursor = conn.cursor()
@@ -231,6 +302,63 @@ class ScannerQueueRepository:
         except Exception as e:
             print(f"[QueueRepo WARNING] fetch_queue_status failed: {e}")
             return None, []
+
+
+    @staticmethod
+    def fetch_recent_batch_book_scans(limit=5):
+        """최근 종료된 도서 부분 스캔을 조회한다 (빠른 작업 활동 표시용)."""
+        conn = database.get_connection('general')
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT id, task_type, task_key, kwargs, enqueue_at, started_at,
+                       finished_at, status
+                FROM scan_history
+                WHERE task_type = %s
+                  AND status IN ('completed', 'failed', 'cancelled')
+                  AND finished_at IS NOT NULL
+                ORDER BY finished_at DESC, id DESC
+                LIMIT %s
+                """,
+                ('batch_book_scan', max(1, int(limit))),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"[QueueRepo WARNING] fetch_recent_batch_book_scans failed: {e}")
+            return []
+        finally:
+            conn.close()
+
+    @staticmethod
+    def fetch_recent_library_scans(limit=5):
+        """최근 종료된 카테고리 스캔을 조회한다.
+
+        짧은 스캔은 상태 폴링이 running 상태를 보기 전에 끝날 수 있으므로,
+        목록 자동 갱신에서 사용할 최근 완료 이력을 별도로 제공한다.
+        """
+        conn = database.get_connection('general')
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT id, task_type, task_key, kwargs, enqueue_at, started_at,
+                       finished_at, status
+                FROM scan_history
+                WHERE task_type IN (%s, %s, %s)
+                  AND status IN ('completed', 'failed', 'cancelled')
+                  AND finished_at IS NOT NULL
+                ORDER BY finished_at DESC, id DESC
+                LIMIT %s
+                """,
+                ('library_scan', 'cover_scan', 'folder_watch', max(1, int(limit))),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"[QueueRepo WARNING] fetch_recent_library_scans failed: {e}")
+            return []
+        finally:
+            conn.close()
 
     @staticmethod
     def clear_pending_tasks(now_str):

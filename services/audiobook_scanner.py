@@ -668,7 +668,7 @@ def _dispatch_audiobook_new_items_events(library_id, new_items):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-def scan_audiobook_library(library_path, library_id=None, force=False):
+def scan_audiobook_library(library_path, library_id=None, force=False, cancel_event=None):
     """
     상위 오디오북 라이브러리 디렉토리를 순회하며 모든 오디오북 폴더를 스캔합니다.
     """
@@ -683,6 +683,16 @@ def scan_audiobook_library(library_path, library_id=None, force=False):
     skip_existing = not force
     library_started_at = time.perf_counter()
     new_items = []
+
+    def cancellation_requested():
+        if cancel_event is None:
+            return False
+        try:
+            return bool(cancel_event.is_set())
+        except Exception as cancel_error:
+            # 취소 상태 확인 실패가 정상적인 오디오북 스캔을 실패시키지 않도록 한다.
+            print(f"[AudiobookScanner][CANCEL_CHECK_WARNING] {cancel_error}")
+            return False
 
     from repositories.audiobook_repository import AudiobookRepository
     raw_paths = AudiobookRepository.get_folder_paths(library_id)
@@ -699,6 +709,12 @@ def scan_audiobook_library(library_path, library_id=None, force=False):
 
     # 라이브러리 디렉터리 내 하위 디렉터리들을 오디오북 단위로 탐색
     for root, dirs, files in os.walk(library_path):
+        if cancellation_requested():
+            print(
+                "[AudiobookScanner][CANCELLED] "
+                f"library_id={library_id} processed={count} path={library_path}"
+            )
+            return count
         # audio.json 파일이 존재하거나 오디오 파일이 있는 최하위 디렉토리 감지
         has_audio_json = 'audio.json' in files
         has_audio_files = any(f.lower().endswith(AUDIO_EXTENSIONS) for f in files)

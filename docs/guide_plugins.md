@@ -16,6 +16,11 @@
 
 즉, "메인은 이제 플러그인에 관여하지 않는다"가 설계 목표입니다.
 
+### 라이선스 및 문서화 원칙
+
+- BookOasis 코어는 [AGPLv3](../LICENSE)입니다. 유료/비공개(closed-source) 플러그인 배포는 지원하지 않습니다 — 지금의 플러그인 구조(코어 베이스 클래스를 상속해 같은 프로세스에서 직접 연동)는 AGPL이 요구하는 개방성과 정면으로 배치되고, 무엇보다 BookOasis의 개발 철학 자체가 이를 원하지 않습니다. 플러그인도 코어와 마찬가지로 오픈소스로 공개하는 것을 전제로 합니다.
+- **"문서화 되지 않은 기능은 죽은 기능이다"** — BookOasis의 개발 철학입니다. 플러그인도 예외가 아니며, 플러그인 폴더 안에 `README.md`와 필요한 가이드 문서를 별도로 두는 것을 강력 권고합니다. 문서 없는 기능은 다른 개발자도, 시간이 지난 뒤의 자기 자신도 존재를 알 수 없어 사실상 없는 기능과 같습니다.
+
 ### 호환성 매트릭스 (코어 ↔ 플러그인 계약)
 
 | 코어 버전 범위 | 필수 계약 | 선택 계약 | 비고 |
@@ -402,6 +407,21 @@ render(pluginId, container, context);
 번들 로드는 `GET /api/media/plugins/<plugin_id>/detail-ui`로 이루어지며, `detail_view`를
 선언하지 않은 플러그인이나 비활성화된 플러그인에는 404를 반환합니다.
 
+### 음성으로 듣기 열기 (`window.openListen`)
+
+볼륨 목록을 직접 그리는 플러그인도 TXT/EPUB 권에 공용 듣기 화면을 연결할 수 있습니다.
+
+```javascript
+if (window.canListen?.(book.file_format)) {
+    btn.addEventListener('click', (event) => {
+        event.stopPropagation(); // 권 카드의 뷰어 열기와 중복 실행 방지
+        window.openListen(book.id); // dbType 생략 시 현재 라이브러리, 필요하면 'adult' 지정
+    });
+}
+```
+
+읽기·듣기 위치와 진행도 동기화는 코어가 처리합니다. TTS는 브라우저에서 합성하며 모델은 처음 듣기를 시작할 때 내려받습니다.
+
 ### 플러그인 내부 업데이트 계약 (`update_manifest`)
 
 업데이트 버튼 노출/실행 규칙은 코어 하드코딩이 아니라, **각 플러그인 클래스 내부의 `update_manifest` 선언**으로 동작합니다.
@@ -530,12 +550,18 @@ home_widget = {
     'sessions': 'all',  # _resolve_plugin_sessions()와 동일 규칙 (all / 리스트 / 미지정→general)
     'layout': 'grid',  # 'full'(기본) | 'grid' - 아래 설명 참고
     'size': 2,  # 'grid'일 때만 의미 있음. 1(기본)/2/3 - 아래 설명 참고
+    'initial_data': True,  # 선택: 첫 화면 HTML에 초기 데이터를 미리 주입해 로딩 요청을 줄임
 }
 
 def get_dashboard_data(self, db_type, limit=10):
     # dashboard_widget과 동일한 메서드를 그대로 재사용한다 - 신규 메서드 불필요
     return {'success': True, 'items': []}
 ```
+
+`initial_data`는 선택적 불리언 필드입니다. `True`이면 홈 화면을 렌더링할 때 코어가
+`get_dashboard_data()`를 한 번 호출해 결과를 HTML에 심고, 브라우저는 그 값을 바로
+사용합니다. 초기 위젯의 스피너와 첫 데이터 요청을 줄이고 싶을 때 사용하며, 생략하거나
+`False`로 두면 기존처럼 브라우저가 위젯 API를 호출합니다.
 
 ### 커스텀 CSS/이미지 (`dashboard.html` / `dashboard.css` / `dashboard.js`)
 
@@ -866,7 +892,7 @@ JSONL 파일에 메모를 append하는 저장 패턴을 한 파일 안에서 전
 
 > ⚠️ 베타 테스트 단계이므로 현재는 고정된 단일 plugin_id **`--------`** 하나만 지원합니다. 다른 plugin_id를 등록해도 무시되며, 다중 plugin_id 허용목록 방식은 아직 지원하지 않습니다(추후 필요 시 확장 예정).
 
-- 운영자는 `.env` 또는 `docker-compose.override.yml`의 `environment:` 항목에 `ADD_PLUGIN=security-bookoasis-plugin`을 정확히 설정합니다.
+- 운영자는 `.env`에 `ADD_PLUGIN=security-bookoasis-plugin`을 정확히 설정합니다.
 - (선택) 환경설정 화면 없이도 DB `settings` 테이블에 `ADD_PLUGIN` 키를 직접 저장하면 이 값이 `.env` 값보다 우선 적용됩니다.
 - 플러그인 코드는 자신의 활성화 여부를 결정하는 시점(예: `on_scan_new_books_detected`, `get_dashboard_data`, `search` 등 훅 진입부)에 아래 API를 호출해 `ADD_PLUGIN` 값이 자신의 고정 plugin_id와 정확히 일치하는지 확인합니다. 일치하지 않으면 아무 동작도 하지 않고 조용히 빈 결과/`success: False`를 반환해야 합니다.
 
@@ -1161,6 +1187,28 @@ def _count_books(self, db_type):
     gateway = self.get_db_gateway(db_type)
     row = gateway.fetch_one("SELECT COUNT(*) AS cnt FROM books WHERE COALESCE(is_deleted, 0) = 0")
     return int((row["cnt"] if row else 0) or 0)
+```
+
+### 카테고리 속성 읽기 (`content_kind`, 분류 기준)
+
+카테고리(라이브러리)에는 관리자가 지정한 **속성**(만화·도서·잡지 등)이 있어서, 여러 카테고리에 걸쳐 검색·매칭하는 플러그인(예: 연관작품)이 "같은 제목이지만 어느 종류의 카테고리인지"를 구분하는 기준으로 쓸 수 있습니다. 코어는 값을 저장·노출하기만 합니다.
+
+- **저장 위치:** `libraries.content_kind`(코드 문자열, 기본 `'unspecified'`)와, 종류 목록 `library_kinds(code, name, is_builtin, sort_order)`. 세션(DB)마다 별도입니다.
+- **HTTP:** `GET /api/media/libraries` 응답의 `libraries[].content_kind`·`content_kind_name`, 최상위 `kinds`.
+- **코드 계약(추가만 가능):**
+  - 기본 코드 `manga`·`novel`·`book`·`magazine`은 일반·성인 DB에서 삭제되지 않으며 의미가 고정됩니다(표시 이름은 관리자가 바꿀 수 있으니 이름이 아니라 **코드**로 판단하십시오).
+  - 관리자가 추가한 코드는 그 설치에서만 의미가 있습니다. **모르는 코드는 불투명 문자열로 취급**하고(같은 코드끼리만 "같은 종류"), 값이 `unspecified`이거나 비어 있으면 미지정으로 처리하십시오.
+  - 기본 종류가 없는 DB(오디오북·영상)나 아직 지정하지 않은 카테고리가 있을 수 있으므로, 속성이 없다고 실패하지 말고 지정된 경우에만 분류에 활용하십시오.
+
+```python
+def _library_kinds(self, db_type):
+    gateway = self.get_db_gateway(db_type)
+    rows = gateway.fetch_all("SELECT id, content_kind FROM libraries") or []
+    return {row["id"]: row["content_kind"] for row in rows}
+
+# 같은 제목의 후보 중 만화 카테고리에 속한 것만 고르기
+kinds = self._library_kinds(db_type)
+manga_candidates = [c for c in candidates if kinds.get(c["library_id"]) == "manga"]
 ```
 
 ### 플러그인 캐시 (Redis, 권장)

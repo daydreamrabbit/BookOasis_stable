@@ -1,6 +1,6 @@
 /* author_group_toggle.js – 작가별 모음 / 기본(시리즈) 그리드 뷰 전환 모듈 */
 import { state } from './state.js';
-import { loadBooksList } from './book_list.js';
+import { loadBooksList } from './book_list.js?rev=20260920-mobile-request-cancel-v4';
 
 export function applyGroupModeButtonState(mode) {
   const safeMode = mode === 'author' ? 'author' : 'default';

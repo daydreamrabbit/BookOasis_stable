@@ -26,9 +26,11 @@ if DBMS in ("mariadb", "mysql"):
         reading_progress_repository,
         scanner_queue_repository,
         scheduler_repository,
+        series_delete_repository,
         series_repository,
         settings_repository,
         trash_repository,
+        tts_progress_repository,
         user_repository,
         video_repository,
     )
@@ -51,9 +53,11 @@ else:
         reading_progress_repository,
         scanner_queue_repository,
         scheduler_repository,
+        series_delete_repository,
         series_repository,
         settings_repository,
         trash_repository,
+        tts_progress_repository,
         user_repository,
         video_repository,
     )
@@ -76,9 +80,11 @@ sys.modules['repositories.plugin_repository'] = plugin_repository
 sys.modules['repositories.reading_progress_repository'] = reading_progress_repository
 sys.modules['repositories.scanner_queue_repository'] = scanner_queue_repository
 sys.modules['repositories.scheduler_repository'] = scheduler_repository
+sys.modules['repositories.series_delete_repository'] = series_delete_repository
 sys.modules['repositories.series_repository'] = series_repository
 sys.modules['repositories.settings_repository'] = settings_repository
 sys.modules['repositories.trash_repository'] = trash_repository
+sys.modules['repositories.tts_progress_repository'] = tts_progress_repository
 sys.modules['repositories.user_repository'] = user_repository
 sys.modules['repositories.video_repository'] = video_repository
 
@@ -100,8 +106,10 @@ PluginRepository = plugin_repository.PluginRepository
 ReadingProgressRepository = reading_progress_repository.ReadingProgressRepository
 ScannerQueueRepository = scanner_queue_repository.ScannerQueueRepository
 SchedulerRepository = scheduler_repository.SchedulerRepository
+SeriesDeleteRepository = series_delete_repository.SeriesDeleteRepository
 SeriesRepository = series_repository.SeriesRepository
 SettingsRepository = settings_repository.SettingsRepository
 TrashRepository = trash_repository.TrashRepository
+TTSProgressRepository = tts_progress_repository.TTSProgressRepository
 UserRepository = user_repository.UserRepository
 VideoRepository = video_repository.VideoRepository

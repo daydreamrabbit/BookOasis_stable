@@ -18,6 +18,17 @@ def _offsets_from_zipfile(zf):
     ]
 
 
+def collect_zip_offsets_from_open_zip(zf):
+    """열려 있는 ZIP에서 페이지 오프셋 행을 수집한다.
+
+    원격/FUSE 경로는 페이지마다 로컬 헤더를 다시 seek/read하면 원격 요청이 급증할 수
+    있으므로 data_offset은 미리 계산하지 않는다. DB 컬럼에는 NULL을 저장해 뷰어가
+    기존 헤더 프로브 방식으로 안전하게 폴백하도록 한다. 반환 튜플은 DB 저장 계약에
+    맞춰 항상 7개 필드(page_idx부터 data_offset까지)를 가진다.
+    """
+    return [row + (None,) for row in _offsets_from_zipfile(zf)]
+
+
 def resolve_data_offset_from_header_bytes(header_offset, header_bytes):
     """로컬 파일 헤더 30바이트(그 이상이어도 앞 30바이트만 사용)를 파싱해 fname_len/extra_len을
     반영한, 압축 데이터가 실제로 시작하는 바이트 위치를 계산한다. 시그니처가 아니거나 길이가

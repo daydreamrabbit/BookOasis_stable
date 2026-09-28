@@ -106,6 +106,9 @@ def extract_gdrive_folder_id(path_or_url):
     match = re.search(r'folders/([a-zA-Z0-9_-]+)', raw)
     if match:
         return match.group(1)
+    virtual_match = re.match(r'^gdrive:/+([a-zA-Z0-9_-]+)(?:/|$)', raw, re.IGNORECASE)
+    if virtual_match:
+        return virtual_match.group(1)
     if re.match(r'^[a-zA-Z0-9_-]{20,}$', raw):
         return raw
     return None
@@ -118,7 +121,7 @@ def extract_gdrive_folder_id(path_or_url):
 HTML_SCRAPE_SUSPECTED_PAGE_SIZE = 50
 
 
-def _fetch_subfolders_parallel(sub_specs, depth, max_depth, visited_folders, truncation_warnings):
+def _fetch_subfolders_parallel(sub_specs, depth, max_depth, visited_folders, truncation_warnings, target_subpath=None):
     """같은 depth의 형제 서브폴더들을 스레드풀로 동시에 재귀 탐색한다.
 
     visited_folders(set)/truncation_warnings(list)에 대한 동시 append/add는 각각의 개별
@@ -133,7 +136,7 @@ def _fetch_subfolders_parallel(sub_specs, depth, max_depth, visited_folders, tru
         futures = {
             executor.submit(
                 fetch_gdrive_folder_files, sub_id, sub_rel, depth + 1, max_depth,
-                visited_folders, truncation_warnings
+                visited_folders, truncation_warnings, target_subpath
             ): sub_rel
             for sub_id, sub_rel in sub_specs
         }
@@ -146,7 +149,15 @@ def _fetch_subfolders_parallel(sub_specs, depth, max_depth, visited_folders, tru
     return results
 
 
-def fetch_gdrive_folder_files(folder_id_or_url, parent_subpath="", depth=0, max_depth=4, visited_folders=None, truncation_warnings=None):
+def fetch_gdrive_folder_files(
+    folder_id_or_url,
+    parent_subpath="",
+    depth=0,
+    max_depth=4,
+    visited_folders=None,
+    truncation_warnings=None,
+    target_subpath=None,
+):
     """
     Google Drive REST API (또는 웹 파싱 폴백)를 호출하여 하위 폴더(Subfolders)까지 재귀 수집합니다.
     """
@@ -164,6 +175,20 @@ def fetch_gdrive_folder_files(folder_id_or_url, parent_subpath="", depth=0, max_
 
     if truncation_warnings is None:
         truncation_warnings = []
+
+    target_parts = [
+        part for part in str(target_subpath or '').replace('\\', '/').strip('/').split('/') if part
+    ]
+    current_parts = [
+        part for part in str(parent_subpath or '').replace('\\', '/').strip('/').split('/') if part
+    ]
+    in_target_scope = not target_parts or current_parts[:len(target_parts)] == target_parts
+    is_target_parent = (
+        bool(target_parts)
+        and len(current_parts) < len(target_parts)
+        and target_parts[:len(current_parts)] == current_parts
+    )
+    next_target_folder = target_parts[len(current_parts)] if is_target_parent else None
 
     if folder_id in visited_folders:
         return []
@@ -213,14 +238,17 @@ def fetch_gdrive_folder_files(folder_id_or_url, parent_subpath="", depth=0, max_
                 item_id = item.get('id', '')
 
                 if mime == 'application/vnd.google-apps.folder':
-                    if item_id not in visited_folders:
+                    is_relevant_folder = in_target_scope or name == next_target_folder
+                    if is_relevant_folder and item_id not in visited_folders:
                         sub_rel = os.path.join(parent_subpath, name) if parent_subpath else name
                         sub_specs.append((item_id, sub_rel))
-                elif any(name.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS):
+                elif in_target_scope and any(name.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS):
                     item['rel_folder'] = parent_subpath
                     files_result.append(item)
 
-            files_result.extend(_fetch_subfolders_parallel(sub_specs, depth, max_depth, visited_folders, truncation_warnings))
+            files_result.extend(_fetch_subfolders_parallel(
+                sub_specs, depth, max_depth, visited_folders, truncation_warnings, target_subpath
+            ))
 
             if files_result and depth == 0:
                 print(f"[gdrive_helper] ✅ Google API 총 {len(files_result)}개 도서 수집 성공! ({page_count}페이지 조회)")
@@ -280,7 +308,8 @@ def fetch_gdrive_folder_files(folder_id_or_url, parent_subpath="", depth=0, max_
             if is_subfolder:
                 # 폴더명 추출 (끝의 타입 설명 제거)
                 folder_name = re.sub(r'\s+(?:Shared folder|공유 폴더|폴더)$', '', raw_label, flags=re.IGNORECASE).strip()
-                if item_id not in visited_folders:
+                is_relevant_folder = in_target_scope or folder_name == next_target_folder
+                if is_relevant_folder and item_id not in visited_folders:
                     print(f"[gdrive_helper] 📁 하위 폴더 감지: '{folder_name}' (ID: {item_id})")
                     folders_to_recurse.append((item_id, folder_name))
             else:
@@ -289,6 +318,8 @@ def fetch_gdrive_folder_files(folder_id_or_url, parent_subpath="", depth=0, max_
                 fname_key = fname.lower()
 
                 # 지원 확장자 필터링
+                if not in_target_scope:
+                    continue
                 if not any(fname_key.endswith(ext) for ext in SUPPORTED_EXTENSIONS):
                     print(f"[gdrive_helper DEBUG] 미지원 확장자 스킵: '{fname}'")
                     continue
@@ -323,7 +354,9 @@ def fetch_gdrive_folder_files(folder_id_or_url, parent_subpath="", depth=0, max_
             (sub_id, os.path.join(parent_subpath, sub_name) if parent_subpath else sub_name)
             for sub_id, sub_name in folders_to_recurse
         ]
-        files_result.extend(_fetch_subfolders_parallel(sub_specs, depth, max_depth, visited_folders, truncation_warnings))
+        files_result.extend(_fetch_subfolders_parallel(
+            sub_specs, depth, max_depth, visited_folders, truncation_warnings, target_subpath
+        ))
 
         if depth == 0:
             print(f"[gdrive_helper] 🎯 최종 수집 완료된 전체 도서 수: {len(files_result)}개")
@@ -641,10 +674,16 @@ def has_gdrive_share_line(physical_path_text):
     return any(is_gdrive_url(line.strip()) for line in lines if line.strip())
 
 
-def is_remote_path(path):
+def is_remote_path(path, library_is_remote=False):
     """
-    주어진 경로가 원격 마운트(VFS, rclone, 네트워크 드라이브 등)인지 자동으로 판별합니다.
+    주어진 경로 또는 라이브러리 설정이 원격 마운트(VFS, rclone, 네트워크 드라이브 등)인지 판별합니다.
     """
+    try:
+        if int(library_is_remote or 0):
+            return True
+    except (TypeError, ValueError):
+        pass
+
     if not path:
         return False
         

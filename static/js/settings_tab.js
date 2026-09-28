@@ -1,9 +1,9 @@
 // settings_tab.js - 환경설정 제어 통합 엔트리포인트 및 프록시 모듈
 import { applySettingsToUI, loadInitialSystemSettings, loadGeneralSettings, submitGeneralSettings, loadMySettings, submitMySettings } from './settings/general.js';
-import { loadPluginsSettings } from './settings/plugins.js';
+import { loadPluginsSettings } from './settings/plugins.js?rev=20260921-plugin-settings-account-sync-v6';
 import { initReportsTab, loadReportList, loadReportDetail } from './settings/reports.js';
 import { loadUsersList } from './settings/users.js';
-import { loadPermissionsMatrix } from './settings/permissions.js';
+import { loadPermissionsMatrix } from './settings/permissions.js?rev=20260921-admin-permissions-v1';
 import { loadQueueStatus } from './settings/queue.js';
 import { loadMcpPendingChanges } from './settings/mcp_pending.js';
 import { loadExternalDomainsSettings } from './settings/external_domains.js';
@@ -71,14 +71,53 @@ function setAboutVersionLoadError(dashEl, latestEl, stateEl, messageKey, fallbac
 // 관리자 전용 설정 탭 목록. switchSettingsTab()의 접근 차단과 applySettingsTabAccessControl()의
 // 탭 버튼 노출 여부가 이 목록 하나를 공유한다 - 둘이 따로 놀면 "버튼은 보이는데 눌러보면
 // 차단"되거나 반대로 "버튼은 없는데 URL 직접 조작하면 열림" 같은 불일치가 생긴다.
-// 'external-domains'는 의도적으로 이 목록에 없음 — 전역 화이트리스트를 일반 사용자도
-// 조회는 할 수 있어야 하므로 탭 자체는 열어두고, 추가/삭제 UI만 관리자 전용으로 숨긴다
-// (external_domains.js의 applyNonAdminExternalDomainsMode 참고).
-export const ADMIN_ONLY_SETTINGS_TABS = ['schedule', 'general', 'plugins', 'reports', 'trash', 'users', 'permissions', 'mcp-pending'];
+export const ADMIN_ONLY_SETTINGS_TABS = ['schedule', 'general', 'plugins', 'reports', 'trash', 'users', 'permissions', 'mcp-pending', 'external-domains'];
+const SETTINGS_TAB_STORAGE_KEY = 'bookoasis:settings:activeTab';
+
+function isAdminUser() {
+  return !!(window.currentUser && window.currentUser.role === 'admin');
+}
+
+function defaultSettingsTab() {
+  return isAdminUser() ? 'schedule' : 'my';
+}
+
+function isAccessibleSettingsTab(tabId) {
+  if (!tabId || !document.getElementById(`settings-tab-${tabId}`)) return false;
+  return isAdminUser() || !ADMIN_ONLY_SETTINGS_TABS.includes(tabId);
+}
+
+function rememberSettingsTab(tabId) {
+  try {
+    sessionStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tabId);
+  } catch (e) {}
+
+  // 새로고침 뒤에도 현재 history entry가 어느 설정 탭이었는지 알 수 있게 남긴다.
+  // 다른 화면의 history state에는 설정 탭 정보를 섞지 않는다.
+  if (window.history?.state && String(window.history.state.libraryId || '') === 'settings') {
+    try {
+      history.replaceState({ ...history.state, settingsTab: tabId }, '', window.location.href);
+    } catch (e) {}
+  }
+}
+
+export function getPreferredSettingsTab() {
+  const historyTab = window.history?.state && String(window.history.state.libraryId || '') === 'settings'
+    ? window.history.state.settingsTab
+    : null;
+  if (isAccessibleSettingsTab(historyTab)) return historyTab;
+
+  try {
+    const storedTab = sessionStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
+    if (isAccessibleSettingsTab(storedTab)) return storedTab;
+  } catch (e) {}
+
+  return defaultSettingsTab();
+}
 
 // 관리자가 아니면 관리자 전용 탭 버튼 자체를 화면에서 숨긴다 (비활성화 표시가 아니라 노출 차단).
 export function applySettingsTabAccessControl() {
-  const isAdmin = !!(window.currentUser && window.currentUser.role === 'admin');
+  const isAdmin = isAdminUser();
   document.querySelectorAll('.settings-tab-btn[data-settings-tab]').forEach((btn) => {
     const tabId = btn.getAttribute('data-settings-tab');
     if (ADMIN_ONLY_SETTINGS_TABS.includes(tabId)) {
@@ -93,12 +132,16 @@ export function switchSettingsTab(tabId) {
   // 일반 사용자는 어드민 전용 탭에 접근하지 못하도록 차단 및 'about'으로 우회
   // (버튼 자체는 applySettingsTabAccessControl()이 이미 숨기지만, URL 직접 조작 등
   // 버튼을 거치지 않는 호출에 대비해 여기서도 한 번 더 막는다)
-  const isAdmin = window.currentUser && window.currentUser.role === 'admin';
+  const isAdmin = isAdminUser();
 
   if (!isAdmin && ADMIN_ONLY_SETTINGS_TABS.includes(tabId)) {
     console.warn(`[Settings-Tab] Access denied for tab '${tabId}'. Redirecting to 'about'...`);
-    switchSettingsTab('about');
+    switchSettingsTab(defaultSettingsTab());
     return;
+  }
+
+  if (!isAccessibleSettingsTab(tabId)) {
+    tabId = defaultSettingsTab();
   }
 
   console.log(`[Settings-Tab] Switching to settings tab: ${tabId}`);
@@ -128,6 +171,8 @@ export function switchSettingsTab(tabId) {
   if (activeBtn) {
     activeBtn.classList.add('active');
   }
+
+  rememberSettingsTab(tabId);
 
   // 5. 각 탭 데이터 조회 로드
   if (tabId === 'general') {

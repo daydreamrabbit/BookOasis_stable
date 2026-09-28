@@ -4,6 +4,7 @@ system_routes.py – 시스템 상태, 큐, 정보 조회 라우터
 """
 import os
 import re
+import datetime
 from flask import Blueprint, request, jsonify, session
 from api.auth import admin_required, login_required, verify_webhook_token, webhook_token_required
 from flask import render_template
@@ -15,6 +16,53 @@ import database
 system_bp = Blueprint('system', __name__)
 
 _LIB_NAME_MEM_CACHE = {}
+
+
+@system_bp.route('/api/system/library-events', methods=['GET'])
+@login_required
+def library_events():
+    from flask import Response
+    from services.library_events import library_event_stream, STREAM_SLOTS
+    from utils.redis_helper import get_redis_client
+    client = get_redis_client()
+    if client is None or not STREAM_SLOTS.acquire(blocking=False):
+        return jsonify(success=False, error='변경 알림 연결을 잠시 후 재시도합니다.'), 503
+    response = Response(library_event_stream(client), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Accel-Buffering'] = 'no'
+    response.call_on_close(STREAM_SLOTS.release)
+    return response
+
+
+@system_bp.route('/api/system/library-revisions', methods=['GET'])
+@login_required
+def library_revisions():
+    # Only opaque invalidation tokens; no titles, paths or restricted metadata.
+    from services.series_service import _read_shared_books_cache_epoch
+    response = jsonify(success=True, revisions={
+        kind: str(_read_shared_books_cache_epoch(kind) or '')
+        for kind in ('general', 'adult', 'audiobook', 'video')
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def _elapsed_seconds_from_server_timestamp(value):
+    """서버/DB가 기록한 타임스탬프와 같은 시간대 기준으로 경과 초를 계산합니다."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, datetime.datetime):
+            started_at = value
+        else:
+            raw = str(value).strip()
+            if raw.endswith('Z'):
+                raw = raw[:-1] + '+00:00'
+            started_at = datetime.datetime.fromisoformat(raw)
+        now = datetime.datetime.now(started_at.tzinfo) if started_at.tzinfo else datetime.datetime.now()
+        return max(0, int((now - started_at).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 def get_library_name(db_type, lib_id):
     """라이브러리 ID에 대치되는 실제 카테고리(라이브러리) 명칭을 메모리 캐시에서 즉시 조회합니다 (DB Lock 예방)."""
@@ -65,9 +113,32 @@ def index():
         print(f"[Index] 홈 대시보드 초기 레이아웃 계산 실패, 클래식 레이아웃으로 폴백: {e}")
         home_layout = {'mode': 'classic', 'widgets': [], 'catalog': []}
 
+    home_widget_initial_data = {}
+    if home_layout.get('mode') == 'plugin':
+        try:
+            from services.metadata_factory import MetadataFactory
+            for widget in home_layout.get('widgets', []):
+                if widget.get('kind') != 'plugin' or widget.get('hidden') or not widget.get('initial_data'):
+                    continue
+                plugin_id = str(widget.get('plugin_id') or '').strip()
+                if not plugin_id:
+                    continue
+                try:
+                    provider = MetadataFactory.get_provider_by_id(plugin_id)
+                    result = provider.get_dashboard_data('general', limit=widget.get('limit', 10))
+                    if not isinstance(result, dict) or not result.get('success'):
+                        continue
+                    MetadataFactory.add_dashboard_ui_bundle(plugin_id, result)
+                    home_widget_initial_data[widget.get('id')] = result
+                except Exception as e:
+                    print(f"[Index] 홈 위젯 초기 데이터 로드 실패 ({plugin_id}): {e}")
+        except Exception as e:
+            print(f"[Index] 홈 위젯 초기 데이터 조회 준비 실패: {e}")
+
     return render_template(
         'index.html', active_page='media_library', settings=settings,
         view_log_enabled=view_log_enabled, develop_mode=develop_mode, home_layout=home_layout,
+        home_widget_initial_data=home_widget_initial_data,
     )
 
 @system_bp.route('/api/system/status', methods=['GET'])
@@ -80,6 +151,11 @@ def get_system_status():
         tuning_active = database.is_db_tuning(db_type)
         from services.scanner_queue import scanner_queue
         status = scanner_queue.get_queue_status()
+        if status.get('running'):
+            running = status['running']
+            running['elapsed_seconds'] = _elapsed_seconds_from_server_timestamp(
+                running.get('started_at') or running.get('enqueued_at')
+            )
 
         running_tasks = []
         has_running = False
@@ -104,7 +180,21 @@ def get_system_status():
             elif task_type == 'cover_scan':
                 running_tasks.append(f"[{target_disp} ({db_t})] 표지 전용 스캔 진행 중...")
             elif task_type == 'lazy_scan':
-                running_tasks.append("[전체 시스템] Lazy Scanner 실행 중...")
+                series_name = str(kwargs.get('series_name') or '').strip()
+                if series_name:
+                    running_tasks.append(f"[{target_disp} · {series_name}] Lazy Scanner 실행 중...")
+                elif lib_id is not None:
+                    running_tasks.append(f"[{target_disp} ({db_t})] Lazy Scanner 실행 중...")
+                else:
+                    running_tasks.append("[전체 시스템] Lazy Scanner 실행 중...")
+            elif task_type == 'batch_book_scan':
+                if kwargs.get('scan_mode') == 'force_series_path':
+                    series_name = str(kwargs.get('series_name') or '시리즈').strip()
+                    running_tasks.append(f"[{series_name}] 시리즈 폴더 강제 스캔 진행 중...")
+                else:
+                    selected_count = len(kwargs.get('book_ids') or [])
+                    prefix = '강제 재스캔' if kwargs.get('force') else '도서 스캔'
+                    running_tasks.append(f"[선택 도서 {selected_count}권] {prefix} 진행 중...")
             else:
                 running_tasks.append("백그라운드 작업 진행 중...")
 
@@ -138,6 +228,10 @@ def get_system_status():
             _add_library_name(status['running'])
         for pending_task in status.get('pending', []):
             _add_library_name(pending_task)
+        for recent_task in status.get('recent_book_scans', []):
+            _add_library_name(recent_task)
+        for recent_task in status.get('recent_library_scans', []):
+            _add_library_name(recent_task)
 
         response = jsonify({
             'success': True,
@@ -155,6 +249,21 @@ def get_system_status():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@system_bp.route('/api/system/db-pool-status', methods=['GET'])
+@admin_required
+def get_db_pool_status():
+    """DB 커넥션 풀의 allocated/idle/in_use 스냅샷을 db_type별로 조회합니다.
+    스캔 중에만 로그로 찍히던 [DB-Pool] 정보(tools/scanner/engine.py)를 평상시에도
+    확인할 수 있게 하는 진단용 엔드포인트 - allocated가 idle/in_use 합보다 계속 커지며
+    내려오지 않는다면 커넥션 반납 누수를 의심할 수 있다."""
+    try:
+        pools = {}
+        for db_type in ('general', 'adult', 'audiobook', 'video'):
+            pools[db_type] = database.get_pool_stats(db_type)
+        return jsonify({'success': True, 'pools': pools})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @system_bp.route('/api/media/system/queue', methods=['GET'])
 @admin_required
 def get_system_queue_status():
@@ -167,13 +276,22 @@ def get_system_queue_status():
         def _enhance_task(task):
             if not task:
                 return task
-            if task['type'] in ('library_scan', 'cover_scan'):
+            if task['type'] in ('library_scan', 'cover_scan', 'folder_watch'):
                 db_type = task['kwargs'].get('db_type', 'general')
                 lib_id = task['kwargs'].get('library_id')
                 lib_name = get_library_name(db_type, lib_id)
                 task['library_name'] = f"{lib_name} ({db_type})" if lib_name else f"Library {lib_id} ({db_type})"
             elif task['type'] == 'lazy_scan':
                 task['library_name'] = "전체 시스템 (Lazy Scanner)"
+            elif task['type'] == 'batch_book_scan':
+                kwargs = task.get('kwargs', {})
+                db_type = kwargs.get('db_type', 'general')
+                library_id = kwargs.get('library_id')
+                if library_id is not None:
+                    library_name = get_library_name(db_type, library_id)
+                    task['library_name'] = f"{library_name} ({db_type})" if library_name else f"Library {library_id} ({db_type})"
+                else:
+                    task['library_name'] = f"선택 도서 {len(kwargs.get('book_ids') or [])}권"
             return task
         
         if status['running']:

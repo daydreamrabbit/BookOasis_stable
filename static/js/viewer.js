@@ -1,29 +1,75 @@
 // viewer.js – 미디어 뷰어 라이프사이클 및 단축키 코어 조율기
 import { state } from './state.js';
-import { nextComicPage, prevComicPage, setComicFitMode, toggleComicOverlay, markAsCompleted as markComicAsCompleted, getComicReadingDirection, toggleComicReadingDirection, toggleComicPageStep, comicJumpToFirstPage, comicJumpToLastPage, toggleTapZoneDirection, initTapZoneDirection, toggleComicSplitSpread, toggleSpreadShiftOffset, loadComicPage } from './viewer_comic.js';
-import { prevTxtPage, nextTxtPage, applyTxtSettings, txtJumpToFirstPage, txtJumpToLastPage } from './viewer_txt.js';
-import { addBookmarkAtCurrentPosition } from './viewer/txt_toc.js';
+import { nextComicPage, prevComicPage, setComicFitMode, toggleComicOverlay, markAsCompleted as markComicAsCompleted, getComicReadingDirection, initReadingDirection, toggleComicReadingDirection, toggleComicPageStep, comicJumpToFirstPage, comicJumpToLastPage, setTapZoneDirection, toggleTapZoneDirection, initTapZoneDirection, toggleComicSplitSpread, toggleSpreadShiftOffset, loadComicPage, initPageStep, resetSpreadShiftOffset } from './viewer_comic.js';
+import { prevTxtPage, nextTxtPage, applyTxtSettings, txtJumpToFirstPage, txtJumpToLastPage } from './viewer_txt.js?rev=20260927-tts-session-v8';
+import { openEpubTocPanel } from './viewer/txt_toc.js?rev=20260922-reader-session-v45';
+import { openInlineTts, openInlineTtsSettings } from './viewer/inline_tts.js';
+import { initViewerBookmarkController, toggleCurrentPageBookmark } from './viewer/bookmark_controller.js';
+import { closeViewerSidePanels, openViewerSearchPanel, openImageReadingNotesPanel } from './viewer/ridi_panels.js';
 import { nextPdfPage, prevPdfPage, pdfJumpToFirstPage, pdfJumpToLastPage, renderPdfPage } from './viewer_pdf.js';
 import { initFullscreenStateSync, isViewerInFullscreen, toggleFullscreenViewer } from './viewer/fullscreen_controller.js';
-import { initViewerSeekBar } from './viewer/seekbar_controller.js';
+import { initViewerSeekBar, rememberViewerPosition, returnToPreviousViewerPosition } from './viewer/seekbar_controller.js?rev=20260927-tts-session-v8';
 import {
   configureLifecycleController,
   getActiveViewerInstance,
   openReader,
   closeMediaViewer,
-} from './viewer/lifecycle_controller.js';
+} from './viewer/lifecycle_controller.js?rev=20260927-tts-session-v8';
 import {
   configureInputController,
   initKeyboardListener,
   initWheelListener,
   syncHotspotPointerEvents,
   initViewerClickToggle,
-} from './viewer/input_controller.js';
+} from './viewer/input_controller.js?rev=20260927-tts-session-v8';
+import {
+  ViewerDisplayMode,
+  getViewerDisplayMode,
+  saveViewerDisplayMode,
+  syncViewerDisplayModeUI,
+  initViewerChrome,
+  resetViewerChrome,
+  toggleViewerChrome,
+} from './viewer/display_mode.js?rev=20260922-reader-session-v45';
 export { toggleFullscreenViewer };
 export { initKeyboardListener, initWheelListener, syncHotspotPointerEvents, initViewerClickToggle };
 export { openReader, closeMediaViewer, initViewerSeekBar };
 
 initFullscreenStateSync();
+
+function closeViewerSettingsOverlay() {
+  const menu = document.getElementById('comic-overlay-menu');
+  if (menu && menu.style.display === 'flex') toggleComicOverlay({ suppressReopen: false });
+}
+
+// 보기 설정은 설정 카드 안을 조작할 때만 유지한다. 카드 바깥을 누르면
+// 모바일의 합성 click보다 먼저 설정 시트를 닫는다.
+document.addEventListener('pointerdown', (event) => {
+  const menu = document.getElementById('comic-overlay-menu');
+  if (!menu || menu.style.display !== 'flex') return;
+  const target = event.target;
+  if (target?.closest?.('.ridi-view-settings') || target?.closest?.('.ridi-viewer-toolbar-top')) return;
+  toggleComicOverlay({ suppressReopen: false });
+}, true);
+
+document.addEventListener('viewer-side-panel-opening', closeViewerSettingsOverlay);
+document.addEventListener('viewer-chrome-will-hide', closeViewerSettingsOverlay);
+
+document.addEventListener('viewer-side-panel-state-changed', (event) => {
+  const activePanel = event.detail?.panel || null;
+  const actionByPanel = {
+    toc: 'open-toc',
+    notes: 'open-reading-notes',
+    search: 'open-viewer-search',
+  };
+  document.querySelectorAll('.ridi-viewer-tools [data-action]').forEach((button) => {
+    const isActive = actionByPanel[activePanel] === button.dataset.action;
+    if (['open-toc', 'open-reading-notes', 'open-viewer-search'].includes(button.dataset.action)) {
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-pressed', String(isActive));
+    }
+  });
+});
 
 // Unused legacy EPUB functions (stubbed for compatibility)
 export async function initEpubViewer(bookId, pagesRead, totalPages) {}
@@ -32,7 +78,117 @@ export async function epubPrevPage() {}
 export async function epubNextPage() {}
 export async function applyEpubSettings(options) {}
 export async function changeEpubScrollMode(scrollMode) {}
-import { THEMES, updateFontSize, toggleTheme, setViewerTheme, updateLineHeight, updateParagraphSpacing } from './viewer_settings.js';
+import { THEMES, getViewerSettings, updateFontSize, toggleTheme, setViewerTheme, updateLineHeight, updateParagraphSpacing } from './viewer_settings.js';
+import { fetchUserSettings, updateUserSetting } from './api.js';
+
+const viewerPreferenceSaveTimers = new Map();
+
+function persistViewerPreference(key, value) {
+  state.systemSettings[key] = String(value);
+  clearTimeout(viewerPreferenceSaveTimers.get(key));
+  viewerPreferenceSaveTimers.set(key, setTimeout(() => {
+    updateUserSetting(key, String(value)).then((result) => {
+      if (result?.success) state.systemSettings[key] = String(value);
+    }).catch((error) => console.warn(`[Viewer-Settings] ${key} 저장 실패:`, error));
+  }, 250));
+}
+
+function addFontOption(select, value, label = value) {
+  if (!select || !value || [...select.options].some((option) => option.value === value)) return;
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = label;
+  select.appendChild(option);
+}
+
+export function syncViewerSettingsUI() {
+  const settings = getViewerSettings();
+  const fontSizePx = Math.round(settings.fontSize * 16);
+  const controls = {
+    'ridi-font-size-value': `${fontSizePx}px`,
+    'ridi-line-height-value': settings.lineHeight.toFixed(1),
+    'ridi-paragraph-spacing-value': `${settings.paragraphSpacing.toFixed(1)}em`,
+  };
+  Object.entries(controls).forEach(([id, value]) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+  });
+  const settingsFontSize = document.getElementById('my-setting-viewer-font-size');
+  if (settingsFontSize) settingsFontSize.value = String(fontSizePx);
+
+  ['viewer-font-select', 'ridi-viewer-font-select', 'my-setting-viewer-font-family'].forEach((id) => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    addFontOption(select, settings.fontFamily, settings.fontFamily);
+    select.value = settings.fontFamily;
+  });
+  const lineSelect = document.getElementById('viewer-line-height-select');
+  const paragraphSelect = document.getElementById('viewer-paragraph-spacing-select');
+  if (lineSelect) lineSelect.value = settings.lineHeight.toFixed(1);
+  if (paragraphSelect) paragraphSelect.value = settings.paragraphSpacing.toFixed(1);
+
+  document.querySelectorAll('.ridi-theme-options [data-action="viewer-theme"]').forEach((button) => {
+    const active = button.dataset.value === settings.theme.name;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+
+  const modal = document.getElementById('media-viewer-modal');
+  if (modal) {
+    const dark = ['dark', 'black', 'navy'].includes(settings.theme.name);
+    modal.dataset.viewerTheme = settings.theme.name;
+    [modal, document.documentElement].forEach((target) => {
+      target.style.setProperty('--viewer-theme-bg', settings.theme.background);
+      target.style.setProperty('--viewer-theme-text', settings.theme.text);
+      target.style.setProperty('--viewer-panel-bg', `color-mix(in srgb, ${settings.theme.background} ${dark ? 84 : 92}%, ${dark ? '#ffffff' : '#000000'})`);
+      target.style.setProperty('--viewer-panel-soft', `color-mix(in srgb, ${settings.theme.background} ${dark ? 72 : 84}%, ${dark ? '#ffffff' : '#000000'})`);
+      target.style.setProperty('--viewer-panel-border', `color-mix(in srgb, ${settings.theme.text} 20%, transparent)`);
+      target.style.setProperty('--viewer-panel-muted', `color-mix(in srgb, ${settings.theme.text} 68%, transparent)`);
+    });
+  }
+  syncViewerSpreadSettingsUI();
+}
+
+export function syncViewerSpreadSettingsUI() {
+  const spread = document.getElementById('ridi-spread-settings');
+  const twoPage = (localStorage.getItem('comic_page_step') === '2')
+    && (localStorage.getItem('viewer_scroll_mode') || 'page') === 'page';
+  if (spread) spread.hidden = !twoPage;
+  const gapButton = document.getElementById('ridi-center-gap-button');
+  const gapRemoved = localStorage.getItem('remove_2page_center_gap') === '1';
+  if (gapButton) {
+    gapButton.classList.toggle('is-active', gapRemoved);
+    const label = gapButton.querySelector('span');
+    if (label) label.textContent = gapRemoved ? '가운데 여백 복원' : '가운데 여백 제거';
+  }
+  const shiftButton = document.getElementById('ridi-spread-shift-button');
+  if (shiftButton) shiftButton.classList.toggle('is-active', localStorage.getItem('viewer_spread_cover_alone') === '0');
+}
+
+async function hydrateViewerPreferences() {
+  try {
+    const result = await fetchUserSettings();
+    if (!result?.success || !result.settings) return;
+    const settings = result.settings;
+    state.systemSettings = { ...state.systemSettings, ...settings };
+    if (settings.VIEWER_FONT_SIZE) localStorage.setItem('viewer_font_size', (Number(settings.VIEWER_FONT_SIZE) / 16).toFixed(2));
+    if (settings.VIEWER_FONT_FAMILY) {
+      const fontFamily = settings.VIEWER_FONT_FAMILY === 'sans-serif'
+        ? 'pretendard'
+        : (settings.VIEWER_FONT_FAMILY === 'serif' ? 'batang' : settings.VIEWER_FONT_FAMILY);
+      localStorage.setItem('viewer_font_family', fontFamily);
+      state.systemSettings.VIEWER_FONT_FAMILY = fontFamily;
+    }
+    if (settings.VIEWER_THEME) localStorage.setItem('viewer_theme', settings.VIEWER_THEME);
+    if (settings.VIEWER_LINE_HEIGHT) localStorage.setItem('viewer_line_height', settings.VIEWER_LINE_HEIGHT);
+    if (settings.VIEWER_PARAGRAPH_SPACING) localStorage.setItem('viewer_paragraph_spacing', settings.VIEWER_PARAGRAPH_SPACING);
+    syncViewerThemeUI();
+    syncViewerSettingsUI();
+    getActiveViewerInstance()?.applySettings?.({ skipSavedPositionRestore: true });
+  } catch (error) {
+    console.warn('[Viewer-Settings] 계정 설정 동기화 실패:', error);
+  }
+}
 
 // 사용자 정의 폰트 목록 로드 및 드롭다운 바인딩
 export function loadCustomFontsList() {
@@ -58,29 +214,18 @@ export function loadCustomFontsList() {
             styleEl.innerHTML = styleContent;
         }
 
-        const select = document.getElementById('viewer-font-select');
-        if (select) {
+        const selects = ['viewer-font-select', 'ridi-viewer-font-select', 'my-setting-viewer-font-family']
+          .map((id) => document.getElementById(id)).filter(Boolean);
+        if (selects.length) {
           const sortedFontsDesc = [...data.fonts].sort((a, b) =>
             String(b.name || '').localeCompare(String(a.name || ''), undefined, { sensitivity: 'base' })
           );
-
-          // 기존 기본 옵션만 남기고 초기화
-          select.innerHTML = `
-            <option value="gothic">나눔고딕</option>
-            <option value="pretendard">Pretendard</option>
-          `;
-          sortedFontsDesc.forEach(font => {
-            const opt = document.createElement('option');
-            opt.value = font.name;
-            opt.textContent = font.name;
-            select.appendChild(opt);
+          selects.forEach((select) => {
+            sortedFontsDesc.forEach((font) => addFontOption(select, font.name, font.name));
+            select.value = getViewerSettings().fontFamily;
           });
-
-          // 현재 선택된 폰트 복원
-          const savedFont = localStorage.getItem('viewer_font_family') || 'gothic';
-          select.value = savedFont;
         }
-        syncViewerThemeUI();
+        syncViewerSettingsUI();
       }
     })
     .catch(err => {
@@ -151,9 +296,19 @@ export function nextPage() {
   }
 }
 
+export function movePageByOne(direction) {
+  const activeViewerInstance = getActiveViewerInstance();
+  if (activeViewerInstance && typeof activeViewerInstance.moveByOne === 'function') {
+    activeViewerInstance.moveByOne(direction === 'prev' ? 'prev' : 'next');
+    return;
+  }
+  if (direction === 'prev') prevPage();
+  else nextPage();
+}
+
 // 2쪽보기 정렬 "한 장 밀기" 통합 조율 - 예: (9,10)(11,12)로 짝지어지던 스프레드를
 // (10,11)로 볼 수 있도록 한 장 밀어서 보정한다. comic/pdf 뷰어에서만 의미가 있다
-// (EPUB/TXT는 스프레드 개념이 없으므로 아무 동작도 하지 않는다).
+// 이미지 중심 EPUB도 두 spine 항목을 한 펼침면으로 사용하므로 같은 정렬을 적용한다.
 export function shiftSpreadByOne() {
   console.log('[Viewer-Core] shiftSpreadByOne() called');
   toggleSpreadShiftOffset();
@@ -161,6 +316,9 @@ export function shiftSpreadByOne() {
     loadComicPage();
   } else if (document.getElementById('pdf-viewer-container').style.display !== 'none') {
     renderPdfPage();
+  } else if (document.getElementById('txt-viewer-container').style.display !== 'none'
+      && String(state.currentViewerFormat || '').toLowerCase() === 'epub') {
+    applyTxtSettings({ skipSavedPositionRestore: true });
   }
 }
 
@@ -171,7 +329,9 @@ configureInputController({
   nextPage,
   prevPage,
   toggleComicOverlay,
+  toggleViewerChrome,
   shiftSpreadByOne,
+  movePageByOne,
 });
 
 configureLifecycleController({
@@ -182,7 +342,9 @@ configureLifecycleController({
 
 // 공통 환경 설정 트리거 함수
 export function changeFontSize(dir) {
-  updateFontSize(dir);
+  const size = updateFontSize(dir);
+  persistViewerPreference('VIEWER_FONT_SIZE', Math.round(size * 16));
+  syncViewerSettingsUI();
   const activeViewerInstance = getActiveViewerInstance();
   if (activeViewerInstance && typeof activeViewerInstance.applySettings === 'function') {
     activeViewerInstance.applySettings();
@@ -205,6 +367,7 @@ export function syncViewerThemeUI() {
   if (label) {
     label.textContent = themeObj.label || '다크';
   }
+  syncViewerSettingsUI();
 }
 
 export function toggleReaderTheme() {
@@ -225,6 +388,7 @@ window.toggleTheme = toggleReaderTheme;
 window.onViewerThemeChange = function (value) {
   console.log(`[Viewer-Core] Background theme changed to: ${value}`);
   setViewerTheme(value);
+  persistViewerPreference('VIEWER_THEME', value);
   syncViewerThemeUI();
   const activeViewerInstance = getActiveViewerInstance();
   if (activeViewerInstance && typeof activeViewerInstance.applySettings === 'function') {
@@ -238,6 +402,8 @@ window.onViewerThemeChange = function (value) {
 window.onViewerFontChange = function (value) {
   console.log(`[Viewer-Core] Font family changed to: ${value}`);
   localStorage.setItem('viewer_font_family', value);
+  persistViewerPreference('VIEWER_FONT_FAMILY', value);
+  syncViewerSettingsUI();
   const activeViewerInstance = getActiveViewerInstance();
   if (activeViewerInstance && typeof activeViewerInstance.applySettings === 'function') {
     activeViewerInstance.applySettings();
@@ -250,6 +416,8 @@ window.onViewerFontChange = function (value) {
 window.onViewerLineHeightChange = function (value) {
   console.log(`[Viewer-Core] Line height changed to: ${value}`);
   updateLineHeight(value);
+  persistViewerPreference('VIEWER_LINE_HEIGHT', value);
+  syncViewerSettingsUI();
   const activeViewerInstance = getActiveViewerInstance();
   if (activeViewerInstance && typeof activeViewerInstance.applySettings === 'function') {
     activeViewerInstance.applySettings();
@@ -262,6 +430,8 @@ window.onViewerLineHeightChange = function (value) {
 window.onViewerParagraphSpacingChange = function (value) {
   console.log(`[Viewer-Core] Paragraph spacing changed to: ${value}`);
   updateParagraphSpacing(value);
+  persistViewerPreference('VIEWER_PARAGRAPH_SPACING', value);
+  syncViewerSettingsUI();
   const activeViewerInstance = getActiveViewerInstance();
   if (activeViewerInstance && typeof activeViewerInstance.applySettings === 'function') {
     activeViewerInstance.applySettings();
@@ -276,6 +446,15 @@ window.setScrollMode = function (mode) {
   const previousMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   if (previousMode === mode) return; // 동일 모드 클릭 시 무시
   localStorage.setItem('viewer_scroll_mode', mode);
+  if (mode === 'scroll') {
+    localStorage.setItem('viewer_display_mode', ViewerDisplayMode.SCROLL);
+  } else if (localStorage.getItem('viewer_display_mode') === ViewerDisplayMode.SCROLL) {
+    const restoredMode = (localStorage.getItem('comic_page_step') || '1') === '2'
+      ? (localStorage.getItem('comic_reading_direction') === 'rtl' ? ViewerDisplayMode.TWO_ONE : ViewerDisplayMode.ONE_TWO)
+      : ViewerDisplayMode.ONE;
+    localStorage.setItem('viewer_display_mode', restoredMode);
+  }
+  syncViewerDisplayModeUI(getViewerDisplayMode());
 
   const btnPage = document.getElementById('btn-scroll-page');
   const btnScroll = document.getElementById('btn-scroll-continuous');
@@ -287,10 +466,9 @@ window.setScrollMode = function (mode) {
     if (btnScroll) btnScroll.classList.add('active');
   }
 
-  // 너비 슬라이더 행: 스크롤 모드일 때만 표시
-  const widthRow = document.getElementById('overlay-width-row');
-  if (widthRow) {
-    widthRow.classList.toggle('visible', mode === 'scroll');
+  const activeFormat = String(state.currentViewerFormat || '').toLowerCase();
+  if (typeof window.syncViewerControlsForFormat === 'function') {
+    window.syncViewerControlsForFormat(activeFormat);
   }
 
   // ── 보기 모드 전환 중 즉시 피드백 오버레이 ──────────────────────
@@ -336,38 +514,26 @@ window.setScrollMode = function (mode) {
   `;
   if (viewerBody) viewerBody.appendChild(banner);
 
-  // 만화책 뷰어가 활성화되어 있는 경우, 스크롤 모드를 적용하여 다시 렌더링
-  if (document.getElementById('comic-viewer-container').style.display !== 'none') {
-    const mod = import('./viewer_comic.js');
-    mod.then(m => {
-      const setStep = m.setComicPageStep || m.setComicPageStep;
-      if (mode === 'scroll' && typeof setStep === 'function') {
-        setStep(1);
-      }
-      if (typeof m.syncSplitSpreadModeForScrollMode === 'function') {
-        m.syncSplitSpreadModeForScrollMode(mode === 'scroll');
-      }
-      const apply = m.applyComicFitMode || m.setComicFitMode || (window && window.setComicFitMode);
-      if (typeof apply === 'function') apply();
-      const load = m.loadComicPage || m.loadComicPage;
-      if (typeof load === 'function') load();
-    }).catch(err => console.warn('[Viewer-Core] Failed to import viewer_comic:', err));
-  }
-
-  // PDF 뷰어가 활성화되어 있는 경우, 스크롤 모드를 적용하여 다시 렌더링
-  if (document.getElementById('pdf-viewer-container').style.display !== 'none') {
-    import('./viewer_pdf.js').then(m => {
-      if (typeof m.renderPdfPage === 'function') {
-        m.renderPdfPage();
-      }
-    }).catch(err => console.warn('[Viewer-Core] Failed to import viewer_pdf:', err));
-  }
-
   // 다음 프레임에서 실제 렌더링 (banner가 화면에 그려진 뒤 실행)
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      applyTxtSettings({ previousMode });
-      changeEpubScrollMode(mode);
+      if (['zip', 'cbz', 'imgdir'].includes(activeFormat)) {
+        import('./viewer_comic.js').then(m => {
+          if (mode === 'page' && typeof m.initPageStep === 'function') m.initPageStep();
+          if (typeof m.syncSplitSpreadModeForScrollMode === 'function') {
+            m.syncSplitSpreadModeForScrollMode(mode === 'scroll');
+          }
+          const apply = m.applyComicFitMode || m.setComicFitMode || window.setComicFitMode;
+          if (typeof apply === 'function') apply();
+          if (typeof m.loadComicPage === 'function') m.loadComicPage();
+        }).catch(err => console.warn('[Viewer-Core] Failed to import viewer_comic:', err));
+      } else if (activeFormat === 'pdf') {
+        import('./viewer_pdf.js').then(m => {
+          if (typeof m.renderPdfPage === 'function') m.renderPdfPage();
+        }).catch(err => console.warn('[Viewer-Core] Failed to import viewer_pdf:', err));
+      } else if (activeFormat === 'txt' || activeFormat === 'epub') {
+        applyTxtSettings({ previousMode });
+      }
       syncHotspotPointerEvents();
       // 전환 완료 후 배너 제거
       setTimeout(() => {
@@ -378,10 +544,37 @@ window.setScrollMode = function (mode) {
   });
 };
 
+export function setViewerDisplayMode(mode) {
+  const previousScrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
+  const normalized = saveViewerDisplayMode(mode);
+  const nextScrollMode = normalized === ViewerDisplayMode.SCROLL ? 'scroll' : 'page';
+  const activeFormat = String(state.currentViewerFormat || '').toLowerCase();
+  initPageStep();
+  initReadingDirection();
+  resetSpreadShiftOffset();
+  syncViewerDisplayModeUI(normalized);
+  syncViewerSpreadSettingsUI();
+
+  if (previousScrollMode !== nextScrollMode) {
+    window.setScrollMode(nextScrollMode);
+    return;
+  }
+
+  window.syncViewerControlsForFormat?.(activeFormat);
+  if (['zip', 'cbz', 'imgdir'].includes(activeFormat)) {
+    loadComicPage();
+  } else if (activeFormat === 'pdf') {
+    renderPdfPage();
+  } else if (activeFormat === 'txt' || activeFormat === 'epub') {
+    applyTxtSettings({ skipSavedPositionRestore: true });
+  }
+}
+
 export function viewerJumpToFirst() {
   const fmt = state.currentViewerFormat;
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   const overlayMenu = document.getElementById('comic-overlay-menu');
+  rememberViewerPosition();
   if (fmt === 'zip' || fmt === 'cbz') {
     if (typeof comicJumpToFirstPage === 'function') comicJumpToFirstPage();
   } else if (fmt === 'epub') {
@@ -399,13 +592,14 @@ export function viewerJumpToFirst() {
     overlayMenu.dataset.skipInnerScrollRestore = 'true';
   }
 
-  toggleComicOverlay();
+  if (overlayMenu && overlayMenu.style.display === 'flex') toggleComicOverlay();
 }
 
 export function viewerJumpToLast() {
   const fmt = state.currentViewerFormat;
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   const overlayMenu = document.getElementById('comic-overlay-menu');
+  rememberViewerPosition();
   if (fmt === 'zip' || fmt === 'cbz') {
     if (typeof comicJumpToLastPage === 'function') comicJumpToLastPage();
   } else if (fmt === 'epub') {
@@ -422,7 +616,7 @@ export function viewerJumpToLast() {
     overlayMenu.dataset.skipInnerScrollRestore = 'true';
   }
 
-  toggleComicOverlay();
+  if (overlayMenu && overlayMenu.style.display === 'flex') toggleComicOverlay();
 }
 
 window.viewerJumpToFirst = viewerJumpToFirst;
@@ -431,7 +625,12 @@ window.prevPage = prevPage;
 window.nextPage = nextPage;
 window.toggleTheme = toggleReaderTheme;
 window.toggleComicReadingDirection = function () {
-  toggleComicReadingDirection();
+  const direction = toggleComicReadingDirection();
+  if ((localStorage.getItem('comic_page_step') || '1') === '2'
+      && (localStorage.getItem('viewer_scroll_mode') || 'page') !== 'scroll') {
+    localStorage.setItem('viewer_display_mode', direction === 'rtl' ? ViewerDisplayMode.TWO_ONE : ViewerDisplayMode.ONE_TWO);
+    syncViewerDisplayModeUI(getViewerDisplayMode());
+  }
   if (document.getElementById('pdf-viewer-container').style.display !== 'none') {
     if (typeof window.applyPdfFitMode === 'function') {
       window.applyPdfFitMode();
@@ -492,6 +691,7 @@ window.syncComicCenterGapButton = function () {
       label.textContent = window.i18n ? window.i18n.t('viewer.center_gap_show') : '중앙 여백';
     }
   }
+  syncViewerSpreadSettingsUI();
 };
 
 window.toggleComicCenterGap = function () {
@@ -541,6 +741,14 @@ function initMediaViewerDelegation() {
       : null;
     if (!target) return;
 
+    if ((Date.now() < Number(window.__viewerSuppressClickUntil || 0)
+        || Date.now() < Number(window.__viewerMouseDraggedUntil || 0))
+        && target.closest('#common-viewer-hotspot')) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     event.preventDefault();
     let action = target.getAttribute('data-action');
     const value = target.getAttribute('data-value');
@@ -549,11 +757,17 @@ function initMediaViewerDelegation() {
     // 만화 RTL(우->좌) 읽기 방향에서는 좌/우 클릭 시 넘어가는 스토리 방향도 반대가 되어야 한다.
     // (메뉴의 '이전'/'다음' 버튼처럼 항상 스토리 순서를 가리키는 조작과는 구분됨)
     const isComicFormat = ['zip', 'cbz', 'imgdir'].includes((state.currentViewerFormat || '').toLowerCase());
-    if (isComicFormat && (action === 'prev-page' || action === 'next-page') && target.closest('#common-viewer-hotspot')) {
-      if (getComicReadingDirection() === 'rtl') {
+    const modalDisplayMode = document.getElementById('media-viewer-modal')?.dataset.displayMode;
+    const isRtlFlow = (isComicFormat && getComicReadingDirection() === 'rtl') || modalDisplayMode === 'two-one';
+    if (isRtlFlow && (action === 'prev-page' || action === 'next-page') && target.closest('#common-viewer-hotspot')) {
+      if (isRtlFlow) {
         action = action === 'prev-page' ? 'next-page' : 'prev-page';
       }
     }
+
+    const isSidePanelAction = action === 'open-toc' || action === 'open-reading-notes' || action === 'open-viewer-search';
+    if (!isSidePanelAction && target.closest('.ridi-viewer-toolbar-top')) closeViewerSidePanels();
+    if (action !== 'toggle-overlay' && target.closest('.ridi-viewer-toolbar-top')) closeViewerSettingsOverlay();
 
     if (action === 'close') return closeMediaViewer();
     if (action === 'font-size') return changeFontSize(Number.parseInt(value || '0', 10) || 0);
@@ -563,17 +777,38 @@ function initMediaViewerDelegation() {
     if (action === 'prev-page') return prevPage();
     if (action === 'next-page') return nextPage();
     if (action === 'toggle-overlay') return toggleComicOverlay();
+    if (action === 'toggle-viewer-controls') return toggleViewerChrome();
+    if (action === 'viewer-display-mode') return setViewerDisplayMode(value || ViewerDisplayMode.ONE);
+    if (action === 'open-toc') return openEpubTocPanel('toc');
+    if (action === 'open-reading-notes') {
+      return isComicFormat ? openImageReadingNotesPanel() : openEpubTocPanel('notes');
+    }
+    if (action === 'open-viewer-search') return openViewerSearchPanel();
+    if (action === 'toggle-page-bookmark') return toggleCurrentPageBookmark().catch(error => window.showToast?.(error.message, 'error'));
+    if (action === 'viewer-theme') return window.onViewerThemeChange?.(value || 'dark');
+    if (action === 'line-height-step') {
+      const current = Number.parseFloat(localStorage.getItem('viewer_line_height') || '1.8');
+      return window.onViewerLineHeightChange?.(Math.max(1.2, Math.min(2.4, current + Number(value || 0) * 0.2)).toFixed(1));
+    }
+    if (action === 'paragraph-spacing-step') {
+      const current = Number.parseFloat(localStorage.getItem('viewer_paragraph_spacing') || '1.0');
+      return window.onViewerParagraphSpacingChange?.(Math.max(0, Math.min(3, current + Number(value || 0) * 0.5)).toFixed(1));
+    }
     if (action === 'overlay-tab') return window.switchViewerOverlayTab?.(value || 'nav');
     if (action === 'jump-first') return viewerJumpToFirst();
     if (action === 'jump-last') return viewerJumpToLast();
+    if (action === 'return-last-position') return returnToPreviousViewerPosition();
+    if (action === 'listen') return openListenFromViewer();
+    if (action === 'tts-settings') return openInlineTtsSettings();
     if (action === 'mark-completed') return markAsCompleted();
-    if (action === 'add-bookmark') return addBookmarkAtCurrentPosition();
+    if (action === 'toggle-highlight-mode') return window.toggleHighlightMode?.();
     if (action === 'scroll-mode') return window.setScrollMode?.(value || 'page');
     if (action === 'toggle-page-step') return window.toggleComicPageStep?.();
     if (action === 'shift-spread') return shiftSpreadByOne();
     if (action === 'toggle-center-gap') return window.toggleComicCenterGap?.();
     if (action === 'toggle-reading-direction') return window.toggleComicReadingDirection?.();
     if (action === 'toggle-tap-zone-direction') return toggleTapZoneDirection();
+    if (action === 'tap-zone-direction') return setTapZoneDirection(value || 'horizontal');
     if (action === 'toggle-split-spread') return window.toggleComicSplitSpread?.();
     if (action === 'toggle-theme-cycle') return window.toggleTheme?.();
     if (action === 'toggle-padding-panel') return window.toggleViewerPaddingPanel?.();
@@ -606,6 +841,26 @@ function initMediaViewerDelegation() {
 }
 
 initMediaViewerDelegation();
+initViewerBookmarkController();
+initViewerChrome();
+syncViewerDisplayModeUI(getViewerDisplayMode());
+syncViewerSettingsUI();
+hydrateViewerPreferences();
+
+function openListenFromViewer() {
+  if (!state.activeBookId || !['general', 'adult'].includes(String(state.currentLibraryType || '').toLowerCase())) return;
+  return openInlineTts({ autoplay: true });
+}
+document.addEventListener('viewer-preferences-updated', () => {
+  syncViewerThemeUI();
+  getActiveViewerInstance()?.applySettings?.({ skipSavedPositionRestore: true });
+});
+
+window.setViewerDisplayMode = setViewerDisplayMode;
+window.syncViewerDisplayModeUI = () => syncViewerDisplayModeUI(getViewerDisplayMode());
+window.syncViewerSettingsUI = syncViewerSettingsUI;
+window.syncViewerSpreadSettingsUI = syncViewerSpreadSettingsUI;
+window.resetViewerChrome = resetViewerChrome;
 
 
 
@@ -627,7 +882,7 @@ export function markAsCompleted() {
         totalPages = parseInt(parts[1].trim(), 10) || 100;
       }
     }
-    import('./viewer_progress.js').then(m => {
+    import('./viewer_progress.js?rev=20260927-tts-session-v8').then(m => {
       m.saveProgress(state.activeBookId, totalPages - 1, totalPages);
       m.flushProgress().then(() => {
         alert(window.i18n.t('viewer.read_completed'));
@@ -635,7 +890,7 @@ export function markAsCompleted() {
       });
     });
   } else if (fmt === 'epub') {
-    import('./viewer_progress.js').then(m => {
+    import('./viewer_progress.js?rev=20260927-tts-session-v8').then(m => {
       m.saveProgress(state.activeBookId, 100, 100);
       m.flushProgress().then(() => {
         alert(window.i18n.t('viewer.read_completed'));
@@ -651,7 +906,7 @@ export function markAsCompleted() {
         totalPages = parseInt(match[1].trim(), 10) || 100;
       }
     }
-    import('./viewer_progress.js').then(m => {
+    import('./viewer_progress.js?rev=20260927-tts-session-v8').then(m => {
       m.saveProgress(state.activeBookId, totalPages - 1, totalPages);
       m.flushProgress().then(() => {
         alert(window.i18n.t('viewer.read_completed'));

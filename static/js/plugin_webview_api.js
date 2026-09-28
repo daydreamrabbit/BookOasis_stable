@@ -7,8 +7,6 @@
 
 import { state } from './state.js';
 
-let cachedWhitelistPatterns = null;
-
 // 카테고리탭 플러그인이 "지금 어느 세션(일반/성인/오디오북/영상강좌)에 떠 있는지" 동기적으로
 // 조회할 수 있게 하는 스냅샷. 플러그인은 호스트와 같은 DOM/JS 컨텍스트에서 돌기 때문에(iframe
 // 아님) 서버 왕복 없이 즉시 값을 돌려줄 수 있다. 세션이 바뀔 때마다 반응하려면
@@ -23,37 +21,26 @@ function getSession() {
   };
 }
 
-async function loadWhitelistCache() {
-  if (cachedWhitelistPatterns) return cachedWhitelistPatterns;
+async function isExternalUrlAllowed(url) {
   try {
-    const res = await fetch('/api/webview/whitelist');
-    const data = await res.json();
-    if (data.success) {
-      cachedWhitelistPatterns = (data.domains || []).map(d => d.pattern);
+    const response = await fetch(`/api/webview/check?url=${encodeURIComponent(url)}`, { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) {
+      window.showToast?.(data.message || '외부 콘텐츠를 이용할 권한이 없습니다.', 'error');
+      return false;
     }
-  } catch (e) {
-    console.error('[PluginWebview] 화이트리스트 조회 실패:', e);
+    if (!data.allowed) showWhitelistPrompt(url);
+    return data.allowed === true;
+  } catch {
+    window.showToast?.('외부 콘텐츠 접근 권한을 확인하지 못했습니다.', 'error');
+    return false;
   }
-  return cachedWhitelistPatterns || [];
 }
 
 export function invalidateWebviewWhitelistCache() {
-  cachedWhitelistPatterns = null;
+  // Compatibility for settings/plugins; authorization is now checked per URL.
 }
 window.invalidateWebviewWhitelistCache = invalidateWebviewWhitelistCache;
-
-function hostMatchesWhitelist(host, patterns) {
-  if (!host) return false;
-  host = host.toLowerCase();
-  return (patterns || []).some(pattern => {
-    pattern = String(pattern).toLowerCase();
-    if (pattern.startsWith('*.')) {
-      const apex = pattern.slice(2);
-      return host !== apex && host.endsWith(pattern.slice(1));
-    }
-    return host === pattern;
-  });
-}
 
 function extractHost(url) {
   try {
@@ -70,7 +57,7 @@ function showWhitelistPrompt(url) {
   // 정확히 어떤 호스트가 막혔는지 보여준다 — 예: apex(example.com)만 등록해둔 상태에서
   // www.example.com처럼 서브도메인이 요청되면 별개 호스트로 취급되어 거부되는데,
   // 이 사실이 안 보이면 사용자가 뭘 더 등록해야 할지 알 수 없다.
-  const message = `허용 목록에 없는 도메인입니다: ${host}\n설정 > 외부 도메인 탭에서 추가해주세요. (서브도메인까지 포함하려면 *.도메인 형태로 등록)`;
+  const message = `허용 목록에 없는 도메인입니다: ${host}\n관리자에게 외부 도메인 등록을 요청해주세요.`;
   if (typeof window.showToast === 'function') {
     window.showToast(message, 'error');
   }
@@ -131,9 +118,7 @@ export async function openWebview(url) {
     return;
   }
 
-  const patterns = await loadWhitelistCache();
-  if (!hostMatchesWhitelist(host, patterns)) {
-    showWhitelistPrompt(url);
+  if (!await isExternalUrlAllowed(url)) {
     return;
   }
 
@@ -177,9 +162,7 @@ export async function getProxyUrl(url) {
     if (typeof window.showToast === 'function') window.showToast('URL 형식이 올바르지 않습니다.', 'error');
     return null;
   }
-  const patterns = await loadWhitelistCache();
-  if (!hostMatchesWhitelist(host, patterns)) {
-    showWhitelistPrompt(url);
+  if (!await isExternalUrlAllowed(url)) {
     return null;
   }
   return `/api/webview/proxy?url=${encodeURIComponent(url)}`;
@@ -200,9 +183,7 @@ export async function getStreamProxyUrl(url) {
     if (typeof window.showToast === 'function') window.showToast('URL 형식이 올바르지 않습니다.', 'error');
     return null;
   }
-  const patterns = await loadWhitelistCache();
-  if (!hostMatchesWhitelist(host, patterns)) {
-    showWhitelistPrompt(url);
+  if (!await isExternalUrlAllowed(url)) {
     return null;
   }
   return `/api/webview/hls-proxy?url=${encodeURIComponent(url)}`;
@@ -238,9 +219,7 @@ export async function downloadToLibrary(url, options = {}) {
     return { success: false, error: 'missing_library_id' };
   }
 
-  const patterns = await loadWhitelistCache();
-  if (!hostMatchesWhitelist(host, patterns)) {
-    showWhitelistPrompt(url);
+  if (!await isExternalUrlAllowed(url)) {
     return { success: false, error: 'not_whitelisted' };
   }
 

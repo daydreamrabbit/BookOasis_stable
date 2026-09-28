@@ -67,8 +67,207 @@ def _normalize_library_id(library_id):
     return library_id
 
 
-def _build_series_entries(db_type, rows):
+def _normalize_content_rating_max(value):
+    """세션의 콘텐츠 등급 상한을 안전한 정수로 정규화한다.
+
+    API 세션에 값이 없는 구버전 세션은 안전한 기본값(18세 이상)으로
+    취급한다. 서비스 단위 테스트처럼 명시적으로 값을 넘기지 않은 내부
+    호출은 기존 동작을 유지하기 위해 ``None``을 그대로 둔다.
+    """
+    if value is None:
+        return None
+    try:
+        return max(0, min(20, int(value)))
+    except (TypeError, ValueError):
+        return 18
+
+
+def _content_rating_filter_active(db_type, content_rating_max):
+    from services.content_rating_service import LEVEL_PORN
+    max_level = _normalize_content_rating_max(content_rating_max)
+    return db_type in ('general', 'adult') and max_level is not None and max_level < LEVEL_PORN
+
+
+def _row_value(row, key, default=''):
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+def _filter_rows_by_content_rating(db_type, rows, content_rating_max):
+    """등급 제한을 실제 도서 행에 적용한다.
+
+    시리즈 대표 행만 검사하면 같은 시리즈의 다른 권이 대표 행에 의해
+    잘못 노출되거나 숨겨질 수 있으므로, 이 함수는 그룹핑 전에 실행된다.
+    """
+    max_level = _normalize_content_rating_max(content_rating_max)
+    if not _content_rating_filter_active(db_type, max_level):
+        return rows
+
     from services.content_rating_service import ContentRatingService
+    adult_keywords = ContentRatingService.get_adult_keywords()
+    return [
+        row for row in (rows or [])
+        if ContentRatingService.compute_effective_level(
+            _row_value(row, 'books_lv'),
+            _row_value(row, 'genre'),
+            _row_value(row, 'tags'),
+            adult_keywords,
+        ) <= max_level
+    ]
+
+
+def _apply_series_reading_progress(db_type, entries, user_id):
+    """시리즈 카드가 도서별 읽기 진행을 컨텍스트 메뉴에 전달하도록 보강한다.
+
+    일반/성인 목록의 기존 요약 쿼리는 대표 도서만 반환하고 ``user_progress``를
+    포함하지 않았다. 그 결과 시리즈의 모든 권을 완독해도 카드가 미독으로
+    판정됐다. 한 번의 집계 쿼리로 해당 시리즈의 모든 권을 확인해
+    ``is_completed``(전체 완독), ``has_progress``(일부라도 진행),
+    ``has_unfinished_siblings``를 채운다.
+    """
+    if db_type not in ('general', 'adult') or not entries or user_id is None:
+        return entries
+    try:
+        safe_user_id = int(user_id)
+    except (TypeError, ValueError):
+        return entries
+    if safe_user_id <= 0:
+        return entries
+
+    # Entries already carry the normalized grouping key used by this service.
+    # Keep the raw series name so a real series named "기타 단행본" is not
+    # confused with books whose series_name is blank.
+    keys = []
+    for entry in entries:
+        keys.append((
+            entry.get('library_id'),
+            entry.get('_source_series_name'),
+            entry.get('anchor_dir') or '',
+        ))
+    keys = list(dict.fromkeys(keys))
+    if not keys:
+        return entries
+
+    import database
+    placeholder = '%s' if database.is_mariadb_mode() else '?'
+    params = [safe_user_id]
+
+    # A normal page has only a few series, so restrict the query to those
+    # series. For a preloaded all-series view, one library-level predicate is
+    # shorter and avoids generating a very large OR expression.
+    clauses = []
+    for library_id, raw_series_name, _comp_dir in keys:
+        if library_id is None:
+            continue
+        try:
+            lib_id = int(library_id)
+        except (TypeError, ValueError):
+            continue
+        if raw_series_name:
+            clauses.append(f"(b.library_id = {placeholder} AND b.series_name = {placeholder})")
+            params.extend([lib_id, raw_series_name])
+        else:
+            clauses.append(
+                f"(b.library_id = {placeholder} AND (b.series_name IS NULL OR b.series_name = ''))"
+            )
+            params.append(lib_id)
+    if not clauses:
+        return entries
+
+    if len(clauses) > 100:
+        library_ids = list(dict.fromkeys(
+            int(library_id) for library_id, _raw, _comp in keys
+            if str(library_id).isdigit()
+        ))
+        if not library_ids:
+            return entries
+        lib_placeholders = ','.join([placeholder] * len(library_ids))
+        where = f"b.library_id IN ({lib_placeholders})"
+        params = [safe_user_id] + library_ids
+    else:
+        where = ' OR '.join(clauses)
+
+    sql = f"""
+        SELECT b.library_id, b.series_name, b.file_path, b.file_format,
+               COALESCE(b.total_pages, 0) AS total_pages,
+               COALESCE(p.pages_read, 0) AS pages_read,
+               COALESCE(p.is_completed, 0) AS is_completed
+        FROM books b
+        LEFT JOIN user_progress p
+          ON p.book_id = b.id AND p.user_id = {placeholder}
+        WHERE (b.is_deleted = 0 OR b.is_deleted IS NULL)
+          AND ({where})
+    """
+    conn = None
+    try:
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        cursor.execute(sql, tuple(params))
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception as exc:
+        # Older databases can be missing the progress table. The list should
+        # still render; the existing conservative menu behavior is safer than
+        # failing the whole series response.
+        print(f"[SeriesService] reading progress aggregation skipped: {exc}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return entries
+
+    stats = {}
+    for row in rows:
+        raw_name = row['series_name'] or ''
+        key = (
+            row['library_id'],
+            raw_name,
+            _comparison_dir_for_book(row['file_path'], row['file_format']),
+        )
+        stat = stats.setdefault(key, {'count': 0, 'completed': 0, 'has_progress': False})
+        stat['count'] += 1
+        pages_read = int(row['pages_read'] or 0)
+        total_pages = int(row['total_pages'] or 0)
+        completed = int(row['is_completed'] or 0) == 1 or (
+            total_pages > 0 and pages_read >= total_pages
+        )
+        if completed:
+            stat['completed'] += 1
+        if completed or pages_read > 0:
+            stat['has_progress'] = True
+
+    for entry in entries:
+        stat_key = (
+            entry.get('library_id'),
+            entry.get('_source_series_name') or '',
+            entry.get('anchor_dir') or '',
+        )
+        stat = stats.get(stat_key)
+        if not stat:
+            continue
+        all_completed = stat['count'] > 0 and stat['completed'] == stat['count']
+        entry['is_completed'] = 1 if all_completed else 0
+        entry['has_progress'] = 1 if stat['has_progress'] else 0
+        entry['has_unfinished_siblings'] = 1 if not all_completed else 0
+    return entries
+
+
+def _strip_series_entry_internal_fields(entries):
+    for entry in entries:
+        entry.pop('_source_series_name', None)
+    return entries
+
+
+def _build_series_entries(db_type, rows, user_id=None):
+    from services.content_rating_service import ContentRatingService
+
+    # 성인 키워드 설정은 시리즈마다 DB에서 다시 읽지 않고 여기서 한 번만 읽는다 (전체 목록/초성 이동처럼
+    # 수만 시리즈를 한 번에 만들 때 설정 조회가 빌드 시간의 절반을 차지했다).
+    adult_keywords = ContentRatingService.get_adult_keywords() if db_type in ('general', 'adult') else None
 
     groups = {}
     order = []
@@ -116,6 +315,12 @@ def _build_series_entries(db_type, rows):
         latest_added = series_latest_added or max((b['created_at'] for b in books if b['created_at']), default='')
         any_favorite = 1 if any((b['is_favorite'] or 0) == 1 for b in books) else 0
         any_locked = 1 if any((b.get('metadata_locked') or 0) == 1 for b in books) else 0
+        # 목록 SQL은 has_metadata를 NULL로 내려준다(상관 EXISTS가 대형 카테고리에서 수 초 걸려 제거).
+        # 응답 키는 계약 유지를 위해 남기고, SQL이 값을 채워줄 때만 집계한다. 상세화면은
+        # book_detail_service가 단건으로 따로 계산한다.
+        has_metadata = None
+        if db_type in ('general', 'adult') and any(b.get('has_metadata') is not None for b in books):
+            has_metadata = 1 if any(int(b.get('has_metadata') or 0) == 1 for b in books) else 0
         author = next((b['author'] for b in books if b['author']), '')
         genre = next((b['genre'] for b in books if b['genre']), '')
         tags = next((b['tags'] for b in books if b['tags']), '')
@@ -137,6 +342,7 @@ def _build_series_entries(db_type, rows):
             'series_alias': series_alias,
             'display_name': series_alias if series_alias else series_name,
             'representative_title': representative.get('title_alias') or representative['title'] or '',
+            'file_format': representative.get('file_format') or '',
             'author': author,
             'book_count': book_count,
             'total_tracks': total_tracks,
@@ -145,19 +351,118 @@ def _build_series_entries(db_type, rows):
             'cover_align': cover_align,
             'is_favorite': any_favorite,
             'metadata_locked': any_locked,
+            'has_metadata': has_metadata,
             'latest_added': latest_added,
             'representative_book_id': representative['id'],
             'library_id': lib_id,
             'genre': genre,
             'tags': tags,
             'books_lv': books_lv,
-            'content_rating_level': ContentRatingService.compute_effective_level(books_lv, genre, tags) if db_type in ('general', 'adult') else 0,
+            'content_rating_level': ContentRatingService.compute_effective_level(books_lv, genre, tags, adult_keywords) if db_type in ('general', 'adult') else 0,
             'publication_status': publication_status,
             'publication_status_label': {'0': '연재', '1': '휴재', '2': '완결'}.get(publication_status, '알 수 없음'),
             'anchor_dir': comp_dir,
+            '_source_series_name': representative.get('series_name') or '',
         })
 
+    if user_id is not None:
+        entries = _apply_series_reading_progress(db_type, entries, user_id)
+        _strip_series_entry_internal_fields(entries)
     return entries
+
+
+def _build_series_jump_entries(rows):
+    """초성 바로가기용 경량 시리즈 인덱스를 만든다.
+
+    초성 위치를 계산할 때 카드에 필요한 표지 경로, 등급, 즐겨찾기 등의 정보를
+    만들 필요는 없다. 이 단계에서는 정렬에 필요한 제목과 실제 목적 페이지를
+    나중에 완성할 원본 행만 보관한다.
+    """
+    groups = {}
+    order = []
+    for row in rows:
+        series_name = row.get('series_name') or '기타 단행본'
+        comp_dir = _comparison_dir_for_book(row.get('file_path'), row.get('file_format'))
+        key = (row.get('library_id'), series_name, comp_dir)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    entries = []
+    for library_id, series_name, comp_dir in order:
+        books = groups[(library_id, series_name, comp_dir)]
+        representative = min(books, key=lambda row: row.get('id') or 0)
+        entries.append({
+            'series_name': series_name,
+            'representative_title': representative.get('title_alias') or representative.get('title') or '',
+            '_representative_id': representative.get('id'),
+            '_source_rows': books,
+        })
+    return entries
+
+
+def _rows_for_jump_entries(entries):
+    rows = []
+    for entry in entries:
+        rows.extend(entry.get('_source_rows') or [])
+    return rows
+
+
+def _build_jump_page_entries(db_type, entries, library_id, search_query, genre_filters,
+                             tag_filters, favorite_only, user_id, role):
+    """초성 이동 대상 페이지의 카드 데이터만 저장소에서 보강한다."""
+    representative_ids = [
+        entry.get('_representative_id')
+        for entry in entries
+        if entry.get('_representative_id') is not None
+    ]
+    full_rows = []
+    fetch_by_ids = getattr(SeriesRepository, 'fetch_books_by_ids', None)
+    if fetch_by_ids and representative_ids:
+        full_rows = fetch_by_ids(
+            db_type,
+            representative_ids,
+            user_id=user_id,
+            role=role,
+        ) or []
+
+    rows_by_id = {row.get('id'): row for row in full_rows}
+    missing_ids = [book_id for book_id in representative_ids if book_id not in rows_by_id]
+    if missing_ids:
+        # 검색/장르/태그 필터가 걸린 경우에는 필터 결과의 대표 행이 전역
+        # series_summary 대표 행과 다를 수 있다. 이 경우에만 기존 필터 조회로
+        # 누락된 카드 정보를 보충한다.
+        filtered_rows = SeriesRepository.fetch_books_for_grouping(
+            db_type,
+            library_id,
+            search_query=search_query or '',
+            favorite_only=favorite_only,
+            genre_filters=genre_filters,
+            tag_filters=tag_filters,
+            user_id=user_id,
+            role=role,
+            limit=None,
+            offset=None,
+        ) or []
+        rows_by_id.update({row.get('id'): row for row in filtered_rows})
+
+    ordered_rows = []
+    for entry in entries:
+        representative_id = entry.get('_representative_id')
+        row = rows_by_id.get(representative_id)
+        if row is None:
+            source_rows = entry.get('_source_rows') or []
+            row = next((candidate for candidate in source_rows if candidate.get('id') == representative_id), None)
+        if row is not None:
+            ordered_rows.append(row)
+
+    # 저장소가 대표 ID 조회를 제공하지 않는 특수 구현에서도 기존 동작을 유지한다.
+    if not ordered_rows and entries:
+        ordered_rows = _rows_for_jump_entries(entries)
+    entries = _build_series_entries(db_type, ordered_rows)
+    entries = _apply_series_reading_progress(db_type, entries, user_id)
+    return _strip_series_entry_internal_fields(entries)
 
 
 def _build_author_entries(db_type, rows):
@@ -207,6 +512,7 @@ def _build_author_entries(db_type, rows):
             'series_alias': '',
             'display_name': f"{display_author} ({series_count})",
             'representative_title': display_author,
+            'file_format': representative.get('file_format') or '',
             'author': display_author,
             'book_count': book_count,
             'cover_image': get_cover_image_with_t(cover_image, updated_at),
@@ -250,6 +556,7 @@ _ALL_BOOKS_CACHE = {}
 _ALL_BOOKS_CACHE_TTL = 60.0  # 60초 인메모리 캐싱
 _LIST_QUERY_CACHE = {}
 _LIST_QUERY_CACHE_TTL = 120.0
+_JUMP_INDEX_CACHE = {}
 _TOTALS_CACHE = {}
 _TOTALS_CACHE_TTL = 30.0
 _TOTALS_REDIS_TTL = 300
@@ -307,6 +614,12 @@ def _bump_shared_books_cache_epoch(db_type):
     _local_epoch_seen[db_type] = new_epoch
     _local_epoch_checked_at[db_type] = time.time()
 
+    try:
+        from services.library_events import publish_library_change
+        publish_library_change(db_type, new_epoch)
+    except Exception as error:
+        print(f'[LibraryEvents] publish failed: {type(error).__name__}')
+
 
 def _sync_local_books_cache_with_shared_epoch(db_type):
     """이 프로세스의 로컬 캐시가 다른 프로세스의 무효화를 놓치지 않았는지 확인한다.
@@ -321,6 +634,7 @@ def _sync_local_books_cache_with_shared_epoch(db_type):
     if seen_epoch is not None and seen_epoch != current_epoch:
         _ALL_BOOKS_CACHE.clear()
         _LIST_QUERY_CACHE.clear()
+        _JUMP_INDEX_CACHE.clear()
         _TOTALS_CACHE.clear()
     _local_epoch_seen[db_type] = current_epoch
 
@@ -330,9 +644,10 @@ class SeriesService:
     def invalidate_all_books_cache(db_type=None):
         """도서 목록 캐시를 비운다. db_type을 넘기면 다른 프로세스(스캐너 워커 등)에도
         전달되도록 공유 epoch를 갱신한다 - 위 "크로스 프로세스 캐시 무효화 신호" 참고."""
-        global _ALL_BOOKS_CACHE, _LIST_QUERY_CACHE, _TOTALS_CACHE
+        global _ALL_BOOKS_CACHE, _LIST_QUERY_CACHE, _JUMP_INDEX_CACHE, _TOTALS_CACHE
         _ALL_BOOKS_CACHE.clear()
         _LIST_QUERY_CACHE.clear()
+        _JUMP_INDEX_CACHE.clear()
         _TOTALS_CACHE.clear()
         try:
             from utils.redis_helper import redis_delete_pattern
@@ -343,7 +658,7 @@ class SeriesService:
             _bump_shared_books_cache_epoch(db_type)
 
     @staticmethod
-    def get_books_list(db_type, library_id, page, limit, search_query, sort='asc', genre_filters=None, tag_filters=None, user_id=None, role=None, group_by=None, author_key=None):
+    def get_books_list(db_type, library_id, page, limit, search_query, sort='asc', genre_filters=None, tag_filters=None, user_id=None, role=None, group_by=None, author_key=None, include_has_metadata=False, return_has_more=False, content_rating_max=None):
         import time
         t0 = time.perf_counter()
         _sync_local_books_cache_with_shared_epoch(db_type)
@@ -353,6 +668,8 @@ class SeriesService:
         normalized_tags = [str(v).strip() for v in (tag_filters or []) if str(v).strip()]
         group_by = (group_by or '').strip().lower()
         author_key = (author_key or '').strip()
+        content_rating_max = _normalize_content_rating_max(content_rating_max)
+        rating_filter_active = _content_rating_filter_active(db_type, content_rating_max)
 
         offset = max(0, (page - 1) * limit)
         # 작가별 그룹핑/작가 드릴다운은 인덱스 없는 파이썬 그룹핑이라 항상 전체스캔 경로를 탄다.
@@ -361,7 +678,13 @@ class SeriesService:
         # 경로를 탄다 - 예전엔 이 정렬만 전체 라이브러리를 무제한으로 읽어와 파이썬에서
         # 정렬했는데, 그 무거운 동기 작업이 gunicorn 1-worker/4-thread의 GIL을 오래 붙잡아
         # 같은 워커에서 처리 중인 다른 요청들까지 pending 상태로 줄줄이 밀리는 원인이었다.
-        requires_full_scan = bool(search_query) or (sort not in ('asc', 'desc', 'date_asc', 'date_desc')) or bool(group_by) or bool(author_key)
+        requires_full_scan = (
+            bool(search_query)
+            or (sort not in ('asc', 'desc', 'date_asc', 'date_desc'))
+            or bool(group_by)
+            or bool(author_key)
+            or rating_filter_active
+        )
 
         now = time.time()
         cache_key = (
@@ -375,6 +698,8 @@ class SeriesService:
             str(role or ''),
             group_by,
             author_key,
+            bool(include_has_metadata),
+            content_rating_max if rating_filter_active else None,
         )
 
         if not requires_full_scan:
@@ -385,7 +710,27 @@ class SeriesService:
             cached = _LIST_QUERY_CACHE.get(cache_key)
             if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
                 entries = cached[1]
-                return entries[offset:offset + limit + 1]
+                paged = entries[offset:offset + limit + 1]
+                return (paged, len(paged) > limit) if return_has_more else paged
+
+            # 초성 이동이 먼저 실행된 경우에는 전체 카드 데이터를 다시 만들지 않고,
+            # 초성용 경량 인덱스에서 요청 페이지의 원본 행만 카드 데이터로 완성한다.
+            jump_cached = _JUMP_INDEX_CACHE.get(cache_key)
+            if jump_cached and (now - jump_cached[0] < _LIST_QUERY_CACHE_TTL):
+                index_entries = jump_cached[1]
+                page_entries = index_entries[offset:offset + limit + 1]
+                paged = _build_jump_page_entries(
+                    db_type,
+                    page_entries,
+                    library_id,
+                    search_query,
+                    normalized_genres,
+                    normalized_tags,
+                    favorite_only,
+                    user_id,
+                    role,
+                )
+                return (paged, len(page_entries) > limit) if return_has_more else paged
         else:
             cached = _LIST_QUERY_CACHE.get(cache_key)
             if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
@@ -393,7 +738,7 @@ class SeriesService:
                 paged = entries[offset:offset + limit + 1]
                 t_cached = time.perf_counter()
                 print(f"[PERF-PROFILE] get_books_list(lib={library_id}, page={page}) QUERY-CACHE HIT ({len(entries)}entries): {(t_cached-t0)*1000:.1f}ms")
-                return paged
+                return (paged, len(paged) > limit) if return_has_more else paged
 
             t1 = time.perf_counter()
             rows = SeriesRepository.fetch_books_for_grouping(
@@ -408,18 +753,26 @@ class SeriesService:
                 user_id=user_id,
                 role=role,
                 limit=None,
-                offset=None
+                offset=None,
+                include_has_metadata=include_has_metadata,
+                include_all_rows=rating_filter_active,
             )
             t2 = time.perf_counter()
+
+            rows = _filter_rows_by_content_rating(db_type, rows, content_rating_max)
 
             if author_key:
                 from repositories.series_search_query import normalize_author_key
                 rows = [r for r in rows if normalize_author_key(r['author']) == author_key]
                 entries = _build_series_entries(db_type, rows)
+                entries = _apply_series_reading_progress(db_type, entries, user_id)
+                _strip_series_entry_internal_fields(entries)
             elif group_by == 'author':
                 entries = _build_author_entries(db_type, rows)
             else:
                 entries = _build_series_entries(db_type, rows)
+                entries = _apply_series_reading_progress(db_type, entries, user_id)
+                _strip_series_entry_internal_fields(entries)
             t3 = time.perf_counter()
 
             _sort_entries(entries, sort=sort)
@@ -428,7 +781,7 @@ class SeriesService:
             _LIST_QUERY_CACHE[cache_key] = (now, entries)
             paged = entries[offset:offset + limit + 1]
             print(f"[PERF-PROFILE] get_books_list(lib={library_id}, page={page}) FULL-SCAN CACHE BUILD TOTAL: {(t4-t0)*1000:.1f}ms | SQL-Fetch({len(rows)}rows): {(t2-t1)*1000:.1f}ms | BuildSeries({len(entries)}entries): {(t3-t2)*1000:.1f}ms | Sort: {(t4-t3)*1000:.1f}ms")
-            return paged
+            return (paged, len(paged) > limit) if return_has_more else paged
 
         sql_limit = limit + 1
         sql_offset = offset
@@ -445,11 +798,14 @@ class SeriesService:
             role=role,
             limit=sql_limit,
             offset=sql_offset,
-            sort=sort
+            sort=sort,
+            include_has_metadata=include_has_metadata
         )
         t2 = time.perf_counter()
 
         entries = _build_series_entries(db_type, rows)
+        entries = _apply_series_reading_progress(db_type, entries, user_id)
+        _strip_series_entry_internal_fields(entries)
         t3 = time.perf_counter()
 
         _sort_entries(entries, sort=sort)
@@ -458,11 +814,14 @@ class SeriesService:
         paged = entries if sql_limit is not None else entries[offset:offset + limit + 1]
         
         print(f"[PERF-PROFILE] get_books_list(lib={library_id}, page={page}) TOTAL: {(t4-t0)*1000:.1f}ms | SQL-Fetch({len(rows)}rows): {(t2-t1)*1000:.1f}ms | BuildSeries({len(entries)}entries): {(t3-t2)*1000:.1f}ms | Sort: {(t4-t3)*1000:.1f}ms")
-        return paged
+        # Grouping can collapse several raw rows into one series. Pagination must
+        # use the raw query's extra row, not the number of grouped cards.
+        return (paged, len(rows) > limit) if return_has_more else paged
 
     @staticmethod
     def find_jump_position(db_type, library_id, search_query, sort, target_char, limit,
-                            genre_filters=None, tag_filters=None, user_id=None, role=None):
+                            genre_filters=None, tag_filters=None, user_id=None, role=None,
+                            content_rating_max=None, selection_anchors=None):
         """
         가나다(초성) 바로가기: 전체 목록을 동일한 정렬 기준으로 구성한 뒤 target_char로
         시작하는 첫 항목의 절대 인덱스를 찾아 페이지/오프셋으로 환산합니다.
@@ -475,6 +834,8 @@ class SeriesService:
         favorite_only = library_id == 'favorite'
         normalized_genres = [str(v).strip() for v in (genre_filters or []) if str(v).strip()]
         normalized_tags = [str(v).strip() for v in (tag_filters or []) if str(v).strip()]
+        content_rating_max = _normalize_content_rating_max(content_rating_max)
+        rating_filter_active = _content_rating_filter_active(db_type, content_rating_max)
         sort_key = (sort or 'asc').lower()
         if sort_key not in ('asc', 'desc'):
             sort_key = 'asc'
@@ -489,11 +850,16 @@ class SeriesService:
             tuple(normalized_tags),
             int(user_id) if user_id else 0,
             str(role or ''),
+            '',  # group_by: 초성 인덱스는 시리즈 기본 목록 기준
+            '',  # author_key: 작가 드릴다운 목록은 초성 인덱스를 사용하지 않음
+            False,  # include_has_metadata: jump index is a lightweight base-list cache
+            content_rating_max if rating_filter_active else None,
         )
         cached = _LIST_QUERY_CACHE.get(cache_key)
         if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
             entries = cached[1]
-        else:
+            lightweight = False
+        elif rating_filter_active:
             rows = SeriesRepository.fetch_books_for_grouping(
                 db_type,
                 library_id,
@@ -504,21 +870,85 @@ class SeriesService:
                 user_id=user_id,
                 role=role,
                 limit=None,
-                offset=None
+                offset=None,
+                lightweight=False,
+                include_all_rows=True,
             )
+            rows = _filter_rows_by_content_rating(db_type, rows, content_rating_max)
             entries = _build_series_entries(db_type, rows)
+            entries = _apply_series_reading_progress(db_type, entries, user_id)
+            _strip_series_entry_internal_fields(entries)
             _sort_entries(entries, sort=sort_key)
             _LIST_QUERY_CACHE[cache_key] = (now, entries)
+            lightweight = False
+        else:
+            jump_cached = _JUMP_INDEX_CACHE.get(cache_key)
+            if jump_cached and (now - jump_cached[0] < _LIST_QUERY_CACHE_TTL):
+                index_entries = jump_cached[1]
+                lightweight = True
+            else:
+                t_fetch = time.perf_counter()
+                rows = SeriesRepository.fetch_books_for_grouping(
+                    db_type,
+                    library_id,
+                    search_query=search_query or '',
+                    favorite_only=favorite_only,
+                    genre_filters=normalized_genres,
+                    tag_filters=normalized_tags,
+                    user_id=user_id,
+                    role=role,
+                    limit=None,
+                    offset=None,
+                    lightweight=True,
+                )
+                index_entries = _build_series_jump_entries(rows)
+                _sort_entries(index_entries, sort=sort_key)
+                _JUMP_INDEX_CACHE[cache_key] = (now, index_entries)
+                lightweight = True
+                print(
+                    f"[PERF-PROFILE] GET /api/media/list/jump index-build "
+                    f"rows={len(rows)} entries={len(index_entries)} "
+                    f"total={(time.perf_counter() - t_fetch) * 1000:.1f}ms"
+                )
+
+        if lightweight:
+            entries = index_entries
+        else:
+            index_entries = None
+        total = len(entries)
+
+        if selection_anchors is not None:
+            # Use the same permission-filtered, sorted snapshot as initial-bar navigation.
+            targets = []
+            for entry in entries:
+                source = min(entry.get('_source_rows') or [{}], key=lambda row: row.get('id') or 0)
+                targets.append({
+                    'id': entry.get('representative_book_id') or entry.get('_representative_id'),
+                    'libraryId': entry.get('library_id') or source.get('library_id'),
+                    'title': entry.get('representative_title') or entry.get('series_name') or '',
+                    'seriesName': entry.get('series_name') or '',
+                    'fileFormat': entry.get('file_format') or source.get('file_format') or '',
+                    'coverAlign': entry.get('cover_align') or source.get('cover_align') or 'center',
+                    'markUnreadScope': 'series',
+                    'isVolumeDetail': False,
+                })
+            positions = []
+            for anchor in selection_anchors:
+                position = next((i for i, item in enumerate(targets)
+                                 if str(item['id']) == str(anchor['id'])
+                                 and str(item['libraryId']) == str(anchor['libraryId'])), None)
+                if position is None:
+                    raise ValueError('선택한 작품이 현재 목록에서 변경되었습니다. 다시 선택해 주세요.')
+                positions.append(position)
+            first, last = sorted(positions)
+            return {'targets': targets[first:last + 1]}
 
         target = str(target_char or '').strip()
-        total = len(entries)
         found_index = -1
         for idx, entry in enumerate(entries):
             # _sort_entries()가 대괄호 태그를 뗀 제목 기준으로 정렬하므로, 여기서도 반드시
             # 같은 기준(뗀 제목)으로 초성을 판정해야 한다. 판정 기준이 정렬 기준과 어긋나면
-            # 계산된 page/offset이 실제 그리드가 보여주는 위치와 어긋나서 "엉뚱한 곳으로
-            # 점프"하게 된다 ([태그] 접두사가 흔한 영상 강좌 제목에서 특히 두드러짐 - '['는
-            # 유니코드에서 영문 Z와 한글 사이에 끼어들어 정렬 순서를 깨뜨린다).
+            # 계산된 page/offset이 실제 그리드가 보여주는 위치와 어긋난다.
             title = _strip_leading_bracket_tags(entry.get('series_name') or entry.get('representative_title') or '')
             if _get_initial(title) == target:
                 found_index = idx
@@ -528,22 +958,43 @@ class SeriesService:
             return {'found': False, 'total': total}
 
         safe_limit = max(1, int(limit or 1))
+        page_start = (found_index // safe_limit) * safe_limit
+        page_end = page_start + safe_limit
+        if lightweight:
+            page_series = _build_jump_page_entries(
+                db_type,
+                entries[page_start:page_end],
+                library_id,
+                search_query,
+                normalized_genres,
+                normalized_tags,
+                favorite_only,
+                user_id,
+                role,
+            )
+        else:
+            page_series = entries[page_start:page_end]
         return {
             'found': True,
             'index': found_index,
             'page': (found_index // safe_limit) + 1,
             'offset_in_page': found_index % safe_limit,
             'total': total,
+            # 초성 위치 계산 후 실제 목적 페이지 카드만 반환한다.
+            'series': page_series,
+            'has_more': total > page_end,
         }
 
     @staticmethod
-    def get_books_totals(db_type, library_id, search_query='', genre_filters=None, tag_filters=None, user_id=None, role=None):
+    def get_books_totals(db_type, library_id, search_query='', genre_filters=None, tag_filters=None, user_id=None, role=None, content_rating_max=None):
         import time
         _sync_local_books_cache_with_shared_epoch(db_type)
         library_id = _normalize_library_id(library_id)
         favorite_only = library_id == 'favorite'
         normalized_genres = [str(value).strip() for value in (genre_filters or []) if str(value).strip()]
         normalized_tags = [str(value).strip() for value in (tag_filters or []) if str(value).strip()]
+        content_rating_max = _normalize_content_rating_max(content_rating_max)
+        rating_filter_active = _content_rating_filter_active(db_type, content_rating_max)
         cache_payload = json.dumps({
             'db_type': db_type,
             'library_id': library_id,
@@ -552,6 +1003,7 @@ class SeriesService:
             'tags': normalized_tags,
             'user_id': int(user_id) if user_id else 0,
             'role': str(role or ''),
+            'content_rating_max': content_rating_max if rating_filter_active else None,
         }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         cache_digest = hashlib.sha256(cache_payload.encode('utf-8')).hexdigest()
         cache_key = f"cache:series_totals:{db_type}:{cache_digest}"
@@ -577,16 +1029,37 @@ class SeriesService:
             if cached and now - cached[0] < _TOTALS_CACHE_TTL:
                 return cached[1]
 
-        totals = SeriesRepository.fetch_grouping_totals(
-            db_type,
-            library_id,
-            search_query=search_query or '',
-            favorite_only=favorite_only,
-            genre_filters=normalized_genres,
-            tag_filters=normalized_tags,
-            user_id=user_id,
-            role=role,
-        )
+        if rating_filter_active:
+            rows = SeriesRepository.fetch_books_for_grouping(
+                db_type,
+                library_id,
+                search_query=search_query or '',
+                favorite_only=favorite_only,
+                genre_filters=normalized_genres,
+                tag_filters=normalized_tags,
+                user_id=user_id,
+                role=role,
+                limit=None,
+                offset=None,
+                include_all_rows=True,
+            )
+            rows = _filter_rows_by_content_rating(db_type, rows, content_rating_max)
+            entries = _build_series_entries(db_type, rows)
+            totals = {
+                'total_series_count': len(entries),
+                'total_book_count': sum(int(entry.get('book_count') or 0) for entry in entries),
+            }
+        else:
+            totals = SeriesRepository.fetch_grouping_totals(
+                db_type,
+                library_id,
+                search_query=search_query or '',
+                favorite_only=favorite_only,
+                genre_filters=normalized_genres,
+                tag_filters=normalized_tags,
+                user_id=user_id,
+                role=role,
+            )
 
         if redis_available:
             try:
@@ -609,17 +1082,20 @@ class SeriesService:
             return {}
 
     @staticmethod
-    def get_all_books_list(db_type, library_id, user_id=None, role=None):
+    def get_all_books_list(db_type, library_id, user_id=None, role=None, content_rating_max=None):
         """Kavita 방식의 선로드를 위해 특정 라이브러리의 전체 시리즈 목록을 페이징 없이 경량 조회"""
         import time
         t0 = time.perf_counter()
         _sync_local_books_cache_with_shared_epoch(db_type)
         library_id = _normalize_library_id(library_id)
         favorite_only = library_id == 'favorite'
+        content_rating_max = _normalize_content_rating_max(content_rating_max)
+        rating_filter_active = _content_rating_filter_active(db_type, content_rating_max)
         
         now = time.time()
         # 즐겨찾기 카테고리는 유저별 개별 데이터이므로 글로벌 통캐시에서 제외하거나 유저 키 적용
-        cache_key = f"user:{user_id}:{db_type}:{library_id}" if favorite_only else f"global:{db_type}:{library_id}"
+        rating_cache_key = content_rating_max if rating_filter_active else 'unrestricted'
+        cache_key = f"user:{user_id}:{db_type}:{library_id}:{rating_cache_key}" if favorite_only else f"global:{db_type}:{library_id}:{rating_cache_key}"
         if not favorite_only and cache_key in _ALL_BOOKS_CACHE:
             cache_ts, cached_entries = _ALL_BOOKS_CACHE[cache_key]
             if now - cache_ts < 300.0:
@@ -633,11 +1109,16 @@ class SeriesService:
             search_query='',
             favorite_only=favorite_only,
             user_id=user_id,
-            role=role
+            role=role,
+            include_all_rows=rating_filter_active,
         )
         t2 = time.perf_counter()
 
+        rows = _filter_rows_by_content_rating(db_type, rows, content_rating_max)
+
         entries = _build_series_entries(db_type, rows)
+        entries = _apply_series_reading_progress(db_type, entries, user_id)
+        _strip_series_entry_internal_fields(entries)
         t3 = time.perf_counter()
 
         _sort_entries(entries, sort='asc')

@@ -3,6 +3,7 @@ gunicorn==21.2.0
 python-dotenv==1.0.0
 apscheduler==3.10.1
 pypdfium2>=4.30.0,<6
+pypdf>=5.0.0,<7
 Pillow>=11.0.0,<13
 psutil>=6.0.0,<8
 PyYAML>=6.0.2,<7
@@ -15,4 +16,3 @@ tinytag==2.0.0
 PyMySQL==1.1.0
 watchdog==4.0.2
 mcp>=2.0.0,<3
-

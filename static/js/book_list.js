@@ -1,14 +1,176 @@
 import { state } from './state.js';
-import * as api from './api.js';
-import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js?v=20260809-unread-series-v3';
-import { openReader } from './viewer.js';
-import { loadLibraries } from './category.js';
+import * as api from './api.js?rev=20260920-scan-response-v1';
+import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js?v=20260922-series-progress-v1';
+import { openReader } from './viewer.js?rev=20260927-tts-session-v8';
 import { initInfiniteScrollObserver } from './infinite_scroll.js';
 import { stripLeadingBracketTags } from './series_display.js';
 import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js';
+import { BookListRefreshState, getLoadedPageRange } from './book_list_refresh_state.js';
+import { resolveSearchNavigation } from './search_navigation.js?rev=20260921-global-search-v1';
 
 let filterDebounceTimer = null;
 let totalsRequestSerial = 0;
+const bookListRefreshState = new BookListRefreshState();
+let refreshAfterCurrentLoad = false;
+let activeListRequest = null;
+
+function currentListQueryKey() {
+  return JSON.stringify([
+    state.currentLibraryType,
+    String(state.currentLibraryId || ''),
+    state.searchQuery || '',
+    state.currentSortDirection || 'asc',
+    state.groupMode,
+    state.authorKeyFilter || '',
+    state.filterGenres || [],
+    state.filterTags || [],
+    state.showMetadataConnectionStatus === true,
+  ]);
+}
+
+// 카테고리·검색·정렬을 바꿀 때 이전 목록 요청이 모바일 화면을 다시 그리지 않도록 취소한다.
+// Abort만으로 충분하지 않은 캐시 응답도 있으므로 현재 요청인지 함께 확인한다.
+export function cancelPendingBookListRequests() {
+  activeListRequest?.controller.abort();
+  activeListRequest = null;
+  totalsRequestSerial++;
+  state.isLoading = false;
+  state.isLoadingPrevious = false;
+  document.getElementById('infinite-scroll-spinner-top')?.classList.remove('is-loading');
+}
+
+function beginListRequest() {
+  activeListRequest?.controller.abort();
+  const request = { controller: new AbortController(), key: currentListQueryKey() };
+  activeListRequest = request;
+  state.isLoading = false;
+  state.isLoadingPrevious = false;
+  document.getElementById('infinite-scroll-spinner-top')?.classList.remove('is-loading');
+  return request;
+}
+
+function isCurrentListRequest(request) {
+  return activeListRequest === request && request.key === currentListQueryKey();
+}
+
+function isBookListViewActive() {
+  const currentId = String(state.currentLibraryId || '');
+  return !(
+    ['home', 'history', 'collection', 'smart_rec', 'settings', 'plugins'].includes(currentId)
+    || currentId.startsWith('plugin_')
+  );
+}
+
+function getBookListKey(type = state.currentLibraryType, libraryId = state.currentLibraryId) {
+  return `${String(type || 'general')}:${String(libraryId ?? '')}`;
+}
+
+function isDetailViewVisible() {
+  const detailView = document.getElementById('book-detail-view');
+  return !!detailView && detailView.style.display !== 'none';
+}
+
+// 목록을 불러오는 도중 들어온 갱신 요청은 버리지 않고, 로딩이 끝난 직후 한 번 다시 확인한다.
+function flushQueuedBookListRefresh() {
+  if (!refreshAfterCurrentLoad) return;
+  refreshAfterCurrentLoad = false;
+  setTimeout(() => refreshBooksListIfStale(), 0);
+}
+
+function captureBookListScrollPosition() {
+  const mainContent = document.querySelector('.library-main-content');
+  const mainTop = Number(mainContent?.scrollTop || 0);
+  const documentTop = Number(window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0);
+  return {
+    scrollTop: mainTop > 0 ? mainTop : documentTop,
+    scrollUseDocument: !mainContent || (mainTop === 0 && documentTop > 0),
+  };
+}
+
+function restoreBookListScrollPosition(position, type, libraryId, request = null) {
+  const restore = () => {
+    if (request && !isCurrentListRequest(request)) return;
+    if (state.currentLibraryType !== type || String(state.currentLibraryId || '') !== libraryId) return;
+    const top = Math.max(0, Number(position.scrollTop) || 0);
+    const mainContent = document.querySelector('.library-main-content');
+    if (position.scrollUseDocument) {
+      window.scrollTo(0, top);
+      document.documentElement.scrollTop = top;
+      document.body.scrollTop = top;
+    } else if (mainContent) {
+      mainContent.scrollTop = top;
+    }
+  };
+  requestAnimationFrame(restore);
+  setTimeout(restore, 80);
+}
+
+// 스캔 전에 화면에 로드돼 있던 페이지 범위(firstPage..lastPage)를 다시 불러오고 스크롤을 복원한다.
+async function loadBookListToPosition(type, libraryId, firstPage, lastPage, position) {
+  let request = await loadBooksList(false, firstPage, { keepCurrentGrid: true });
+  if (!request || !isCurrentListRequest(request)) return;
+  while (
+    isCurrentListRequest(request)
+    &&
+    state.currentLibraryType === type
+    && String(state.currentLibraryId || '') === libraryId
+    && state.hasMore
+    && state.currentPage <= lastPage
+  ) {
+    const nextPage = state.currentPage;
+    request = await loadBooksList(true);
+    if (!request || !isCurrentListRequest(request)) return;
+    if (state.currentPage === nextPage && state.hasMore) break;
+  }
+  restoreBookListScrollPosition(position, type, libraryId, request);
+  return true;
+}
+
+// 스캔 종료 시 호출한다. 이미 목록 요청이 진행 중이면 그 요청이 끝난 뒤 최신 목록으로 다시
+// 불러오도록 예약해서(버리지 않고) 스캔 완료 알림이 유실되지 않게 한다.
+export function invalidateBookListAfterScan() {
+  bookListRefreshState.invalidate(getBookListKey());
+  return refreshBooksListIfStale();
+}
+
+// 상세 화면이 열려 있는 동안에는 그 밑의 그리드가 그대로 남아 있으므로 네트워크 요청을 미루고,
+// 목록으로 돌아올 때 그사이 무효화된 목록만 다시 불러온다.
+export function refreshBooksListIfStale() {
+  const listKey = getBookListKey();
+  if (!bookListRefreshState.isStale(listKey) || !isBookListViewActive() || isDetailViewVisible()) return false;
+
+  if (state.isLoading || state.isLoadingPrevious) {
+    refreshAfterCurrentLoad = true;
+    return false;
+  }
+
+  refreshAfterCurrentLoad = false;
+  const { firstPage, lastPage } = getLoadedPageRange(
+    state.firstLoadedPage,
+    state.currentPage,
+    state.hasMore,
+  );
+  return loadBookListToPosition(
+    state.currentLibraryType,
+    String(state.currentLibraryId || ''),
+    firstPage,
+    lastPage,
+    captureBookListScrollPosition(),
+  ).then(result => result === true).catch((error) => {
+    console.warn('[Book-List] 스캔 후 목록 갱신 실패:', error);
+    return false;
+  });
+}
+
+export async function restoreBookListPosition(position = {}) {
+  const type = String(state.currentLibraryType || 'general');
+  const libraryId = String(state.currentLibraryId || '');
+  const range = getLoadedPageRange(position.firstLoadedPage, position.lastLoadedPage, false);
+  await loadBookListToPosition(type, libraryId, range.firstPage, range.lastPage, {
+    scrollTop: position.scrollTop,
+    scrollUseDocument: position.scrollUseDocument,
+  });
+}
 
 export function normalizeMetadataToken(token) {
   if (!token) return '';
@@ -41,15 +203,15 @@ export function updateLibraryTotalCount(items, totals = null) {
 }
 
 // 1. 도서 시리즈 목록 로드
-export async function loadBooksList(isAppend = false, startPage = null) {
+export async function loadBooksList(isAppend = false, startPage = null, options = {}) {
   const currentId = state.currentLibraryId || '';
   if (['home', 'collection', 'settings', 'plugins'].includes(currentId) || currentId.startsWith('plugin_')) {
     console.warn(`[Book-List] loadBooksList skipped: currentLibraryId=${currentId} is not a book list category.`);
     return;
   }
 
-  if (state.isLoading) {
-    console.warn('[Book-List] loadBooksList skipped: already loading');
+  if (isAppend && (state.isLoading || state.isLoadingPrevious)) {
+    console.warn('[Book-List] append skipped: already loading');
     return;
   }
   
@@ -59,6 +221,13 @@ export async function loadBooksList(isAppend = false, startPage = null) {
     return;
   }
   const spinner = document.getElementById('infinite-scroll-spinner');
+  const request = beginListRequest();
+  let loaded = false;
+  // 요청 시점의 목록/무효화 버전을 기억해 두었다가, 응답이 오래된 것이면 최신 무효화를 지우지 않게 한다.
+  const requestType = state.currentLibraryType;
+  const requestLibraryId = String(state.currentLibraryId || '');
+  const requestListKey = getBookListKey(requestType, requestLibraryId);
+  const requestRefreshVersion = bookListRefreshState.beginRequest(requestListKey);
   container.classList.toggle('author-drilldown-active', !!state.authorKeyFilter);
 
   state.isLoading = true;
@@ -81,12 +250,15 @@ export async function loadBooksList(isAppend = false, startPage = null) {
       state.hasMore = true;
       state.firstLoadedPage = targetPage;
       state.hasPrevious = targetPage > 1;
-      container.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> ${i18n.t('book_list.loading')}</div>`;
-      const countSpan = document.getElementById('library-total-count');
-      if (countSpan) countSpan.innerText = '';
+      // 스캔 후 자동 갱신(keepCurrentGrid)은 기존 그리드를 유지한 채 교체해 깜빡임을 줄인다.
+      if (!options.keepCurrentGrid) {
+        container.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> ${i18n.t('book_list.loading')}</div>`;
+        const countSpan = document.getElementById('library-total-count');
+        if (countSpan) countSpan.innerText = '';
+      }
     }
 
-    const data = await api.fetchBooksList({
+    const data = options.preloadedData || await api.fetchBooksList({
       type: requestFilters.type,
       libraryId: requestFilters.libraryId,
       page: targetPage,
@@ -97,12 +269,19 @@ export async function loadBooksList(isAppend = false, startPage = null) {
       tags: requestFilters.tags,
       groupBy: state.groupMode === 'author' ? 'author' : '',
       authorKey: state.authorKeyFilter || '',
+      includeHasMetadata: state.showMetadataConnectionStatus === true,
+      signal: request.controller.signal,
     });
+
+    if (!isCurrentListRequest(request)) return;
 
     if (!data.success) {
       container.innerHTML = `<div class="loading-spinner">${i18n.t('book_list.load_fail', {error: data.error || ''})}</div>`;
       return;
     }
+
+    const isSameList = state.currentLibraryType === requestType
+      && String(state.currentLibraryId || '') === requestLibraryId;
 
     const incomingSeries = Array.isArray(data.series) ? data.series : [];
 
@@ -111,15 +290,19 @@ export async function loadBooksList(isAppend = false, startPage = null) {
       appendBooksGrid(incomingSeries);
     } else {
       state.currentBooksData = incomingSeries;
-      renderBooksGrid(state.currentBooksData);
+      renderBooksGrid(state.currentBooksData, { preserveSelection: options.preserveSelection });
+    }
+
+    if (!isAppend && isSameList) {
+      bookListRefreshState.markLoaded(requestListKey, requestRefreshVersion);
     }
 
     state.filteredBooksData = state.currentBooksData;
-    if (!isAppend) {
-      api.fetchBooksTotals(requestFilters)
+    loaded = true;
+    if (!isAppend && !options.skipTotals) {
+      api.fetchBooksTotals({...requestFilters, signal: request.controller.signal})
         .then((totals) => {
-          const isSameList = state.currentLibraryType === requestFilters.type
-            && String(state.currentLibraryId || '') === String(requestFilters.libraryId || '');
+          const isSameList = request.key === currentListQueryKey();
           if (totalsSerial === totalsRequestSerial && isSameList && totals.success) {
             updateLibraryTotalCount([], totals);
           }
@@ -148,17 +331,27 @@ export async function loadBooksList(isAppend = false, startPage = null) {
   } else {
     unmountIndexScrollbar();
   }
+  } catch (error) {
+    if (error.name !== 'AbortError' && isCurrentListRequest(request)) {
+      console.warn('[Book-List] 목록 조회 실패:', error);
+      if (!isAppend) container.innerHTML = `<div class="loading-spinner">${i18n.t('book_list.server_error')}</div>`;
+      if (spinner) spinner.style.display = 'none';
+    }
   } finally {
-    state.isLoading = false;
+    if (activeListRequest === request) {
+      state.isLoading = false;
+      flushQueuedBookListRefresh();
+    }
   }
 
   // 렌더링 및 스피너 상태 결정 완료 후 무한 스크롤 옵저버 재바인딩
-  initInfiniteScrollObserver();
+  if (isCurrentListRequest(request)) initInfiniteScrollObserver();
+  return loaded && isCurrentListRequest(request) ? request : null;
 }
 
 // 초성 바로가기 등으로 중간 페이지부터 로드된 경우, 위로 스크롤 시 이전 페이지를 앞에 이어붙인다.
 export async function loadPreviousBooksPage() {
-  if (state.isLoading || state.isLoadingPrevious || !state.hasPrevious) return;
+  if (!isBookListViewActive() || state.isLoading || state.isLoadingPrevious || !state.hasPrevious) return;
 
   const container = document.getElementById('books-list-container');
   const mainContent = document.querySelector('.library-main-content');
@@ -170,6 +363,7 @@ export async function loadPreviousBooksPage() {
     return;
   }
 
+  const request = beginListRequest();
   state.isLoadingPrevious = true;
   const spinnerTop = document.getElementById('infinite-scroll-spinner-top');
   if (spinnerTop) spinnerTop.classList.add('is-loading');
@@ -187,9 +381,11 @@ export async function loadPreviousBooksPage() {
       tags: (state.filterTags || []).map(normalizeMetadataToken).filter(Boolean),
       groupBy: state.groupMode === 'author' ? 'author' : '',
       authorKey: state.authorKeyFilter || '',
+      includeHasMetadata: state.showMetadataConnectionStatus === true,
+      signal: request.controller.signal,
     });
 
-    if (!data.success) return;
+    if (!isCurrentListRequest(request) || !data.success) return;
 
     const incomingSeries = Array.isArray(data.series) ? data.series : [];
     if (incomingSeries.length === 0) {
@@ -211,15 +407,19 @@ export async function loadPreviousBooksPage() {
 
     if (spinnerTop) spinnerTop.style.display = state.hasPrevious ? 'block' : 'none';
   } catch (e) {
-    console.error('[Book-List] 이전 페이지 로드 실패:', e);
+    if (e.name !== 'AbortError') console.error('[Book-List] 이전 페이지 로드 실패:', e);
   } finally {
-    state.isLoadingPrevious = false;
-    if (spinnerTop) spinnerTop.classList.remove('is-loading');
+    if (activeListRequest === request) {
+      state.isLoadingPrevious = false;
+      if (spinnerTop) spinnerTop.classList.remove('is-loading');
+      flushQueuedBookListRefresh();
+    }
   }
 }
 
 // 최근 읽은 도서 히스토리 목록 로드
 export async function loadReadingHistory() {
+  const request = beginListRequest();
   state.isLoading = true;
   state.hasMore = false;
   state.hasPrevious = false;
@@ -231,7 +431,8 @@ export async function loadReadingHistory() {
   if (!container) { state.isLoading = false; return; }
   container.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> ${i18n.t('book_list.history_loading')}</div>`;
   try {
-    const data = await api.fetchReadingHistory(state.currentLibraryType);
+    const data = await api.fetchReadingHistory(state.currentLibraryType, {signal: request.controller.signal});
+    if (!isCurrentListRequest(request)) return;
     if (data.success) {
       let books = data.books || [];
       if (state.hideCompletedInHistory) {
@@ -250,17 +451,32 @@ export async function loadReadingHistory() {
       container.innerHTML = `<div class="loading-spinner">${i18n.t('book_list.history_fail', {error: data.error || ''})}</div>`;
     }
   } catch (e) {
+    if (e.name === 'AbortError' || !isCurrentListRequest(request)) return;
     container.innerHTML = `<div class="loading-spinner">${i18n.t('book_list.server_error')}</div>`;
     console.error('히스토리 로드 오류:', e);
   } finally {
-    state.isLoading = false;
+    if (activeListRequest === request) state.isLoading = false;
   }
 }
 
 // 3. 도서 검색 필터링 (클라이언트 사이드 메모리 내 즉시 필터링)
 export function filterBooks() {
-  const query = document.getElementById('library-search').value.toLowerCase().trim();
+  const searchInput = document.getElementById('library-search');
+  const rawQuery = String(searchInput?.value || '').trim();
+  const query = rawQuery.toLowerCase();
   state.searchQuery = query;
+  updateSearchActionButtonUI(query);
+
+  const activeHistoryState = window.history?.state;
+  if (activeHistoryState?.view === 'search') {
+    try {
+      window.history.replaceState(
+        { ...activeHistoryState, searchQuery: rawQuery },
+        '',
+        window.location.href
+      );
+    } catch (e) {}
+  }
 
   // 영상 강좌 세션은 개별 라이브러리 보기에서만 별도의 클라이언트 필터러(video_library.js)를 쓴다.
   // "전체보기"(all)/즐겨찾기/히스토리는 tab_media_library.js::selectCategory()가 video여도
@@ -272,17 +488,16 @@ export function filterBooks() {
     return;
   }
 
-  // 홈 대시보드에서는 검색 시 전체보기로 전환해 동일한 검색어로 목록 필터링한다.
-  if (query && state.currentLibraryId === 'home' && typeof window.selectCategory === 'function') {
-    window.selectCategory('all');
-    return;
-  }
-
-  updateSearchActionButtonUI(query);
-  
-  if (query && state.currentLibraryId === 'history') {
-    state.currentLibraryId = 'all';
-    loadLibraries();
+  // 상단 자료 검색은 어느 카테고리에서 시작해도 전체보기로 이동한다. 검색 진입점은
+  // history에 남겨 브라우저 뒤로가기/앞으로가기가 원래 화면과 검색 결과를 복원하게 한다.
+  const searchNavigation = resolveSearchNavigation({
+    query,
+    rawQuery,
+    libraryId: state.currentLibraryId,
+    detailVisible: isDetailViewVisible(),
+  });
+  if (searchNavigation && typeof window.selectCategory === 'function') {
+    window.selectCategory(searchNavigation.categoryId, false, searchNavigation.options);
     return;
   }
 
@@ -308,6 +523,25 @@ export function updateSearchActionButtonUI(query) {
     btn.innerHTML = `<i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> <span class="sr-only">${i18n.t('common.search')}</span>`;
     btn.title = i18n.t('common.search');
   }
+}
+
+export function clearLibrarySearchQuery() {
+  if (filterDebounceTimer) {
+    clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = null;
+  }
+  const searchInput = document.getElementById('library-search');
+  if (searchInput) searchInput.value = '';
+  state.searchQuery = '';
+  updateSearchActionButtonUI('');
+}
+
+export function restoreLibrarySearchQuery(query = '') {
+  const rawQuery = String(query || '').trim();
+  const searchInput = document.getElementById('library-search');
+  if (searchInput) searchInput.value = rawQuery;
+  state.searchQuery = rawQuery.toLowerCase();
+  updateSearchActionButtonUI(state.searchQuery);
 }
 
 export function updateSortButtonUI() {

@@ -144,8 +144,8 @@ python tools/migrator_sqlite_to_mariadb.py
 ### ④ MariaDB 성능 튜닝: innodb_buffer_pool_size
 MariaDB 공식 이미지의 `innodb_buffer_pool_size` 기본값은 **128MB**에 불과합니다. 도서 수가 많아질수록(특히 수만 권 이상) 이 값이 실제 데이터 용량보다 작으면 조회 때마다 캐시가 밀려나 디스크 I/O가 반복되면서 통계·진단성 조회가 비정상적으로 느려질 수 있습니다.
 
-* **권장값**: 보유 RAM 여유분 내에서, `media_general` + `media_adult` + `media_audiobook` 전체 DB 용량 이상으로 설정 (`docker-compose.mariadb.yml`은 기본 `2G`로 설정되어 있습니다).
-* **Docker Compose 배포 시**: 기본값(`2G`)을 넘겨야 하는 대용량 라이브러리는 `docker-compose.mariadb.yml`을 직접 고치는 대신 `docker-compose.override.mariadb.example.yml`을 복사해 오버라이드하세요. (자세한 절차는 설치 가이드의 "MariaDB + Redis 콤보 모드" 항목 참고)
+* **권장값**: 보유 RAM 여유분 내에서, `media_general` + `media_adult` + `media_audiobook` 전체 DB 용량 이상으로 설정 (`docker-compose.yml`은 기본 `2G`로 설정되어 있습니다).
+* **Docker Compose 배포 시**: 더 큰 값이 필요하면 `docker-compose.yml`의 `--innodb-buffer-pool-size`를 서버 메모리에 맞게 조정하세요.
 * **네이티브(비-Docker) MariaDB 운영 시**: `/etc/mysql/mariadb.conf.d/50-server.cnf`(배포판에 따라 경로가 다를 수 있음)의 `[mysqld]` 섹션에 아래를 추가하고 `systemctl restart mariadb`로 재시작합니다.
   ```ini
   innodb_buffer_pool_size = 2G

@@ -112,11 +112,11 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             return f"ta:{title}|{author}"
         return f"t:{title}"
 
-    def _ensure_verified(self, domain_url, user_id, secret_token):
+    def _ensure_verified(self, domain_url, user_id, secret_token, force=False):
         """relay에 이 설치(install)가 등록돼 있는지 확인/자동 등록한다. 매 요청마다 왕복하지
         않도록 결과를 하루 동안 플러그인 전용 Redis 캐시에 남긴다."""
         cache_key = f"verified:{user_id}"
-        if self.cache_get(cache_key) == "1":
+        if not force and self.cache_get(cache_key) == "1":
             return True
 
         resp = requests.post(
@@ -128,6 +128,14 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
         if ok:
             self.cache_set(cache_key, "1", ttl=VERIFY_CACHE_TTL)
         return ok
+
+    def _retry_after_unauthorized(self, response, request_again, domain_url, user_id, secret_token):
+        """Relay registration can disappear before the local verify cache expires."""
+        if response.status_code == 401 and self._ensure_verified(
+            domain_url, user_id, secret_token, force=True
+        ):
+            return request_again()
+        return response
 
     # ------------------------------------------------------------------
     # rating_widget 계약 구현
@@ -147,11 +155,14 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             book_key = self._book_key(context)
             auth = {"user_id": user_id, "secret_token": secret_token}
 
-            agg_resp = requests.get(
-                f"{domain_url}/api/{RELAY_PLUGIN_ID}/records/aggregate",
-                params={**auth, "agg_field": "rating", "filter_field": "book_key", "filter_value": book_key},
-                timeout=REQUEST_TIMEOUT,
-            )
+            def get_aggregate():
+                return requests.get(
+                    f"{domain_url}/api/{RELAY_PLUGIN_ID}/records/aggregate",
+                    params={**auth, "agg_field": "rating", "filter_field": "book_key", "filter_value": book_key},
+                    timeout=REQUEST_TIMEOUT,
+                )
+            agg_resp = self._retry_after_unauthorized(
+                get_aggregate(), get_aggregate, domain_url, user_id, secret_token)
             agg = agg_resp.json() if agg_resp.ok else {}
             if not agg.get("success"):
                 return {"success": False, "error": agg.get("message") or "별점 집계 조회에 실패했습니다."}
@@ -185,16 +196,19 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             rating = round(float(rating) * 2) / 2
 
             book_key = self._book_key(context)
-            resp = requests.post(
-                f"{domain_url}/api/{RELAY_PLUGIN_ID}/records",
-                json={
-                    "user_id": user_id,
-                    "secret_token": secret_token,
-                    "values": {"book_key": book_key, "rating": rating, "submitter_domain": submitter_domain},
-                    "unique_by": ["book_key"],
-                },
-                timeout=REQUEST_TIMEOUT,
-            )
+            def post_rating():
+                return requests.post(
+                    f"{domain_url}/api/{RELAY_PLUGIN_ID}/records",
+                    json={
+                        "user_id": user_id,
+                        "secret_token": secret_token,
+                        "values": {"book_key": book_key, "rating": rating, "submitter_domain": submitter_domain},
+                        "unique_by": ["book_key"],
+                    },
+                    timeout=REQUEST_TIMEOUT,
+                )
+            resp = self._retry_after_unauthorized(
+                post_rating(), post_rating, domain_url, user_id, secret_token)
             body = resp.json() if resp.content else {}
             if not resp.ok or not body.get("success"):
                 return {"success": False, "error": body.get("message") or "별점 제출에 실패했습니다."}
@@ -221,11 +235,14 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
         """list_records는 user_id로 필터링되지 않으므로(같은 book_key의 다른 사용자 레코드도
         함께 온다), 응답에서 내 user_id와 일치하는 행만 찾아 my_rating으로 쓴다."""
         try:
-            resp = requests.get(
-                f"{domain_url}/api/{RELAY_PLUGIN_ID}/records",
-                params={**auth, "filter_field": "book_key", "filter_value": book_key, "limit": 200},
-                timeout=REQUEST_TIMEOUT,
-            )
+            def get_records():
+                return requests.get(
+                    f"{domain_url}/api/{RELAY_PLUGIN_ID}/records",
+                    params={**auth, "filter_field": "book_key", "filter_value": book_key, "limit": 200},
+                    timeout=REQUEST_TIMEOUT,
+                )
+            resp = self._retry_after_unauthorized(
+                get_records(), get_records, domain_url, user_id, auth['secret_token'])
             if not resp.ok:
                 return None
             records = resp.json().get("records") or []

@@ -1,9 +1,12 @@
 // navigation.js — 페이지 이동 관련 API
 import * as Renderer from './renderer.js';
 import * as Settings from './reader_settings.js';
-import { saveProgress } from '../viewer_progress.js';
+import { saveProgress } from '../viewer_progress.js?rev=20260927-tts-session-v8';
 import { state } from '../state.js'; // window.state 대신 ES 모듈 import 사용
 import { syncViewerFullscreenState, isMobileDevice } from './fullscreen_controller.js';
+import { getViewerControlCapabilities, normalizeViewerOverlayTab } from './control_capabilities.js';
+import { getAdjacentSpreadPage, getSpreadPageIndices } from './spread_layout.js';
+import { showViewerBoundaryNotice } from '../view_manager.js';
 
 function isViewerDebugEnabled() {
   const v = String(localStorage.getItem('DEBUG_VIEWER') || '').toLowerCase();
@@ -53,15 +56,84 @@ export function switchViewerOverlayTab(tabName) {
   }
 }
 
-if (typeof window !== 'undefined') {
-  window.switchViewerOverlayTab = switchViewerOverlayTab;
+function setControlVisible(id, visible, display = '') {
+  const element = document.getElementById(id);
+  if (!element) return;
+  element.style.display = visible ? display : 'none';
 }
 
-export function toggleComicOverlay() {
+export function syncViewerControlsForFormat(format = state.currentViewerFormat) {
+  const normalizedFormat = String(format || '').toLowerCase();
+  const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
+  const capabilities = getViewerControlCapabilities(normalizedFormat, scrollMode);
+
+  // 메뉴는 닫혀 있는 동안에도 언어 변경/모드 전환의 영향을 받는다. 열 때마다
+  // 저장값으로 버튼, 라벨, 아이콘과 실제 핫스팟 방향을 한 번에 맞춘다.
+  Settings.syncReaderSettingsUI?.();
+
+  setControlVisible('tab-btn-style', capabilities.styleTab, 'flex');
+  setControlVisible('tab-btn-margin', capabilities.marginTab, 'flex');
+  setControlVisible('overlay-comic-fit-group', capabilities.comicFit, 'flex');
+  setControlVisible('btn-comic-page-step', capabilities.pageStep);
+  const twoPageActive = (localStorage.getItem('comic_page_step') || '1') === '2' && scrollMode !== 'scroll';
+  setControlVisible('btn-spread-shift', capabilities.spreadShift && twoPageActive);
+  setControlVisible('btn-comic-split-spread', capabilities.splitSpread);
+  // 중앙 여백은 실제 두 페이지가 나란히 표시될 때만 의미가 있다.
+  setControlVisible('btn-comic-center-gap', capabilities.centerGap && twoPageActive);
+  setControlVisible('btn-comic-reading-direction', capabilities.readingDirection);
+  setControlVisible('btn-tap-zone-direction', capabilities.tapZoneDirection);
+  setControlVisible('annotation-mode-toggle', capabilities.annotation);
+  setControlVisible('btn-viewer-listen', ['txt', 'text', 'epub'].includes(normalizedFormat)
+    && ['general', 'adult'].includes(String(state.currentLibraryType || '').toLowerCase()));
+  setControlVisible('btn-viewer-tts-settings', ['txt', 'text', 'epub'].includes(normalizedFormat)
+    && ['general', 'adult'].includes(String(state.currentLibraryType || '').toLowerCase()));
+  document.querySelectorAll('.ridi-text-setting').forEach((element) => {
+    element.hidden = !capabilities.styleTab;
+  });
+  const imageSettings = document.getElementById('ridi-image-settings');
+  if (imageSettings) imageSettings.hidden = !capabilities.comicFit;
+  const pageDirectionSettings = document.getElementById('ridi-page-direction-settings');
+  if (pageDirectionSettings) pageDirectionSettings.hidden = !capabilities.tapZoneDirection;
+
+  // TXT/EPUB 연속 스크롤의 공용 range는 실제 픽셀 스크롤이 아니라 내부 분할
+  // 구간(EPUB spine) 이동기라 사용자가 페이지 스크롤바로 오해한다. 연속 스크롤은
+  // 본문 자체와 목차로 이동하고, 이 footer는 페이지 모드에서만 노출한다.
+  const overlayFooter = document.querySelector('.ridi-viewer-toolbar-bottom');
+  const isTextScroll = (normalizedFormat === 'txt' || normalizedFormat === 'epub') && scrollMode === 'scroll';
+  if (overlayFooter) {
+    overlayFooter.style.display = 'flex';
+    overlayFooter.classList.toggle('scroll-progress-mode', isTextScroll);
+  }
+  const tocButton = document.querySelector('[data-action="open-toc"]');
+  const notesButton = document.querySelector('[data-action="open-reading-notes"]');
+  const searchButton = document.querySelector('[data-action="open-viewer-search"]');
+  const bookmarkButton = document.getElementById('btn-add-bookmark');
+  if (tocButton) tocButton.style.display = capabilities.toc ? '' : 'none';
+  if (notesButton) notesButton.style.display = capabilities.readingNotes ? '' : 'none';
+  if (searchButton) searchButton.style.display = capabilities.search ? '' : 'none';
+  if (bookmarkButton) bookmarkButton.style.display = capabilities.bookmark ? '' : 'none';
+
+  const widthRow = document.getElementById('overlay-width-row');
+  if (widthRow) widthRow.classList.toggle('visible', capabilities.widthRow);
+
+  const activeTab = normalizeViewerOverlayTab(
+    format,
+    localStorage.getItem('viewer_active_overlay_tab') || 'nav'
+  );
+  return activeTab;
+}
+
+if (typeof window !== 'undefined') {
+  window.switchViewerOverlayTab = switchViewerOverlayTab;
+  window.syncViewerControlsForFormat = syncViewerControlsForFormat;
+}
+
+export function toggleComicOverlay(options = {}) {
   console.log('[Viewer-Nav] toggleComicOverlay() called');
   const menu = document.getElementById('comic-overlay-menu');
   if (!menu) return;
   const isOpening = (menu.style.display === 'none');
+  const fmt = (state.currentViewerFormat || '').toLowerCase();
 
   if (isOpening && Date.now() < overlayReopenGuardUntil) {
     viewerDebugLog('[Viewer-Nav] open suppressed by reopen guard');
@@ -73,22 +145,14 @@ export function toggleComicOverlay() {
   const floatingCloseBtn = document.querySelector('.floating-close-btn');
 
   if (isOpening) {
+    window.syncViewerSettingsUI?.();
+    window.syncViewerSpreadSettingsUI?.();
     syncViewerFullscreenState();
     if (typeof window.syncComicCenterGapButton === 'function') {
       window.syncComicCenterGapButton();
     }
 
-    const fmt = (state.currentViewerFormat || '').toLowerCase();
-    const styleTabBtn = document.getElementById('tab-btn-style');
-    const isTxtOrEpub = (fmt === 'txt' || fmt === 'epub');
-    if (styleTabBtn) {
-      styleTabBtn.style.display = isTxtOrEpub ? 'flex' : 'none';
-    }
-
-    let activeTab = localStorage.getItem('viewer_active_overlay_tab') || 'nav';
-    if (!isTxtOrEpub && activeTab === 'style') {
-      activeTab = 'nav';
-    }
+    const activeTab = syncViewerControlsForFormat(fmt);
     switchViewerOverlayTab(activeTab);
 
     const viewerModal = document.getElementById('media-viewer-modal');
@@ -117,7 +181,7 @@ export function toggleComicOverlay() {
       epubNavBar.style.bottom = 'auto';
     }
   } else {
-    suppressOverlayReopenFor();
+    if (options.suppressReopen !== false) suppressOverlayReopenFor();
 
     // 닫을 때 스타일 초기화 (다른 모드 전환 대비)
     menu.style.top = '';
@@ -125,17 +189,18 @@ export function toggleComicOverlay() {
     if (epubNavBar) { epubNavBar.style.top = ''; epubNavBar.style.bottom = ''; }
     if (floatingCloseBtn) { floatingCloseBtn.style.top = ''; }
     
-    // 여백 조절 상세 패널도 같이 닫아줌 (동시 열림 오버랩 완전 차단)
-    const paddingPanel = document.getElementById('viewer-padding-overlay-panel');
-    if (paddingPanel && paddingPanel.style.display !== 'none') {
-      paddingPanel.style.display = 'none';
-      if (typeof window.commitViewerPadding === 'function') {
-        window.commitViewerPadding();
-      }
+    if (typeof window.commitViewerPadding === 'function' &&
+        normalizeViewerOverlayTab(state.currentViewerFormat, localStorage.getItem('viewer_active_overlay_tab')) === 'margin') {
+      window.commitViewerPadding();
     }
   }
 
   menu.style.display = isOpening ? 'flex' : 'none';
+  const settingsButton = document.querySelector('[data-action="toggle-overlay"]');
+  if (settingsButton) {
+    settingsButton.classList.toggle('is-active', isOpening);
+    settingsButton.setAttribute('aria-pressed', String(isOpening));
+  }
   if (pdfNavBar) pdfNavBar.style.display = isOpening ? 'flex' : 'none';
   if (epubNavBar) epubNavBar.style.display = isOpening ? 'flex' : 'none';
   if (floatingCloseBtn) floatingCloseBtn.style.display = 'none';
@@ -194,8 +259,7 @@ export function toggleComicOverlay() {
 
     Renderer.updatePageInfo();
     // 현재 스크롤 모드에 따라 너비 슬라이더 행 가시성 동기화
-    const widthRow = document.getElementById('overlay-width-row');
-    if (widthRow) widthRow.classList.toggle('visible', isScrollMode);
+    syncViewerControlsForFormat(fmt);
 
   } else {
     if (isScrollMode) {
@@ -266,7 +330,7 @@ export function markAsCompleted() {
 
     const { page: physicalPage, total: physicalTotal } = Renderer.getPhysicalProgress();
     saveProgress(state.activeBookId, physicalPage, physicalTotal);
-    import('../viewer_progress.js').then(m => m.flushProgress());
+    import('../viewer_progress.js?rev=20260927-tts-session-v8').then(m => m.flushProgress());
 
     alert(window.i18n.t('viewer.read_completed'));
     toggleComicOverlay();
@@ -289,10 +353,9 @@ export function nextComicPage() {
     const step = Settings.getComicPageStep ? Settings.getComicPageStep() : 1;
     const totalPages = Renderer.getComicTotalPages();
     const currentPage = Renderer.getComicCurrentPage();
-    const shiftOffset = (step === 2 && Settings.getSpreadShiftOffset) ? Settings.getSpreadShiftOffset() : 0;
-
-    // 두쪽 보기(step === 2)일 때 화면에 노출 중인 마지막 페이지 인덱스 ("한 장 밀기" 보정 반영)
-    const displayEndPage = (step === 2) ? Math.min(currentPage + shiftOffset + 1, totalPages - 1) : currentPage;
+    const coverAlone = step === 2 && Settings.getSpreadShiftOffset?.() === 1;
+    const visiblePages = getSpreadPageIndices({ page: currentPage, totalPages, twoPage: step === 2, coverAlone });
+    const displayEndPage = visiblePages.length ? Math.max(...visiblePages) : currentPage;
 
     // 이미 마지막 페이지까지 노출 중인 경우 다음 권 불러오기 발동
     if (displayEndPage >= totalPages - 1) {
@@ -300,8 +363,10 @@ export function nextComicPage() {
       return;
     }
 
-    const nextPage = Math.min(currentPage + step, totalPages - 1);
-    if (currentPage < totalPages - 1 && nextPage !== currentPage) {
+    const nextPage = step === 2
+      ? getAdjacentSpreadPage({ page: currentPage, totalPages, direction: 'next', coverAlone })
+      : Math.min(currentPage + 1, totalPages - 1);
+    if (nextPage !== null && nextPage !== currentPage) {
       Renderer.setComicCurrentPage(nextPage);
       Renderer.loadComicPage();
     } else {
@@ -316,13 +381,48 @@ export function prevComicPage() {
   if (scrollMode === 'scroll') {
     const wrapper = document.querySelector('.comic-image-wrapper');
     if (!wrapper) return;
+    if (wrapper.scrollTop <= 2) {
+      showViewerBoundaryNotice('start');
+      return;
+    }
     wrapper.scrollBy({ top: -wrapper.clientHeight * 0.85, behavior: 'smooth' });
   } else {
     const step = Settings.getComicPageStep ? Settings.getComicPageStep() : 1;
-    const prevPage = Math.max(Renderer.getComicCurrentPage() - step, 0);
-    if (prevPage !== Renderer.getComicCurrentPage()) {
+    const currentPage = Renderer.getComicCurrentPage();
+    const totalPages = Renderer.getComicTotalPages();
+    const coverAlone = step === 2 && Settings.getSpreadShiftOffset?.() === 1;
+    const prevPage = step === 2
+      ? getAdjacentSpreadPage({ page: currentPage, totalPages, direction: 'prev', coverAlone })
+      : Math.max(currentPage - 1, 0);
+    if (prevPage !== null && prevPage !== currentPage) {
       Renderer.setComicCurrentPage(prevPage);
       Renderer.loadComicPage();
+    } else {
+      showViewerBoundaryNotice('start');
     }
   }
+}
+
+// 모바일 제스처는 2쪽 보기에서도 한 번에 물리 페이지 한 장만 이동한다.
+// 펼침면 기준을 홀/짝에 맞춰 바꾸면 (1,2) -> (2,3)처럼 한 장씩 겹쳐 넘길 수 있다.
+export function moveComicPageByOne(direction) {
+  const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
+  if (scrollMode !== 'page') {
+    return direction === 'prev' ? prevComicPage() : nextComicPage();
+  }
+  const totalPages = Renderer.getComicTotalPages();
+  const currentPage = Renderer.getComicCurrentPage();
+  const step = Settings.getComicPageStep ? Settings.getComicPageStep() : 1;
+  const coverAlone = step === 2 && Settings.getSpreadShiftOffset?.() === 1;
+  const visible = getSpreadPageIndices({ page: currentPage, totalPages, twoPage: step === 2, coverAlone });
+  const anchor = visible.length ? Math.min(...visible) : currentPage;
+  const target = anchor + (direction === 'prev' ? -1 : 1);
+  if (target < 0) return showViewerBoundaryNotice('start');
+  if (target >= totalPages) {
+    import('../viewer_next_episode.js').then(m => m.handleNextEpisode(state.activeBookId));
+    return;
+  }
+  if (step === 2) Settings.setSpreadShiftOffset?.(target % 2 === 1 ? 1 : 0);
+  Renderer.setComicCurrentPage(target);
+  Renderer.loadComicPage();
 }

@@ -1,32 +1,37 @@
 <!-- CSS 및 외부 라이브러리 로드 -->
-<link rel="stylesheet" href="{{ static_asset_url('css/style.css') }}">
-<link rel="stylesheet" href="{{ static_asset_url('css/tab_media_library_viewer.css') }}">
-<link rel="stylesheet" href="{{ static_asset_url('css/mobile.css') }}" media="screen and (max-width: 1200px)">
+<link rel="stylesheet" href="{{ static_asset_url('css/style.css', sig='boe-tts-listen-v1') }}">
+<link rel="stylesheet" href="{{ static_asset_url('css/tab_media_library_viewer.css', sig='boe-reader-session-v45') }}">
+<link rel="stylesheet" href="{{ static_asset_url('css/mobile.css', sig='boe-tts-listen-v1') }}" media="screen and (max-width: 1200px)">
 <link rel="stylesheet" href="/api/media/settings/custom-themes.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<script src="{{ static_asset_url('lib/jszip/jszip.min.js') }}"></script>
+<script src="{{ static_asset_url('lib/pdfjs/pdf.min.js') }}"></script>
 <script>
     // pdfjs worker 설정
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '{{ static_asset_url('lib/pdfjs/pdf.worker.min.js') }}';
 </script>
 
 <div class="media-library-container">
     <!-- 좌측 카테고리 사이드바 -->
-    <div class="library-sidebar"
-        style="display: flex; flex-direction: column; justify-content: space-between; min-height: auto;">
-        <div class="sidebar-header-wrapper" style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-            <h3 class="sidebar-title" data-role="mobile-brand-home" style="margin: 0; display: flex; align-items: center; gap: 0.6rem; font-size: 1.4rem;"><img src="{{ url_for('static', filename='images/logo.png') }}" alt="" aria-hidden="true" style="width: 40px; height: 40px; object-fit: contain;"> <span>BookOasis</span></h3>
-            <button id="btn-sidebar-toggle" class="btn-sidebar-toggle" aria-expanded="false" style="display: none; background: transparent; border: none; color: var(--app-text-primary); font-size: 1.25rem; cursor: pointer; padding: 0.2rem 0.5rem; outline: none;">
+    <div class="library-sidebar">
+        <div class="sidebar-header-wrapper">
+            <h3 class="sidebar-title" data-role="mobile-brand-home"><img class="sidebar-brand-logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="" aria-hidden="true"> <span>BookOasis</span></h3>
+            <button id="btn-sidebar-toggle" class="btn-sidebar-toggle" aria-expanded="false">
                 <i class="fa-solid fa-bars"></i>
             </button>
             <!-- 모바일용 카테고리 정보 팝오버 트리거 (데스크톱 버전은 global_header.html 참고) -->
-            <button id="btn-category-info-mobile" class="btn-category-info" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="category-info-popover" title="현재 카테고리 정보" style="display: none;">
+            <button id="btn-category-info-mobile" class="btn-category-info" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="category-info-popover" title="현재 카테고리 정보">
                 <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
             </button>
         </div>
         
-        <div class="sidebar-collapsible-content" id="sidebar-collapsible-content" style="display: flex; flex-direction: column; justify-content: space-between; flex: 1; width: 100%;">
-            <div style="margin-top: 1rem;">
+        <div class="sidebar-collapsible-content" id="sidebar-collapsible-content">
+            <div class="mobile-sidebar-drawer-header">
+                <span class="mobile-sidebar-drawer-brand"><img class="sidebar-brand-logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="" aria-hidden="true"><span>BookOasis</span></span>
+                <button id="btn-mobile-sidebar-close" type="button" aria-label="메뉴 닫기" title="메뉴 닫기">
+                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="sidebar-menu-wrapper">
                 <ul class="sidebar-menu" id="sidebar-categories">
                         <li class="menu-item active" id="category-home" data-role="sidebar-category-static" data-category-id="home"><i
                             class="fa-solid fa-house"></i> <span data-i18n="sidebar.home">Home</span></li>
@@ -35,7 +40,7 @@
                         <li class="menu-item" id="category-favorite" data-role="sidebar-category-static" data-category-id="favorite"><i
                             class="fa-solid fa-star"></i> <span data-i18n="sidebar.favorite">즐겨찾기</span></li>
                         <li class="menu-item" id="category-collection" data-role="sidebar-category-static" data-category-id="collection"><i
-                            class="fa-solid fa-bookmark"></i> <span data-i18n="sidebar.collection">컬렉션</span></li>
+                            class="fa-solid fa-bookmark"></i> <span data-i18n="category.collection">컬렉션</span></li>
                         <li class="menu-item" id="category-smart-rec" data-role="sidebar-category-static" data-category-id="smart_rec"><i
                             class="fa-solid fa-wand-magic-sparkles"></i> <span data-i18n="sidebar.smart_recommend">스마트 추천</span></li>
                         <li class="menu-item" id="category-plugins" data-role="sidebar-category-static" data-category-id="plugins"><i
@@ -47,6 +52,7 @@
             <!-- 환경설정/계정 메뉴는 상단 헤더 우측 아이콘으로 이동됨 (library-controls 참고) -->
         </div>
     </div>
+    <button id="mobile-sidebar-backdrop" type="button" aria-label="메뉴 닫기" tabindex="-1"></button>
 
 
 
@@ -87,6 +93,9 @@
 
         <!-- ===== 환경설정 뷰 (설정 선택 시 표시) ===== -->
         {% include "components/views/library_settings.html" %}
+
+        <!-- ===== 계정별 프로필·독서 통계 뷰 ===== -->
+        {% include "components/views/user_profile.html" %}
 
         <!-- ===== 카테고리 레벨 플러그인 전용 풀페이지 뷰 ===== -->
         <div id="library-plugin-custom-view" class="library-view-container" style="display: none;"></div>
@@ -135,6 +144,7 @@
     {% include "components/modals/user_modal.html" %}
     {% include "components/context_menus.html" %}
     {% include "components/modals/library_modal.html" %}
+    {% include "components/modals/library_kinds_modal.html" %}
     {% include "components/modals/gdrive_copy_modal.html" %}
     {% include "components/modals/metadata_search_modal.html" %}
 
@@ -173,4 +183,4 @@
     </div>
 </div>
 
-<script type="module" src="{{ static_asset_url('js/tab_media_library.js', sig='unread-series-v5') }}"></script>
+<script type="module" src="{{ static_asset_url('js/tab_media_library.js', sig='boe-tts-position-v1') }}"></script>

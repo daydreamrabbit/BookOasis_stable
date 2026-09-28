@@ -1,9 +1,10 @@
 // viewer_pdf.js – PDF 뷰어 로직
 import { state } from './state.js';
-import { showViewerLoading, hideViewerLoading, showViewerError } from './view_manager.js';
-import { saveProgress } from './viewer_progress.js';
+import { showViewerLoading, hideViewerLoading, showViewerError, showViewerBoundaryNotice } from './view_manager.js';
+import { saveProgress } from './viewer_progress.js?rev=20260927-tts-session-v8';
 import { getComicPageStep, getComicReadingDirection, getSpreadShiftOffset, resetSpreadShiftOffset } from './viewer_comic.js';
-import { initPageStep } from './viewer/reader_settings.js';
+import { initPageStep, setSpreadShiftOffset } from './viewer/reader_settings.js';
+import { getAdjacentSpreadPage, getSpreadAnchor, getSpreadPageSlots } from './viewer/spread_layout.js';
 
 export let pdfDoc = null;
 export let pdfCurrentPage = 1;
@@ -68,7 +69,7 @@ export async function initPdfViewer(bookId, pagesRead, totalPages) {
     url: url,
     disableAutoFetch: true,  // 브라우저가 전체 파일을 백그라운드에서 전부 받는 행위 억제
     disableStream: false,    // 스트림 단위로 조각 수신 허용
-    cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/cmaps/',
+    cMapUrl: '/static/lib/pdfjs/cmaps/',
     cMapPacked: true
   }).promise
     .then(doc => { 
@@ -226,7 +227,8 @@ export function renderPdfPage() {
 
   } else {
     // ── 2. 페이지 넘김 모드 (1장/2장 화면 맞춤) ──
-    renderArea.style.overflow = 'hidden';
+    const fitMode = localStorage.getItem('comic_fit_mode') === 'width' ? 'width' : 'height';
+    renderArea.style.overflow = 'auto';
     renderArea.style.flexDirection = 'row';
     renderArea.style.justifyContent = 'center';
     renderArea.style.alignItems = 'center';
@@ -238,24 +240,14 @@ export function renderPdfPage() {
     const direction = (typeof getComicReadingDirection === 'function') ? getComicReadingDirection() : 'ltr';
     const shiftOffset = (step === 2 && typeof getSpreadShiftOffset === 'function') ? getSpreadShiftOffset() : 0;
 
-    let pagesToRender = [];
-    if (step === 2) {
-      // "한 장 밀기" 보정 - 진행률 저장 기준인 pdfCurrentPage는 그대로 두고, 화면에 짝지어
-      // 보여줄 페이지의 기준점만 밀어서 예: (9,10)(11,12) 정렬을 (10,11)로 바꿔 볼 수 있게 한다.
-      let p1 = Math.min(pdfCurrentPage + shiftOffset, pdfTotalPages);
-      let p2 = p1 + 1;
-      if (p2 <= pdfTotalPages) {
-        if (direction === 'rtl') {
-          pagesToRender = [p2, p1];
-        } else {
-          pagesToRender = [p1, p2];
-        }
-      } else {
-        pagesToRender = [p1];
-      }
-    } else {
-      pagesToRender = [pdfCurrentPage];
-    }
+    const pageSlots = getSpreadPageSlots({
+      page: pdfCurrentPage - 1,
+      totalPages: pdfTotalPages,
+      twoPage: step === 2,
+      coverAlone: shiftOffset === 1,
+      readingDirection: direction,
+    }).map(index => index === null ? null : index + 1);
+    const pagesToRender = pageSlots.filter(pageNum => pageNum !== null);
 
     const removeCenterGap = (localStorage.getItem('remove_2page_center_gap') === '1');
     if (removeCenterGap) {
@@ -270,12 +262,12 @@ export function renderPdfPage() {
     const padRight = parseFloat(areaStyle.paddingRight || '0') || 0;
     const padTop = parseFloat(areaStyle.paddingTop || '0') || 0;
     const padBottom = parseFloat(areaStyle.paddingBottom || '0') || 0;
-    const gapPx = pagesToRender.length === 2 ? (parseFloat(areaStyle.columnGap || areaStyle.gap || '0') || 0) : 0;
+    const gapPx = pageSlots.length === 2 ? (parseFloat(areaStyle.columnGap || areaStyle.gap || '0') || 0) : 0;
 
     const innerWidth = Math.max(1, areaRect.width - padLeft - padRight);
     const innerHeight = Math.max(1, areaRect.height - padTop - padBottom);
 
-    const availableWidth = pagesToRender.length === 2
+    const availableWidth = pageSlots.length === 2
       ? Math.max(1, (innerWidth - gapPx) / 2)
       : innerWidth;
     const availableHeight = innerHeight;
@@ -285,7 +277,7 @@ export function renderPdfPage() {
     // (네트워크로 페이지 데이터를 받아오는 시간 포함) 화면이 흰 페이지로 보이는 깜빡임이
     // 있었다 - 이전 페이지 캔버스를 그대로 둔 채 새 캔버스가 다 그려진 뒤 한 번에
     // 교체하면 그 공백이 사라진다.
-    const newCanvases = pagesToRender.map(pageNum => {
+    const newCanvases = new Map(pagesToRender.map(pageNum => {
       const canvas = document.createElement('canvas');
       canvas.className = 'pdf-canvas-element';
       if (removeCenterGap) {
@@ -294,17 +286,26 @@ export function renderPdfPage() {
         canvas.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
       }
       canvas.style.display = 'block';
-      return canvas;
-    });
+      return [pageNum, canvas];
+    }));
 
     Promise.all(
-      pagesToRender.map((pageNum, i) => renderSinglePdfCanvas(pageNum, newCanvases[i], availableWidth, availableHeight))
+      pagesToRender.map(pageNum => renderSinglePdfCanvas(pageNum, newCanvases.get(pageNum), availableWidth, availableHeight))
     ).then(() => {
       // 렌더가 진행되는 동안 사용자가 또 페이지를 넘겼다면(세대 번호 불일치) 이 결과는
       // 이미 낡은 것이므로 화면에 반영하지 않고 버린다.
       if (renderGeneration !== pdfRenderGeneration) return;
       renderArea.innerHTML = '';
-      newCanvases.forEach(canvas => renderArea.appendChild(canvas));
+      pageSlots.forEach(pageNum => {
+        if (pageNum === null) {
+          const blank = document.createElement('div');
+          blank.className = 'pdf-page-blank';
+          blank.setAttribute('aria-hidden', 'true');
+          renderArea.appendChild(blank);
+        } else {
+          renderArea.appendChild(newCanvases.get(pageNum));
+        }
+      });
     });
   }
 
@@ -325,10 +326,12 @@ function renderSinglePdfCanvas(pageNum, canvas, availWidth, availHeight) {
     const unscaledViewport = page.getViewport({ scale: 1.0 });
 
     let scale;
+    const fitMode = localStorage.getItem('comic_fit_mode') === 'width' ? 'width' : 'height';
     if (availHeight && availHeight > 0) {
       const scaleX = availWidth / unscaledViewport.width;
       const scaleY = availHeight / unscaledViewport.height;
-      scale = Math.min(scaleX, scaleY);
+      if (fitMode === 'width') scale = scaleX;
+      else scale = scaleY;
     } else {
       scale = availWidth / unscaledViewport.width;
     }
@@ -382,11 +385,12 @@ export function updatePdfPageInfo() {
   if (slider) {
     slider.max = pdfTotalPages || 1;
     slider.value = pdfCurrentPage;
+    const ratio = (pdfCurrentPage - 1) / Math.max(1, pdfTotalPages - 1);
+    slider.style.setProperty('--seek-progress', `${Math.max(0, Math.min(100, ratio * 100))}%`);
+    slider.dispatchEvent(new CustomEvent('viewer-position-sync', { bubbles: true }));
   }
-  const endLabel = document.getElementById('seekbar-end-label');
-  if (endLabel) {
-    endLabel.textContent = pdfTotalPages || '?';
-  }
+  const startLabel = document.getElementById('seekbar-start-label');
+  if (startLabel) startLabel.textContent = `${pdfCurrentPage} / ${pdfTotalPages || 1}`;
 
   const overlayTitleEl = document.getElementById('overlay-title-text');
   if (overlayTitleEl) {
@@ -397,23 +401,61 @@ export function updatePdfPageInfo() {
 export function prevPdfPage() {
   if (pdfDoc && pdfCurrentPage > 1) {
     const step = (typeof getComicPageStep === 'function') ? getComicPageStep() : 1;
-    pdfCurrentPage = Math.max(1, pdfCurrentPage - step);
+    if (step === 2) {
+      const target = getAdjacentSpreadPage({
+        page: pdfCurrentPage - 1,
+        totalPages: pdfTotalPages,
+        direction: 'prev',
+        coverAlone: getSpreadShiftOffset() === 1,
+      });
+      if (target === null) return showViewerBoundaryNotice('start');
+      pdfCurrentPage = target + 1;
+    } else {
+      pdfCurrentPage = Math.max(1, pdfCurrentPage - 1);
+    }
     renderPdfPage();
     saveProgress(state.activeBookId, pdfCurrentPage - 1, pdfTotalPages);
+  } else if (pdfDoc) {
+    showViewerBoundaryNotice('start');
   }
 }
 
 export function nextPdfPage() {
   if (pdfDoc) {
-    if (pdfCurrentPage < pdfTotalPages) {
-      const step = (typeof getComicPageStep === 'function') ? getComicPageStep() : 1;
-      pdfCurrentPage = Math.min(pdfTotalPages, pdfCurrentPage + step);
+    const step = (typeof getComicPageStep === 'function') ? getComicPageStep() : 1;
+    const target = step === 2
+      ? getAdjacentSpreadPage({
+        page: pdfCurrentPage - 1,
+        totalPages: pdfTotalPages,
+        direction: 'next',
+        coverAlone: getSpreadShiftOffset() === 1,
+      })
+      : (pdfCurrentPage < pdfTotalPages ? pdfCurrentPage : null);
+    if (target !== null) {
+      pdfCurrentPage = target + 1;
       renderPdfPage();
       saveProgress(state.activeBookId, pdfCurrentPage - 1, pdfTotalPages);
     } else {
       import('./viewer_next_episode.js').then(m => m.handleNextEpisode(state.activeBookId));
     }
   }
+}
+
+export function movePdfPageByOne(direction) {
+  if (!pdfDoc) return;
+  const delta = direction === 'prev' ? -1 : 1;
+  const target = pdfCurrentPage + delta;
+  if (target < 1) return showViewerBoundaryNotice('start');
+  if (target > pdfTotalPages) {
+    import('./viewer_next_episode.js').then(m => m.handleNextEpisode(state.activeBookId));
+    return;
+  }
+  if ((typeof getComicPageStep === 'function' ? getComicPageStep() : 1) === 2) {
+    setSpreadShiftOffset((target - 1) % 2 === 1 ? 1 : 0);
+  }
+  pdfCurrentPage = target;
+  renderPdfPage();
+  saveProgress(state.activeBookId, pdfCurrentPage - 1, pdfTotalPages);
 }
 
 export function clearPdfViewer() {
@@ -448,7 +490,10 @@ export function pdfJumpToFirstPage() {
 
 export function pdfJumpToLastPage() {
   if (pdfDoc && pdfCurrentPage !== pdfTotalPages) {
-    pdfCurrentPage = pdfTotalPages;
+    const step = (typeof getComicPageStep === 'function') ? getComicPageStep() : 1;
+    pdfCurrentPage = step === 2
+      ? getSpreadAnchor(pdfTotalPages - 1, pdfTotalPages, getSpreadShiftOffset() === 1) + 1
+      : pdfTotalPages;
     renderPdfPage();
   }
 }
@@ -489,6 +534,9 @@ export const PdfViewer = {
   },
   nextPage() {
     nextPdfPage();
+  },
+  moveByOne(direction) {
+    movePdfPageByOne(direction);
   },
   jumpTo(target) {
     if (target === 'first') {

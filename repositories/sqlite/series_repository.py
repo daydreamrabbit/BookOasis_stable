@@ -5,14 +5,189 @@ series_repository.py – 시리즈(Series) 데이터를 그룹화하고 추출�
 import time
 import database
 from repositories.series_search_query import parse_series_search_query
+from repositories.series_metadata_utils import book_metadata_select_expr
 
 class SeriesRepository:
     @staticmethod
     def rebuild_summary(db_type, only_if_unready=False):
-        return False
+        """현재 books 데이터를 기준으로 시리즈 요약 테이블(series_summary)을 재생성한다.
+
+        MariaDB 백엔드는 이 요약 테이블을 이미 사용해 목록 조회를 상수 시간에 가깝게
+        처리하는데, SQLite 쪽은 이 함수가 그동안 스텁(return False)이라 매 목록 요청마다
+        books 테이블 전체를 GROUP BY로 실시간 재집계했다 - 대형 라이브러리(수만 권)에서
+        요청마다 수 초가 걸리는 원인이었다. 스키마의 series_summary/series_summary_state
+        테이블 자체는 이미 존재했으므로(services/db_migration_service.py) 채우는 로직만
+        MariaDB 쪽 구현을 그대로 이식한다."""
+        if db_type in ('audiobook', 'video'):
+            return False
+
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            if only_if_unready:
+                cursor.execute("SELECT is_ready FROM series_summary_state WHERE id = 1")
+                state = cursor.fetchone()
+                if state and int(state['is_ready'] or 0):
+                    return False
+
+            cursor.execute("DELETE FROM series_summary")
+            cursor.execute("""
+                INSERT INTO series_summary (
+                    library_id, series_key, representative_book_id,
+                    series_book_count, sort_series_name, latest_added
+                )
+                SELECT rep.library_id, rep.series_key, rep.rep_id,
+                       rep.series_book_count, COALESCE(b.series_name, ''), rep.latest_added
+                FROM (
+                    SELECT b2.library_id,
+                           COALESCE(NULLIF(b2.series_name, ''), b2.title) AS series_key,
+                           COALESCE(
+                               MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END),
+                               MIN(b2.id)
+                           ) AS rep_id,
+                           COUNT(*) AS series_book_count,
+                           MAX(b2.created_at) AS latest_added
+                    FROM books b2
+                    WHERE (b2.is_deleted = 0 OR b2.is_deleted IS NULL)
+                    GROUP BY b2.library_id, COALESCE(NULLIF(b2.series_name, ''), b2.title)
+                ) rep
+                INNER JOIN books b ON b.id = rep.rep_id
+            """)
+            cursor.execute("""
+                INSERT OR REPLACE INTO series_summary_state (id, is_ready, refreshed_at)
+                VALUES (1, 1, CURRENT_TIMESTAMP)
+            """)
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     @staticmethod
-    def fetch_books_for_grouping(db_type, library_id, search_query='', favorite_only=False, genre_filters=None, tag_filters=None, user_id=None, role=None, limit=None, offset=None, sort='asc'):
+    def _fetch_summary_rows(db_type, library_id, user_id, role, limit, offset, favorite_user_id, sort='asc', include_has_metadata=False):
+        """series_summary가 준비돼 있으면 그걸로 목록을 조회, 아니면 None(호출측이 실시간
+        GROUP BY 경로로 폴백)."""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT is_ready FROM series_summary_state WHERE id = 1")
+            state = cursor.fetchone()
+            if not state or not int(state['is_ready'] or 0):
+                return None
+
+            where = []
+            params = []
+            if library_id and str(library_id) not in ('all', 'favorite', 'history', 'home'):
+                try:
+                    where.append("s.library_id = ?")
+                    params.append(int(library_id))
+                except (ValueError, TypeError):
+                    pass
+            if user_id:
+                # MariaDB에서 확인된 것과 동일한 이유(라이브러리별 상관관계 EXISTS는 정렬 인덱스
+                # 기반 조기 LIMIT을 막을 수 있음) - 권한 있는 library_id를 먼저 뽑아 정적 IN
+                # 목록으로 넘긴다.
+                cursor.execute(
+                    "SELECT library_id FROM user_category_permissions WHERE user_id = ? AND has_access = 1",
+                    (user_id,)
+                )
+                allowed_library_ids = [int(row['library_id']) for row in cursor.fetchall()]
+                if not allowed_library_ids:
+                    return []
+                placeholders = ','.join(['?'] * len(allowed_library_ids))
+                where.append(f"s.library_id IN ({placeholders})")
+                params.extend(allowed_library_ids)
+
+            sql = f"""
+                SELECT b.id, b.series_name, b.series_alias, b.title, b.title_alias, b.author,
+                       b.file_path, b.file_format, b.cover_image, b.cover_updated_at,
+                       COALESCE(b.cover_align, 'center') AS cover_align,
+                       0 AS is_favorite,
+                       b.created_at, b.genre, b.tags, b.books_lv, b.publication_status, b.library_id,
+                       COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                       {book_metadata_select_expr('b', include_has_metadata)} AS has_metadata,
+                       s.series_book_count, s.latest_added AS series_latest_added
+                FROM series_summary s
+                INNER JOIN books b ON b.id = s.representative_book_id
+            """
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+
+            sort_norm = str(sort or 'asc').lower()
+            if sort_norm in ('date_asc', 'date_desc'):
+                date_dir = 'DESC' if sort_norm == 'date_desc' else 'ASC'
+                sql += f" ORDER BY s.latest_added {date_dir}, s.representative_book_id ASC"
+            else:
+                title_dir = 'DESC' if sort_norm == 'desc' else 'ASC'
+                sql += f" ORDER BY s.library_id ASC, s.sort_series_name {title_dir}, s.representative_book_id ASC"
+
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(int(limit))
+                if offset is not None:
+                    sql += " OFFSET ?"
+                    params.append(int(offset))
+
+            cursor.execute(sql, tuple(params))
+            rows = cursor.fetchall()
+
+            from repositories.sqlite.user_repository import UserRepository
+            fav_set = UserRepository.get_user_favorite_book_ids(db_type, favorite_user_id) if favorite_user_id else set()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item['is_favorite'] = 1 if item['id'] in fav_set else 0
+                result.append(item)
+            return result
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _fetch_summary_totals(db_type, library_id, user_id, role):
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT is_ready FROM series_summary_state WHERE id = 1")
+            state = cursor.fetchone()
+            if not state or not int(state['is_ready'] or 0):
+                return None
+
+            where = []
+            params = []
+            if library_id and str(library_id) not in ('all', 'favorite', 'history', 'home'):
+                try:
+                    where.append("s.library_id = ?")
+                    params.append(int(library_id))
+                except (ValueError, TypeError):
+                    pass
+            if user_id:
+                cursor.execute(
+                    "SELECT library_id FROM user_category_permissions WHERE user_id = ? AND has_access = 1",
+                    (user_id,)
+                )
+                allowed_library_ids = [int(row['library_id']) for row in cursor.fetchall()]
+                if not allowed_library_ids:
+                    return {'total_series_count': 0, 'total_book_count': 0}
+                placeholders = ','.join(['?'] * len(allowed_library_ids))
+                where.append(f"s.library_id IN ({placeholders})")
+                params.extend(allowed_library_ids)
+
+            sql = "SELECT COUNT(*) AS total_series_count, COALESCE(SUM(s.series_book_count), 0) AS total_book_count FROM series_summary s"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            cursor.execute(sql, tuple(params))
+            row = cursor.fetchone()
+            return {
+                'total_series_count': int(row['total_series_count'] or 0) if row else 0,
+                'total_book_count': int(row['total_book_count'] or 0) if row else 0,
+            }
+        finally:
+            conn.close()
+
+    @staticmethod
+    def fetch_books_for_grouping(db_type, library_id, search_query='', favorite_only=False, genre_filters=None, tag_filters=None, user_id=None, role=None, limit=None, offset=None, sort='asc', lightweight=False, include_has_metadata=False, include_all_rows=False):
         """시리즈 그룹핑 렌더링에 필요한 기본 도서 레코드 목록 조회 (WAL 락 경합 시 지수 백오프 자동 재시도)
 
         sort='desc'일 때 SQL 자체를 제목 내림차순으로 뒤집는다. 예전에는 항상 오름차순으로
@@ -30,9 +205,20 @@ class SeriesRepository:
         title_dir = 'DESC' if sort_norm == 'desc' else 'ASC'
         date_dir = 'DESC' if sort_norm == 'date_desc' else 'ASC'
 
+        if db_type not in ('audiobook', 'video') and not include_all_rows and not search_query and not favorite_only and not genre_filters and not tag_filters:
+            try:
+                summary_rows = SeriesRepository._fetch_summary_rows(
+                    db_type, library_id, user_id, role, limit, offset, safe_user_id, sort=sort,
+                    include_has_metadata=include_has_metadata
+                )
+                if summary_rows is not None:
+                    return summary_rows
+            except Exception:
+                pass
+
         if db_type == 'audiobook':
             where = ["COALESCE(a.is_deleted, 0) = 0"]
-            params = [safe_user_id]
+            params = [] if lightweight else [safe_user_id]
             if favorite_only:
                 where.append("a.is_favorite = 1")
             if library_id and str(library_id) not in ('all', 'favorite', 'history', 'home'):
@@ -48,10 +234,12 @@ class SeriesRepository:
                 elif search_mode == 'author':
                     where.append("COALESCE(a.author, '') LIKE ?")
                     params.append(f"%{search_term}%")
+                elif search_mode == 'cover_artist':
+                    where.append("1 = 0")
                 else:
                     where.append("COALESCE(a.title, '') LIKE ?")
                     params.append(f"%{search_term}%")
-            if role != 'admin' and user_id:
+            if user_id:
                 where.append(
                     "EXISTS ("
                     "SELECT 1 FROM user_category_permissions p "
@@ -60,8 +248,10 @@ class SeriesRepository:
                 )
                 params.append(user_id)
 
-            sql = f"""
-                SELECT a.id, a.title AS series_name, '' AS series_alias, a.title, '' AS title_alias,
+            if lightweight:
+                select_sql = "SELECT a.id, a.title AS series_name, a.title, '' AS title_alias, a.folder_path AS file_path, 'audiobook' AS file_format, a.library_id"
+            else:
+                select_sql = """SELECT a.id, a.title AS series_name, '' AS series_alias, a.title, '' AS title_alias,
                        a.author, a.folder_path AS file_path, 'audiobook' AS file_format,
                        CONCAT('/api/media/audiobooks/', a.id, '/cover') AS cover_image,
                        a.updated_at AS cover_updated_at,
@@ -71,7 +261,8 @@ class SeriesRepository:
                        COALESCE((
                            SELECT MAX(ap.is_completed) FROM audiobook_progress ap
                            WHERE ap.audiobook_id = a.id AND ap.user_id = ?
-                       ), 0) AS is_completed
+                       ), 0) AS is_completed"""
+            sql = f"""{select_sql}
                 FROM audiobooks a
                 WHERE {' AND '.join(where)}
                 ORDER BY {"a.created_at " + date_dir if is_date_sort else "a.library_id ASC, a.title " + title_dir}, a.id ASC
@@ -84,7 +275,7 @@ class SeriesRepository:
                     params.append(int(offset))
         elif db_type == 'video':
             where = ["COALESCE(v.is_deleted, 0) = 0"]
-            params = [safe_user_id]
+            params = [] if lightweight else [safe_user_id]
             if favorite_only:
                 where.append("v.is_favorite = 1")
             if library_id and str(library_id) not in ('all', 'favorite', 'history', 'home'):
@@ -97,12 +288,12 @@ class SeriesRepository:
             if search_query:
                 if not search_term:
                     where.append("1 = 0")
-                elif search_mode == 'author':
+                elif search_mode in ('author', 'cover_artist'):
                     where.append("1 = 0")
                 else:
                     where.append("COALESCE(v.title, '') LIKE ?")
                     params.append(f"%{search_term}%")
-            if role != 'admin' and user_id:
+            if user_id:
                 where.append(
                     "EXISTS ("
                     "SELECT 1 FROM user_category_permissions p "
@@ -111,8 +302,10 @@ class SeriesRepository:
                 )
                 params.append(user_id)
 
-            sql = f"""
-                SELECT v.id, v.title AS series_name, '' AS series_alias, v.title, '' AS title_alias,
+            if lightweight:
+                select_sql = "SELECT v.id, v.title AS series_name, v.title, '' AS title_alias, v.folder_path AS file_path, 'video' AS file_format, v.library_id"
+            else:
+                select_sql = """SELECT v.id, v.title AS series_name, '' AS series_alias, v.title, '' AS title_alias,
                        '' AS author, v.folder_path AS file_path, 'video' AS file_format,
                        CONCAT('/api/media/videos/', v.id, '/cover') AS cover_image,
                        v.updated_at AS cover_updated_at,
@@ -122,7 +315,8 @@ class SeriesRepository:
                        COALESCE((
                            SELECT MAX(vp.is_completed) FROM video_progress vp
                            WHERE vp.video_id = v.id AND vp.user_id = ?
-                       ), 0) AS is_completed
+                       ), 0) AS is_completed"""
+            sql = f"""{select_sql}
                 FROM videos v
                 WHERE {' AND '.join(where)}
                 ORDER BY {"v.created_at " + date_dir if is_date_sort else "v.library_id ASC, v.title " + title_dir}, v.id ASC
@@ -144,7 +338,7 @@ class SeriesRepository:
                 except (ValueError, TypeError):
                     pass
 
-            if role != 'admin' and user_id:
+            if user_id:
                 sub_where.append(
                     "EXISTS (SELECT 1 FROM user_category_permissions p WHERE p.library_id = b2.library_id AND p.user_id = ? AND p.has_access = 1)"
                 )
@@ -155,6 +349,9 @@ class SeriesRepository:
                     sub_where.append("1 = 0")
                 elif search_mode == 'author':
                     sub_where.append("COALESCE(b2.author, '') LIKE ?")
+                    sub_params.append(f"%{search_term}%")
+                elif search_mode == 'cover_artist':
+                    sub_where.append("COALESCE(b2.cover_artist, '') LIKE ?")
                     sub_params.append(f"%{search_term}%")
                 else:
                     like = f"%{search_term}%"
@@ -177,7 +374,7 @@ class SeriesRepository:
                 sub_params.append(f"%,{compact},%")
 
             sub_join = ""
-            if role != 'admin' and user_id:
+            if user_id:
                 sub_join = " JOIN user_category_permissions p ON p.library_id = b2.library_id AND p.user_id = ? AND p.has_access = 1 "
                 sub_params = [user_id] + sub_params
 
@@ -187,19 +384,56 @@ class SeriesRepository:
                 outer_where.append("EXISTS (SELECT 1 FROM user_favorites uf WHERE uf.book_id = b.id AND uf.user_id = ?)")
                 params.append(safe_user_id)
 
-            sql = f"""
-                SELECT b.id, b.series_name, b.series_alias, b.title, b.title_alias, b.author, b.file_path, b.file_format,
-                       b.cover_image, b.cover_updated_at, COALESCE(b.cover_align, 'center') AS cover_align,
-                       0 AS is_favorite,
-                       b.created_at,
-                       b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                       rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
+            if include_all_rows:
+                # 등급 제한이 걸린 목록은 대표 1권만 조회하면 접근 가능한 권이
+                # 같은 시리즈에 있어도 대표 권의 등급에 따라 시리즈 전체가
+                # 잘못 숨겨질 수 있다. 필터 적용 전 실제 권을 모두 반환한다.
+                all_where = [condition.replace('b2.', 'b.') for condition in sub_where]
+                all_join = sub_join.replace('b2.', 'b.')
+                params = list(sub_params)
+                if favorite_only:
+                    all_where.append("EXISTS (SELECT 1 FROM user_favorites uf WHERE uf.book_id = b.id AND uf.user_id = ?)")
+                    params.append(safe_user_id)
+                select_sql = f"""
+                    SELECT b.id, b.series_name, b.series_alias, b.title, b.title_alias, b.author, b.file_path, b.file_format,
+                           b.cover_image, b.cover_updated_at, COALESCE(b.cover_align, 'center') AS cover_align,
+                           0 AS is_favorite,
+                           b.created_at,
+                           b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                           {book_metadata_select_expr('b', include_has_metadata)} AS has_metadata,
+                           1 AS series_book_count, b.created_at AS series_latest_added
+                    FROM books b
+                    {all_join}
+                    WHERE {' AND '.join(all_where)}
+                    ORDER BY {"b.created_at " + date_dir if is_date_sort else "b.library_id ASC, b.series_name " + title_dir}, b.id ASC
+                """
+                sql = select_sql
+            elif lightweight:
+                select_sql = """
+                    SELECT b.id, b.series_name, b.title, b.title_alias,
+                           b.file_path, b.file_format, b.library_id,
+                           rep.series_book_count AS series_book_count
+                """
+            else:
+                select_sql = f"""
+                    SELECT b.id, b.series_name, b.series_alias, b.title, b.title_alias, b.author, b.file_path, b.file_format,
+                           b.cover_image, b.cover_updated_at, COALESCE(b.cover_align, 'center') AS cover_align,
+                           0 AS is_favorite,
+                           b.created_at,
+                           b.genre, b.tags, b.books_lv, b.publication_status, b.library_id, COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                           {book_metadata_select_expr('b', include_has_metadata)} AS has_metadata,
+                           rep.series_book_count AS series_book_count, rep.series_latest_added AS series_latest_added
+                """
+            representative_sql = (
+                "MIN(b2.id)"
+                if lightweight
+                else "COALESCE(MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END), MIN(b2.id))"
+            )
+            if not include_all_rows:
+                sql = f"""{select_sql}
                 FROM books b
                 INNER JOIN (
-                    SELECT COALESCE(
-                        MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END),
-                        MIN(b2.id)
-                    ) AS rep_id,
+                    SELECT {representative_sql} AS rep_id,
                     COUNT(*) AS series_book_count,
                     MAX(b2.created_at) AS series_latest_added
                     FROM books b2
@@ -209,7 +443,7 @@ class SeriesRepository:
                 ) rep ON b.id = rep.rep_id
                 WHERE {' AND '.join(outer_where)}
                 ORDER BY {"rep.series_latest_added " + date_dir if is_date_sort else "b.library_id ASC, b.series_name " + title_dir}, b.id ASC
-            """
+                """
 
             if limit is not None:
                 sql += " LIMIT ?"
@@ -219,7 +453,10 @@ class SeriesRepository:
                     params.append(int(offset))
 
         from repositories.sqlite.user_repository import UserRepository
-        fav_set = UserRepository.get_user_favorite_book_ids(db_type, safe_user_id) if safe_user_id else set()
+        fav_set = (
+            UserRepository.get_user_favorite_book_ids(db_type, safe_user_id)
+            if safe_user_id and not lightweight else set()
+        )
 
         max_attempts = 4
         for attempt in range(1, max_attempts + 1):
@@ -253,6 +490,23 @@ class SeriesRepository:
                 raise e
 
     @staticmethod
+    def fetch_books_by_ids(db_type, book_ids, user_id=None, role=None):
+        """초성 점프 대상 대표 도서의 카드 정보를 조회한다."""
+        ids = [int(book_id) for book_id in (book_ids or []) if str(book_id).isdigit()]
+        if not ids:
+            return []
+        rows = SeriesRepository.fetch_books_for_grouping(
+            db_type,
+            'all',
+            user_id=user_id,
+            role=role,
+            limit=None,
+            offset=None,
+        )
+        row_by_id = {row.get('id'): row for row in rows}
+        return [row_by_id[book_id] for book_id in ids if book_id in row_by_id]
+
+    @staticmethod
     def fetch_library_totals_bulk(db_type):
         """사이드바에 표시할 라이브러리별 시리즈 수/도서 권수를 한 번의 쿼리로 일괄 조회한다
         (검색/필터/권한 조건 없이 항목별 카운트만 필요 - 접근 가능 라이브러리 필터링은
@@ -276,22 +530,39 @@ class SeriesRepository:
                 GROUP BY library_id
             """
         else:
-            sql = """
-                SELECT library_id, COUNT(*) AS series_count, COALESCE(SUM(cnt), 0) AS book_count
-                FROM (
-                    SELECT b.library_id AS library_id,
-                           COALESCE(NULLIF(b.series_name, ''), b.title) AS series_key,
-                           COUNT(*) AS cnt
-                    FROM books b
-                    WHERE (b.is_deleted = 0 OR b.is_deleted IS NULL)
-                    GROUP BY b.library_id, series_key
-                ) t
-                GROUP BY library_id
-            """
+            sql = None
 
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
+            if sql is None:
+                try:
+                    cursor.execute("SELECT is_ready FROM series_summary_state WHERE id = 1")
+                    state = cursor.fetchone()
+                    if state and int(state['is_ready'] or 0):
+                        sql = """
+                            SELECT library_id,
+                                   COUNT(*) AS series_count,
+                                   COALESCE(SUM(series_book_count), 0) AS book_count
+                            FROM series_summary
+                            GROUP BY library_id
+                        """
+                except Exception:
+                    sql = None
+
+                if sql is None:
+                    sql = """
+                        SELECT library_id, COUNT(*) AS series_count, COALESCE(SUM(cnt), 0) AS book_count
+                        FROM (
+                            SELECT b.library_id AS library_id,
+                                   COALESCE(NULLIF(b.series_name, ''), b.title) AS series_key,
+                                   COUNT(*) AS cnt
+                            FROM books b
+                            WHERE (b.is_deleted = 0 OR b.is_deleted IS NULL)
+                            GROUP BY b.library_id, series_key
+                        ) t
+                        GROUP BY library_id
+                    """
             cursor.execute(sql)
             rows = cursor.fetchall()
             return {
@@ -311,6 +582,14 @@ class SeriesRepository:
         tag_filters = [str(value).strip() for value in (tag_filters or []) if str(value).strip()]
         search_mode, search_term = parse_series_search_query(search_query)
 
+        if db_type not in ('audiobook', 'video') and not search_query and not favorite_only and not genre_filters and not tag_filters:
+            try:
+                summary_totals = SeriesRepository._fetch_summary_totals(db_type, library_id, user_id, role)
+                if summary_totals is not None:
+                    return summary_totals
+            except Exception:
+                pass
+
         if db_type == 'audiobook':
             where = ["COALESCE(a.is_deleted, 0) = 0"]
             params = []
@@ -328,10 +607,12 @@ class SeriesRepository:
                 elif search_mode == 'author':
                     where.append("COALESCE(a.author, '') LIKE ?")
                     params.append(f"%{search_term}%")
+                elif search_mode == 'cover_artist':
+                    where.append("1 = 0")
                 else:
                     where.append("COALESCE(a.title, '') LIKE ?")
                     params.append(f"%{search_term}%")
-            if role != 'admin' and user_id:
+            if user_id:
                 where.append(
                     "EXISTS (SELECT 1 FROM user_category_permissions p "
                     "WHERE p.library_id = a.library_id AND p.user_id = ? AND p.has_access = 1)"
@@ -356,12 +637,12 @@ class SeriesRepository:
             if search_query:
                 if not search_term:
                     where.append("1 = 0")
-                elif search_mode == 'author':
+                elif search_mode in ('author', 'cover_artist'):
                     where.append("1 = 0")
                 else:
                     where.append("COALESCE(v.title, '') LIKE ?")
                     params.append(f"%{search_term}%")
-            if role != 'admin' and user_id:
+            if user_id:
                 where.append(
                     "EXISTS (SELECT 1 FROM user_category_permissions p "
                     "WHERE p.library_id = v.library_id AND p.user_id = ? AND p.has_access = 1)"
@@ -381,7 +662,7 @@ class SeriesRepository:
                     sub_params.append(int(library_id))
                 except (ValueError, TypeError):
                     pass
-            if role != 'admin' and user_id:
+            if user_id:
                 sub_where.append(
                     "EXISTS (SELECT 1 FROM user_category_permissions p "
                     "WHERE p.library_id = b2.library_id AND p.user_id = ? AND p.has_access = 1)"
@@ -392,6 +673,9 @@ class SeriesRepository:
                     sub_where.append("1 = 0")
                 elif search_mode == 'author':
                     sub_where.append("COALESCE(b2.author, '') LIKE ?")
+                    sub_params.append(f"%{search_term}%")
+                elif search_mode == 'cover_artist':
+                    sub_where.append("COALESCE(b2.cover_artist, '') LIKE ?")
                     sub_params.append(f"%{search_term}%")
                 else:
                     like = f"%{search_term}%"
@@ -410,7 +694,7 @@ class SeriesRepository:
                 sub_params.append(f"%,{compact},%")
 
             sub_join = ""
-            if role != 'admin' and user_id:
+            if user_id:
                 sub_join = " JOIN user_category_permissions p ON p.library_id = b2.library_id AND p.user_id = ? AND p.has_access = 1 "
                 sub_params = [user_id] + sub_params
             outer_where = ["(b.is_deleted = 0 OR b.is_deleted IS NULL)"]

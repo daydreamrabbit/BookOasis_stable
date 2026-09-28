@@ -1,6 +1,6 @@
 from repositories.bookmark_repository import BookmarkRepository
 
-VALID_FORMATS = ('epub', 'txt')
+VALID_FORMATS = ('epub', 'txt', 'pdf', 'zip', 'cbz', 'imgdir')
 MAX_LABEL_LEN = 200
 
 class BookmarkService:
@@ -8,7 +8,7 @@ class BookmarkService:
     def create_bookmark(db_type, book_id, user_id, format, chapter_idx, percent=0, label=None):
         format = str(format or '').strip().lower()
         if format not in VALID_FORMATS:
-            raise ValueError("지원하지 않는 형식입니다 (epub/txt만 가능).")
+            raise ValueError("지원하지 않는 형식입니다.")
 
         try:
             chapter_idx = int(chapter_idx)

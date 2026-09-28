@@ -306,17 +306,17 @@ def _send_audio_range_response(file_path):
         return rv
 
 
-def _has_audiobook_library_access(aid):
+_COVER_ROW_UNSET = object()
+
+
+def _has_audiobook_library_access(aid, row=_COVER_ROW_UNSET):
     user_id = session.get('user_id')
-    role = session.get('role')
-    if role == 'admin':
-        return True
     if not user_id:
         return False
 
     from repositories.audiobook_repository import AudiobookRepository
     from repositories.category_repository import CategoryRepository
-    ab = AudiobookRepository.get_audiobook_by_id(aid)
+    ab = AudiobookRepository.get_audiobook_by_id(aid) if row is _COVER_ROW_UNSET else row
     if not ab or not ab.get('library_id'):
         return False
     return CategoryRepository.check_user_category_access('audiobook', user_id, ab['library_id'])
@@ -324,11 +324,11 @@ def _has_audiobook_library_access(aid):
 @audiobook_bp.route('/api/media/audiobooks/<int:aid>/cover', methods=['GET'])
 def get_audiobook_cover(aid):
     """오디오북 대표 앨범 포스터 이미지 서빙"""
-    if not _has_audiobook_library_access(aid):
-        return jsonify({'success': False, 'error': '오디오북 접근 권한이 없습니다.'}), 403
-
     from repositories.audiobook_repository import AudiobookRepository
     row = AudiobookRepository.get_audiobook_by_id(aid)
+
+    if not _has_audiobook_library_access(aid, row=row):
+        return jsonify({'success': False, 'error': '오디오북 접근 권한이 없습니다.'}), 403
 
     if row and row.get('poster'):
         from utils.cover_helper import get_or_cache_remote_poster_webp
@@ -339,9 +339,16 @@ def get_audiobook_cover(aid):
 
     # Fallback SVG 생성
     title = row.get('title') if row else 'Audiobook'
-    from api.stream import _build_fallback_svg
-    svg_data = _build_fallback_svg(title, file_format='audiobook', seed=str(aid))
-    return Response(svg_data, mimetype='image/svg+xml')
+    from api.stream import _build_fallback_svg, _hash_string
+    res = Response(mimetype='image/svg+xml')
+    # Revalidate through the permission check on every reuse; never share
+    # authenticated covers between users through a proxy cache.
+    res.headers['Cache-Control'] = 'private, no-cache'
+    res.set_etag(str(_hash_string(f"{title}|audiobook|{aid}")))
+    res.make_conditional(request)
+    if res.status_code != 304:
+        res.set_data(_build_fallback_svg(title, file_format='audiobook', seed=str(aid)))
+    return res
 
 @audiobook_bp.route('/api/media/audiobooks/<int:aid>/tracks/<int:tid>/stream', methods=['GET'])
 @login_required

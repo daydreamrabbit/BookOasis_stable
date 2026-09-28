@@ -9,13 +9,17 @@ import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js
  * @param {string} viewName - 활성화할 뷰 영역 ('dashboard' | 'grid' | 'detail')
  */
 export function switchActiveView(viewName) {
+  window.dispatchEvent(new CustomEvent('bookoasis:view-changing', { detail: { viewName } }));
   const dashboardView = document.getElementById('library-dashboard-view');
   const gridView = document.getElementById('books-grid-view');
   const detailView = document.getElementById('book-detail-view');
   const settingsView = document.getElementById('library-settings-view');
+  const profileView = document.getElementById('user-profile-view');
   const pluginsView = document.getElementById('library-plugins-view');
   const customPluginView = document.getElementById('library-plugin-custom-view');
   const btnSort = document.getElementById('btn-lib-sort');
+  const btnFilter = document.getElementById('btn-open-filter');
+  const scanActivityWrap = document.querySelector('.scan-activity-wrap');
 
   console.log(`[View-Manager] Switching view to: ${viewName} (Current category: ${state.currentLibraryId})`);
 
@@ -41,24 +45,41 @@ export function switchActiveView(viewName) {
   if (gridView) gridView.style.display = 'none';
   if (detailView) detailView.style.display = 'none';
   if (settingsView) settingsView.style.display = 'none';
+  if (profileView) profileView.style.display = 'none';
   if (pluginsView) pluginsView.style.display = 'none';
   if (customPluginView) customPluginView.style.display = 'none';
   
   unmountIndexScrollbar();
 
-  // 상단 검색바/필터 컨트롤 숨김 조율 - 헤더 자체와 세션탭/환경설정·계정은 항상 유지
-  if (viewName === 'plugin_custom' || viewName === 'settings' || viewName === 'plugins') {
+  // 설정/플러그인/개별 플러그인 화면에서도 전역 도서 검색을 사용할 수 있게 검색창은 유지한다.
+  const hideLibrarySearch = false;
+  const hideListOnlyControls = viewName === 'plugin_custom' || viewName === 'settings' || viewName === 'plugins' || viewName === 'profile';
+  if (hideLibrarySearch) {
     if (searchCenter) searchCenter.style.display = 'none';
-    if (libraryControls) libraryControls.style.display = 'none';
+  } else if (searchCenter) {
+    searchCenter.style.removeProperty('display');
+  }
+
+  // 설정·플러그인 화면에서는 목록 전용 필터/정렬만 감추고 스캔 현황은 유지한다.
+  // 세 요소가 같은 .library-controls 안에 있으므로 부모 전체를 숨기면 스캔 현황도
+  // 사라지는 문제가 생긴다.
+  if (libraryControls) libraryControls.style.removeProperty('display');
+  if (scanActivityWrap) scanActivityWrap.style.removeProperty('display');
+  if (hideListOnlyControls) {
+    if (btnFilter) btnFilter.style.display = 'none';
+    if (btnSort) btnSort.style.display = 'none';
     if (groupModeToggle) groupModeToggle.style.display = 'none';
     if (activeFilterBar) activeFilterBar.style.display = 'none';
   } else {
     // display 값을 하드코딩하지 않고 인라인 override를 제거 - 데스크톱(flex)/모바일(grid) 미디어쿼리별
     // 실제 레이아웃이 다르므로, 특정 값을 강제하면 좁은 화면에서 레이아웃이 깨진다.
     if (libraryHeader) libraryHeader.style.removeProperty('display');
-    if (searchCenter) searchCenter.style.removeProperty('display');
-    if (libraryControls) libraryControls.style.removeProperty('display');
+    if (btnFilter) btnFilter.style.display = 'flex';
     if (groupModeToggle) groupModeToggle.style.removeProperty('display');
+    if (activeFilterBar) {
+      const hasActiveFilters = (state.filterGenres || []).length > 0 || (state.filterTags || []).length > 0;
+      activeFilterBar.style.display = hasActiveFilters ? 'flex' : 'none';
+    }
   }
 
   // 2. 요청한 뷰 영역만 선택 활성화 및 정렬 버튼 조율
@@ -97,6 +118,11 @@ export function switchActiveView(viewName) {
       
     case 'settings':
       if (settingsView) settingsView.style.display = 'flex';
+      if (btnSort) btnSort.style.display = 'none';
+      break;
+
+    case 'profile':
+      if (profileView) profileView.style.display = 'flex';
       if (btnSort) btnSort.style.display = 'none';
       break;
 
@@ -230,7 +256,34 @@ export function showToast(message, type = 'success') {
   }, 3000);
 }
 
+let viewerBoundaryTimer = null;
+
+export function showViewerBoundaryNotice(boundary = 'start') {
+  const host = document.getElementById('viewer-body-container');
+  if (!host) return;
+
+  let notice = document.getElementById('viewer-boundary-notice');
+  if (!notice) {
+    notice = document.createElement('div');
+    notice.id = 'viewer-boundary-notice';
+    notice.className = 'viewer-boundary-notice';
+    host.appendChild(notice);
+  }
+
+  const vertical = localStorage.getItem('viewer_tap_zone_direction') === 'vertical';
+  const isStart = boundary !== 'end';
+  const iconClass = vertical
+    ? (isStart ? 'fa-arrow-up' : 'fa-arrow-down')
+    : (isStart ? 'fa-arrow-left' : 'fa-arrow-right');
+  notice.innerHTML = `<i class="fa-solid ${iconClass}"></i><span>${isStart ? '첫 페이지입니다' : '마지막 페이지입니다'}</span>`;
+  notice.classList.remove('visible');
+  void notice.offsetWidth;
+  notice.classList.add('visible');
+
+  if (viewerBoundaryTimer) clearTimeout(viewerBoundaryTimer);
+  viewerBoundaryTimer = setTimeout(() => notice.classList.remove('visible'), 1400);
+}
+
 // 글로벌 노출
 window.showToast = showToast;
-
-
+window.showViewerBoundaryNotice = showViewerBoundaryNotice;

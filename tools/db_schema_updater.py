@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS library_groups (
     sort_order INT DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
+CREATE TABLE IF NOT EXISTS library_kinds (
+    code VARCHAR(24) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    is_builtin TINYINT(1) NOT NULL DEFAULT 0,
+    sort_order INT DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
 CREATE TABLE IF NOT EXISTS libraries (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
@@ -78,6 +85,8 @@ CREATE TABLE IF NOT EXISTS libraries (
     sort_order INT DEFAULT 0,
     gdrive_copy_remote VARCHAR(255) DEFAULT NULL,
     gdrive_view_local_mirror_path TEXT DEFAULT NULL,
+    content_kind VARCHAR(24) NOT NULL DEFAULT 'unspecified',
+    use_folder_cover TINYINT(1) NOT NULL DEFAULT 0,
     INDEX idx_libraries_group_id (group_id),
     INDEX idx_libraries_group_order (group_id, sort_order)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
@@ -110,6 +119,9 @@ CREATE TABLE IF NOT EXISTS books (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     library_id BIGINT,
     title VARCHAR(500) NOT NULL,
+    metadata_title VARCHAR(500),
+    metadata_title_checked TINYINT(1) NOT NULL DEFAULT 0,
+    embedded_metadata_version INT NOT NULL DEFAULT 0,
     series_name VARCHAR(500),
     author VARCHAR(500),
     isbn VARCHAR(100),
@@ -318,6 +330,26 @@ CREATE TABLE IF NOT EXISTS user_progress (
     last_epub_fingerprint VARCHAR(255),
     last_epub_updated_at DATETIME,
     UNIQUE KEY uq_user_book_progress (book_id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS tts_progress (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    book_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    listen_chapter INT,
+    listen_offset INT,
+    listen_text_len INT,
+    listen_anchor TEXT,
+    listen_updated_ms BIGINT,
+    read_chapter INT,
+    read_offset INT,
+    read_text_len INT,
+    read_anchor TEXT,
+    read_updated_ms BIGINT,
+    voice VARCHAR(8),
+    steps INT,
+    speed DOUBLE,
+    UNIQUE KEY uq_tts_progress_book_user (book_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 CREATE TABLE IF NOT EXISTS user_reading_log (

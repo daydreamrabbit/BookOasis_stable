@@ -36,6 +36,7 @@
   | `is_remote` | string | 선택 | 원격 마운트 여부 (`1` / `0`) |
   | `rclone_rc_url` | string | 선택 | Rclone Remote Control 주소 (예: `http://localhost:5572`) |
   | `group_id` | integer | 선택 | 가상 상위 그룹 ID. 비우면 미분류로 저장 |
+  | `content_kind` | string | 선택 | 카테고리 속성 코드(`manga`, `book` 등, 아래 "카테고리 속성 API" 참고). 생략하거나 비우면 `unspecified`(미지정). 목록에 없는 코드는 400 |
 
 * **응답 예시 (200 OK)**:
   ```json
@@ -61,6 +62,18 @@
   | `is_remote` | string | 선택 | 원격 연결 사용 플래그 |
   | `rclone_rc_url` | string | 선택 | Rclone 원격 API 서버 Endpoint 주소 |
   | `group_id` | integer | 선택 | 변경할 가상 상위 그룹 ID. 비우면 미분류로 이동 |
+  | `content_kind` | string | 선택 | 변경할 카테고리 속성 코드. **필드를 보내지 않으면 기존 값을 유지**하고, 빈 문자열이면 미지정으로 바꿉니다 |
+
+---
+
+### 카테고리 속성 API (`content_kind`)
+카테고리를 만화·도서·잡지처럼 분류하는 값입니다. 코어는 값을 저장하고 노출하기만 하며, 연관작품 검색 같은 분류 기준은 플러그인이 이 값을 읽어 사용합니다. 종류 목록은 세션(DB)마다 있고 관리자가 정의합니다.
+* `POST /api/media/library-kinds/add`: `type`, `code`(영문 소문자로 시작하는 소문자·숫자·`-`·`_` 24자 이내, 생성 후 변경 불가), `name`(25자 이내, 고유)으로 종류 추가
+* `POST /api/media/library-kinds/edit`: `type`, `code`, `name`으로 이름 변경
+* `POST /api/media/library-kinds/delete`: `type`, `code`로 삭제. **기본 종류(`manga`/`novel`/`book`/`magazine`)와 사용 중인 종류는 삭제할 수 없습니다**(사용 중이면 사용하는 카테고리 수를 알려 줍니다)
+* **권한**: 모두 `@admin_required`
+* **조회**: `GET /api/media/libraries` 응답의 `kinds`(`[{code, name, is_builtin, sort_order}]`)와 각 `libraries[].content_kind`(코드, 기본 `unspecified`)·`libraries[].content_kind_name`(표시 이름)을 사용합니다.
+* **기본 종류**: 일반·성인 DB에는 `manga`(만화)·`novel`(소설)·`book`(도서)·`magazine`(잡지)가 시딩됩니다(이름만 변경 가능). 오디오북·영상 DB는 빈 목록으로 시작합니다.
 
 ---
 
@@ -156,7 +169,11 @@
     "success": true,
     "libraries": [
       { "id": "home", "name": "전체보기", "physical_path": "" },
-      { "id": 1, "name": "판타지 소설", "physical_path": "/data/novel" }
+      { "id": 1, "name": "판타지 소설", "physical_path": "/data/novel", "content_kind": "novel", "content_kind_name": "소설" }
+    ],
+    "kinds": [
+      { "code": "manga", "name": "만화", "is_builtin": 1, "sort_order": 1 },
+      { "code": "novel", "name": "소설", "is_builtin": 1, "sort_order": 2 }
     ]
   }
   ```
@@ -173,6 +190,7 @@
   * `page` (integer, 선택): 조회 페이지 번호 (기본: `1`)
   * `limit` (integer, 선택): 1회당 조회 목록 크기 (기본: 시스템 설정값)
   * `sort` (string, 선택): 정렬 기준 (`title_asc`, `title_desc`, `date_desc`, `date_asc`)
+  * `include_has_metadata` (`1`, 선택): 응답의 `has_metadata`(시리즈에 실제 메타데이터가 있으면 `1`, 없으면 `0`)를 계산해서 채웁니다. 기본은 미계산(`null`)이며, 대형 카테고리에서는 수 초가 더 걸릴 수 있으니 필요한 경우에만 사용하세요.
 * **응답 예시 (200 OK)**:
   ```json
   {
@@ -258,7 +276,7 @@
   | `link` | string | 선택 | 외부 링크 |
   | `genre` | string | 선택 | 장르(쉼표 구분) |
   | `tags` | string | 선택 | 태그(쉼표 구분) |
-  | `books_lv` | string | 선택 | 도서 등급 (`everyone`/`ma15+`/`m`/`r18`/`adult only`/`일반`/`15세`/`18세` 중 하나, 미지정 시 전체이용가) |
+  | `books_lv` | string | 선택 | 도서 등급 (`everyone`/`ma15+`/`m`/`r18`/`adult only`/`adult only 18+`/`일반`/`15세`/`18세`/`성인망가`/`포르노` 중 하나, 미지정 시 전체이용가) |
   | `cover_image` | file | 선택 | 표지 이미지 파일 |
 
 ### `[POST/PATCH]` `/api/media/series/alias`
@@ -738,6 +756,36 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
 
 ---
 
+### `[GET]` `/api/media/recommendations`
+* **설명**: 특정 시리즈 하나를 기준으로 장르/태그/작가 겹침 기반 유사작을 계산해 반환합니다. "스마트 추천" 탭이 최근 읽은 시리즈마다 이 API를 반복 호출해 화면을 구성하지만, 특정 시리즈 하나만 넘기면 되는 범용 API라 도서 상세 페이지 등 다른 화면에서 "비슷한 작품" 그리드를 직접 그릴 때도 그대로 재사용할 수 있습니다(예: 상세 페이지 본문에 자체 추천 그리드를 그리는 플러그인 - 사이드바에 붙는 `detail_sidebar_widget`/`smart_recommend_widget` 계약과 달리 본문 어디에든 자유롭게 배치 가능).
+* **권한**: `@login_required`
+* **쿼리 파라미터**:
+  | 파라미터명 | 타입 | 필수여부 | 설명 |
+  | :--- | :--- | :--- | :--- |
+  | `type` | string | 선택 | DB 구분 (`general`/`adult`, 기본값: `general`) |
+  | `series_name` | string | 필수 | 기준 시리즈명 |
+  | `library_id` | integer | 선택 | 기준 시리즈가 속한 카테고리 ID (동일 시리즈명이 여러 카테고리에 있을 때 구분용) |
+* **응답 예시 (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "genre": [
+      {"id": 101, "series_name": "...", "library_id": 1, "file_format": "cbz", "cover_image": "...", "score": 4}
+    ],
+    "tags": [...],
+    "author": [...],
+    "genre_is_fallback": false,
+    "tags_is_fallback": false
+  }
+  ```
+* **비고**:
+  * `genre`/`tags`/`author` 각각 최대 20건, 겹침 개수(`score`) 내림차순 정렬.
+  * 기준 시리즈에 장르/태그 정보가 없으면 `genre_is_fallback`/`tags_is_fallback`이 `true`가 되고 대신 동일 카테고리 최신 등록 시리즈로 채워집니다. `author`는 폴백이 없으며 겹치는 작가가 없으면 빈 배열입니다.
+  * 결과에서 현재 세션 사용자가 이미 읽은 시리즈(읽기 이력)와 기준 시리즈 자기 자신은 항상 제외됩니다 - "이미 읽은 건 다시 추천하지 않는다"는 스마트 추천 탭의 의도가 그대로 적용되며, 별도로 끌 수 있는 옵션은 없습니다.
+  * 응답은 시리즈+카테고리 단위로 최대 1시간 캐시됩니다(같은 시리즈를 다시 요청하면 이후 조회 시각 기준 최신 읽기 이력이 즉시 반영되지 않을 수 있음).
+
+---
+
 ### `[GET]` `/api/media/detail-sidebar-widgets`
 * **설명**: 도서 상세 페이지 사이드바에 마운트할, `detail_sidebar_widget`을 선언한 활성화된 플러그인들의 위젯 데이터를 한 번에 반환합니다(목록 조회 + 데이터 조회를 한 호출로 통합). 여러 플러그인이 선언하면 `order` 오름차순으로 정렬되어 나란히 쌓입니다. 자세한 계약 설명은 [guide_plugins.md](./guide_plugins.md)의 "도서 상세 페이지 사이드바 위젯" 절 참고.
 * **권한**: `@login_required`
@@ -841,6 +889,37 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
   | `context` | object | 선택 | 플러그인에 그대로 전달되는 임의의 JSON 객체 |
 * **응답**: 플러그인의 `run_context_menu_action()` 반환값을 그대로 전달 (`{'success': True, 'message': ..., 'open_url': ...}` 또는 `{'success': False, 'error': ...}` 등 - 플러그인마다 자유). `success: false`면 HTTP 400으로 응답합니다.
 * **비고**: EPUB/TXT 하이라이트(주석) 컨텍스트 메뉴에는 동일한 구조의 `/api/media/context-menu/annotation/plugins`(목록)와 `/api/media/context-menu/annotation/plugins/action`(실행)이 있습니다 - `context`에 `annotation_id`/`book_id`/`quote`/`note` 등이 자동으로 채워져 전달된다는 점만 다릅니다.
+* **컨텍스트 메뉴 외 용도 재사용 예시**: 이 라우트는 이름과 달리 실제로는 "plugin_id + action_id + context를 그대로 플러그인에 전달"하는 범용 RPC라, 우클릭 메뉴가 아닌 용도(플러그인 자체 데이터 조회 등)에도 그대로 쓰입니다. [sample_plugins/metadata/series_official_relations](../sample_plugins/metadata/series_official_relations/)는 관리자용 동기화 트리거(`action_id: "sync_now"`/`"sync_status"`)뿐 아니라, 다른 플러그인이 이 플러그인의 전용 테이블(`plugin_series_official_relations`)을 직접 몰라도 되도록 `action_id: "get_relations"`(`context: {series_name, library_id}` → `relation_type`을 포함한 원본 관계 목록 반환)도 같은 경로로 제공합니다 - 코어에 새 라우트나 DB 접근을 추가하지 않고, 플러그인 전용 데이터를 다른 플러그인(예: 도서 상세 본문에 자체 "연관작" 그리드를 그리는 플러그인)이 재사용하고 싶을 때의 표준 패턴입니다.
+  * **호출 예시 (`get_relations`)**:
+    ```js
+    const res = await fetch('/api/media/context-menu/book/plugins/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: dbType,               // 'general' | 'adult'
+        plugin_id: 'series_official_relations',
+        action_id: 'get_relations',
+        context: { series_name: seriesName, library_id: libraryId },
+      }),
+    });
+    const data = await res.json();
+    // data.items: [{ book_id, series_name, library_id, cover, file_format, relation_type }, ...]
+    ```
+    ```json
+    {
+      "success": true,
+      "items": [
+        {
+          "book_id": 4821,
+          "series_name": "...",
+          "library_id": 1,
+          "cover": "/covers/....jpg",
+          "file_format": "cbz",
+          "relation_type": "spinoff"
+        }
+      ]
+    }
+    ```
 
 ---
 
@@ -942,7 +1021,7 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
 ---
 
 ### `[POST]` `/api/admin/permissions/update-download`
-* **설명**: 특정 사용자 계정의 파일 다운로드(EPUB/PDF/TXT) 허용 여부를 글로벌 변경합니다.
+* **설명**: 특정 사용자 계정의 원본 도서 파일 다운로드 허용 여부를 글로벌 변경합니다.
 * **권한**: `@admin_required`
 * **요청 파라미터**:
   ```json
@@ -955,7 +1034,7 @@ BookOasis는 외부 수신 서버로 도서 이벤트를 `POST` 전송할 수 �
 ---
 
 ### `[POST]` `/api/admin/permissions/update-content-rating`
-* **설명**: 특정 사용자 계정의 콘텐츠 등급 최대 허용치(0=전체이용가/15=15세이상/18=18세이상)를 글로벌 변경합니다. 일반 도서관 내 도서의 `books_lv` 컬럼 또는 성인 장르/태그 키워드 매칭으로 판정된 등급이 이 값을 초과하면 열람(뷰어/다운로드)이 차단됩니다.
+* **설명**: 특정 사용자 계정의 콘텐츠 등급 최대 허용치(0=전체이용가/15=15세이상/18=18세이상/19=성인망가/20=포르노)를 글로벌 변경합니다. 일반 도서관 내 도서의 `books_lv` 컬럼 또는 성인 장르/태그 키워드 매칭으로 판정된 등급이 이 값을 초과하면 열람(뷰어/다운로드)이 차단됩니다. ComicInfo 등급은 `M`=18, `R18`=19, `Adult Only 18+`=20으로 분류합니다.
 * **권한**: `@admin_required`
 * **요청 파라미터**:
   ```json
@@ -1034,7 +1113,7 @@ MCP 서버(`tools/mcp_server.py`)의 Tier B 쓰기 도구(`propose_bulk_book_met
 * **캐시 정책**: `no-store`, `no-cache`
 * **쿼리 파라미터**:
   * `type` (string, 선택): DB 스코프 (`general` / `adult` / `audiobook`, 기본값: `general`)
-* **갱신 주기**: 기본 웹 UI에서 2초마다 조회합니다. 기존 카테고리 스피너와 스캔 활동 패널이 같은 응답을 공유하므로 추가 폴링은 발생하지 않습니다.
+* **갱신 주기**: 페이지 진입 시 한 번 확인하고, 실행 중인 작업이 있을 때만 2초마다 조회합니다. 대기 상태에서는 반복 조회하지 않습니다. 기존 카테고리 스피너와 스캔 활동 패널이 같은 응답을 공유하므로 별도 폴링은 발생하지 않습니다.
 * **응답 예시 (200 OK)**:
   ```json
   {
@@ -1337,7 +1416,4 @@ MCP 서버(`tools/mcp_server.py`)의 Tier B 쓰기 도구(`propose_bulk_book_met
 * `DELETE /api/v1/collections/<int:collection_id>`: 컬렉션 삭제 (담긴 아이템도 함께 삭제)
 * `POST /api/v1/collections/<int:collection_id>/items`: 아이템 추가 (`book_id` / `series_name` / `audiobook_id` / `video_id` 중 하나)
 * `DELETE /api/v1/collections/<int:collection_id>/items/<int:item_id>`: 아이템 제거
-
-
-
 

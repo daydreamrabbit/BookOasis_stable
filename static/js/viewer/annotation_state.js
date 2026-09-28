@@ -6,6 +6,13 @@ let currentDbType = null;
 let annotations = [];
 let loadPromise = null;
 
+function notifyAnnotationsChanged(action, annotationId = null) {
+  if (typeof document === 'undefined' || typeof CustomEvent === 'undefined') return;
+  document.dispatchEvent(new CustomEvent('viewer-annotations-changed', {
+    detail: { action, annotationId },
+  }));
+}
+
 export function loadAnnotationsForBook(bookId, dbType) {
   if (!bookId) {
     annotations = [];
@@ -44,15 +51,20 @@ export function getTxtAnnotations() {
 
 export function addAnnotationLocal(annotation) {
   annotations.push(annotation);
+  notifyAnnotationsChanged('add', annotation?.id ?? null);
 }
 
 export function updateAnnotationLocal(annotationId, patch) {
   const target = annotations.find((a) => Number(a.id) === Number(annotationId));
-  if (target) Object.assign(target, patch);
+  if (target) {
+    Object.assign(target, patch);
+    notifyAnnotationsChanged('update', annotationId);
+  }
 }
 
 export function removeAnnotationLocal(annotationId) {
   annotations = annotations.filter((a) => Number(a.id) !== Number(annotationId));
+  notifyAnnotationsChanged('remove', annotationId);
 }
 
 export function getAnnotationById(annotationId) {

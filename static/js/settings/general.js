@@ -10,7 +10,7 @@ import { changeDashboardTheme, populateCustomThemeOptions, rescanCustomThemesUi,
 import { startCoverStorageMigration } from './cover_storage_settings.js';
 import { getTempShortcut, setTempShortcut, initShortcutRecorderEvents } from './shortcut_recorder.js';
 import { runVaapiCheck, triggerLazyScanNow } from './system_actions.js';
-import { loadHomeDashboardLayout } from '../dashboard.js';
+import { loadHomeDashboardLayout } from '../dashboard.js?v=20260926-home-layout-type-cache-v1';
 
 function initGeneralDelegation() {
   if (window.__generalDelegationBound) return;
@@ -139,9 +139,7 @@ export function applySettingsToUI(settings) {
   toggleDashboardInsightsSetting(isShowInsights);
   if (settings.BOOK_THUMBNAIL_WIDTH) {
     const width = parseInt(settings.BOOK_THUMBNAIL_WIDTH, 10) || 160;
-    const height = Math.round(width * 1.375); // 160:220 비율 유지
     document.documentElement.style.setProperty('--book-card-width', `${width}px`);
-    document.documentElement.style.setProperty('--book-card-height', `${height}px`);
   }
   if (settings.PAGE_LIMIT) {
     state.LIMIT = parseInt(settings.PAGE_LIMIT, 10) || 60;
@@ -176,6 +174,8 @@ export function applySettingsToUI(settings) {
   if (settings.SHOW_CONTENT_RATING_BADGE !== undefined) {
     state.showContentRatingBadge = (settings.SHOW_CONTENT_RATING_BADGE === '1');
   }
+  // Library cards no longer display connection status, even for saved opt-ins.
+  state.showMetadataConnectionStatus = false;
   if (settings.SMART_RECOMMEND_ENABLED !== undefined) {
     state.smartRecommendEnabled = (settings.SMART_RECOMMEND_ENABLED !== '0');
   }
@@ -216,7 +216,8 @@ export async function loadInitialSystemSettings() {
     console.error('[Settings] 최초 시스템 설정 로딩 실패:', e);
   }
 
-  migrateLocalOnlyUserSettingsOnce();
+  // 기존 localStorage 설정을 서버에 옮기는 작업은 홈 화면 초기화를 막지 않는다.
+  void migrateLocalOnlyUserSettingsOnce();
 }
 
 // DASHBOARD_THEME / SHOW_DASHBOARD_INSIGHTS는 예전엔 localStorage에만 저장됐다.
@@ -519,7 +520,17 @@ export async function loadMySettings() {
     if (fontSizeEl) fontSizeEl.value = s.VIEWER_FONT_SIZE || '18';
 
     const fontFamilyEl = document.getElementById('my-setting-viewer-font-family');
-    if (fontFamilyEl) fontFamilyEl.value = s.VIEWER_FONT_FAMILY || 'sans-serif';
+    if (fontFamilyEl) {
+      const savedFamily = s.VIEWER_FONT_FAMILY === 'sans-serif' ? 'pretendard'
+        : (s.VIEWER_FONT_FAMILY === 'serif' ? 'batang' : (s.VIEWER_FONT_FAMILY || 'pretendard'));
+      if (![...fontFamilyEl.options].some((option) => option.value === savedFamily)) {
+        const option = document.createElement('option');
+        option.value = savedFamily;
+        option.textContent = savedFamily;
+        fontFamilyEl.appendChild(option);
+      }
+      fontFamilyEl.value = savedFamily;
+    }
 
     const audioMiniPlayerModeEl = document.getElementById('my-setting-audio-mini-player-mode');
     if (audioMiniPlayerModeEl) {
@@ -574,7 +585,7 @@ export async function submitMySettings(event) {
   const themeValue = document.getElementById('my-setting-dashboard-theme')?.value || 'purple';
   const showInsights = document.getElementById('my-setting-show-dashboard-insights')?.checked ? '1' : '0';
   const fontSize = document.getElementById('my-setting-viewer-font-size')?.value || '18';
-  const fontFamily = document.getElementById('my-setting-viewer-font-family')?.value || 'sans-serif';
+  const fontFamily = document.getElementById('my-setting-viewer-font-family')?.value || 'pretendard';
   const audioMiniPlayerModeRaw = document.getElementById('my-setting-audio-mini-player-mode')?.value || 'mini';
   const audioMiniPlayerMode = (audioMiniPlayerModeRaw === 'right_dock') ? 'right_dock' : 'mini';
   const audioRightDockDimEnabled = document.getElementById('my-setting-audio-right-dock-dim')?.checked ? '1' : '0';
@@ -593,8 +604,14 @@ export async function submitMySettings(event) {
     // 테마/대시보드 표시는 로컬스토리지에도 즉시 반영 (change 핸들러와 별개로 폼 제출 시에도 보장)
     localStorage.setItem('app_dashboard_theme', themeValue);
     localStorage.setItem('show_dashboard_insights', showInsights);
+    localStorage.setItem('viewer_font_size', (Math.max(12, Math.min(36, Number(fontSize) || 18)) / 16).toFixed(2));
+    localStorage.setItem('viewer_font_family', fontFamily);
+    state.systemSettings.VIEWER_FONT_SIZE = fontSize;
+    state.systemSettings.VIEWER_FONT_FAMILY = fontFamily;
     changeDashboardTheme(themeValue);
     toggleDashboardInsightsSetting(showInsights === '1');
+    window.syncViewerSettingsUI?.();
+    document.dispatchEvent(new CustomEvent('viewer-preferences-updated'));
 
     const results = await Promise.all([
       api.updateUserSetting('DASHBOARD_THEME', themeValue),

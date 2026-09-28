@@ -25,19 +25,19 @@
 
 새로운 MariaDB 컨테이너를 함께 띄워서 운영하고 싶으신 분들을 위한 **가장 간편한 방법**입니다.
 
-### 1단계: 제공되는 `docker-compose.mariadb.yml` 활용
+### 1단계: 통합 `docker-compose.yml` 활용
 
-프로젝트에 포함된 `docker-compose.mariadb.yml` 파일은 BookOasis 서버와 MariaDB 컨테이너, 그리고 4개 미디어 DB(`media_general`, `media_adult`, `media_audiobook`, `media_video`) 및 계정 권한 초기화 스크립트(`init.sql`)를 자동으로 함께 구성해 드립니다.
+프로젝트의 `docker-compose.yml`은 BookOasis 서버와 MariaDB, Redis, 4개 미디어 DB 권한 복구 작업을 함께 구성합니다.
 
 ```bash
 # 기존 컨테이너 중지
-docker-compose down
+docker compose down
 
 # MariaDB 포함 구성으로 기동
-docker-compose -f docker-compose.mariadb.yml up -d
+docker compose up -d --build
 ```
 
-> 💡 **참고**: 비밀번호 변경을 원하시면 `docker-compose.mariadb.yml` 파일 내의 `MARIADB_PASSWORD` 및 `MYSQL_ROOT_PASSWORD` 값을 원하는 비밀번호로 수정 후 실행하세요.
+> 💡 **참고**: 비밀번호 변경은 최초 실행 전에 `.env`의 `MARIADB_PASSWORD`와 `MARIADB_ROOT_PASSWORD`로 설정하세요.
 
 ---
 
@@ -68,13 +68,11 @@ GRANT ALL PRIVILEGES ON media_video.* TO 'bookoasis'@'%';
 FLUSH PRIVILEGES;
 ```
 
-### 2단계: `docker-compose.override.yml` 작성
+### 2단계: 외부 DB 접속 설정 반영
 
-기존 `docker-compose.yml`을 직접 수정하지 않고, 같은 폴더에 `docker-compose.override.yml` 파일을 만들어 접속 정보를 입력합니다.
+외부 MariaDB를 사용할 때는 `docker-compose.yml`의 `bookoasis.environment` 접속 정보를 수정하고 번들 MariaDB 의존성을 제거합니다.
 
 ```yaml
-version: "3.8"
-
 services:
   bookoasis:
     environment:
@@ -91,8 +89,8 @@ services:
 ### 3단계: 컨테이너 재기동
 
 ```bash
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d --build
 ```
 
 ---
@@ -133,7 +131,7 @@ docker exec -it bookoasis python tools/migrator_sqlite_to_mariadb.py
 
 ### Q1. `Access denied for user 'bookoasis'@'%' to database 'media_adult'` 또는 `SELECT command denied ... for table 'media_video'.'videos'` 에러가 발생해요!
 - **원인**: MariaDB 공식 도커 이미지는 기본적으로 1개의 DB만 생성하므로 나머지 DB 권한이 빠져있을 수 있습니다. 특히 BookOasis가 버전업하며 새 미디어 세션(예: v2.1.0의 영상 강좌 → `media_video`)을 추가하면, **이미 예전에 MariaDB로 전환해서 쓰고 계시던 분**은 새로 생긴 DB(또는 그 안의 특정 테이블)에 대한 권한이 없어서 이 에러를 만날 수 있습니다. `Access denied ... to database`(에러 1044)와 `SELECT command denied ... for table`(에러 1142)은 같은 근본 원인(권한 부족)의 두 가지 다른 증상일 뿐이며 해결책은 동일합니다. Docker Compose 번들형(유형 A)이라도, `docker-entrypoint-initdb.d/init.sql`은 MariaDB 데이터 볼륨이 **완전히 비어있는 최초 1회**에만 실행되므로 기존 컨테이너를 업데이트만 한 경우엔 자동으로 반영되지 않습니다.
-- **해결책**: Docker Compose 번들형(유형 A)이라면 최신 버전의 `docker-compose.mariadb.yml`을 그대로 사용하세요 — `mariadb-grant-repair` 서비스가 `docker-compose up`을 실행할 때마다 자동으로 4개 DB에 대한 GRANT를 재확인/재부여하므로, 앞으로는 새 미디어 세션이 추가돼도 이 작업을 손으로 다시 할 필요가 없습니다. 외부 MariaDB(유형 B)를 쓰신다면 아래 SQL을 1회 실행하세요.
+- **해결책**: Docker Compose 번들형(유형 A)은 통합 `docker-compose.yml`의 `mariadb-grant-repair` 서비스가 매 실행 시 4개 DB 권한을 재확인합니다. 외부 MariaDB(유형 B)를 쓰신다면 아래 SQL을 1회 실행하세요.
   ```sql
   CREATE DATABASE IF NOT EXISTS media_video CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
   GRANT ALL PRIVILEGES ON media_general.* TO 'bookoasis'@'%';
@@ -145,7 +143,7 @@ docker exec -it bookoasis python tools/migrator_sqlite_to_mariadb.py
   (`GRANT ... ON media_%.*` 같은 와일드카드 패턴은 GRANT 문에서 지원되지 않아 SQL 구문 오류가 발생하니 사용하지 마세요.)
 
 ### Q2. 기존 SQLite로 되돌리고 싶으면 어떻게 하나요?
-- `docker-compose.override.yml`에서 `DB_ENGINE=sqlite`로 변경하거나 해당 파일을 삭제 후 `docker-compose restart` 하시면 즉시 기존 SQLite 데이터베이스로 원복됩니다. 기존 데이터는 전혀 훼손되지 않습니다.
+- `docker-compose.yml`의 `DB_ENGINE`을 `sqlite`로 변경하고 `docker compose up -d --build`를 실행하면 기존 SQLite 데이터베이스로 전환할 수 있습니다. 기존 데이터는 삭제되지 않습니다.
 
 ### Q3. 리눅스 파일 시스템에서 파일명 대소문자가 달라도 잘 구분되나요?
 - 네! BookOasis는 MariaDB 이관 시 `file_path` 컬럼에 `utf8mb4_bin` (바이너리 정밀 매칭) 콜레이션을 자동 적용하므로 대소문자 및 특수문자가 들어간 파일 경로도 100% 완벽하게 보존됩니다.

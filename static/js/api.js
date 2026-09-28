@@ -11,20 +11,34 @@ async function safeFetch(url, options = {}) {
   return res;
 }
 
+// 스캔 대기열 응답은 목록 화면과 상세 화면이 함께 새로고침될 수 있도록
+// 공통으로 처리한다. 이 함수가 빠지면 스캔 요청 자체는 서버에 도달해도
+// 응답 처리 단계에서 ReferenceError가 발생한다.
+async function finishScanRequest(res, type = state.currentLibraryType || 'general') {
+  const data = await res.json();
+  if (data?.success) {
+    window.dispatchEvent(new CustomEvent('bookoasis:scan-queued', {
+      detail: { type: String(type || 'general') }
+    }));
+  }
+  return data;
+}
+
 export async function fetchLibraries(type) {
   const res = await safeFetch(`/api/media/libraries?type=${type}&_=${Date.now()}`, {cache: 'no-store'});
   return res.json();
 }
 
-export async function fetchBooksList({type, libraryId, page, limit, append, search, sort, genres = [], tags = [], groupBy, authorKey}) {
+export async function fetchBooksList({type, libraryId, page, limit, append, search, sort, genres = [], tags = [], groupBy, authorKey, includeHasMetadata = false, signal}) {
   const searchQuery = search ? `&search=${encodeURIComponent(search)}` : '';
   const sortQuery = sort ? `&sort=${sort}` : '';
   const genresQuery = genres.length > 0 ? `&genres=${encodeURIComponent(genres.join(','))}` : '';
   const tagsQuery = tags.length > 0 ? `&tags=${encodeURIComponent(tags.join(','))}` : '';
   const groupByQuery = groupBy ? `&group_by=${encodeURIComponent(groupBy)}` : '';
   const authorKeyQuery = authorKey ? `&author_key=${encodeURIComponent(authorKey)}` : '';
-  const url = `/api/media/list?type=${type}&library_id=${libraryId}&page=${page}&limit=${limit}${searchQuery}${sortQuery}${genresQuery}${tagsQuery}${groupByQuery}${authorKeyQuery}&_=${Date.now()}`;
-  const res = await safeFetch(url, {cache: 'no-store'});
+  const metadataQuery = includeHasMetadata ? '&include_has_metadata=1' : '';
+  const url = `/api/media/list?type=${type}&library_id=${libraryId}&page=${page}&limit=${limit}${searchQuery}${sortQuery}${genresQuery}${tagsQuery}${groupByQuery}${authorKeyQuery}${metadataQuery}&_=${Date.now()}`;
+  const res = await safeFetch(url, {cache: 'no-store', signal});
   return res.json();
 }
 
@@ -38,12 +52,12 @@ export async function fetchJumpPosition({type, libraryId, search, sort, genres =
   return res.json();
 }
 
-export async function fetchBooksTotals({type, libraryId, search, genres = [], tags = []}) {
+export async function fetchBooksTotals({type, libraryId, search, genres = [], tags = [], signal}) {
   const searchQuery = search ? `&search=${encodeURIComponent(search)}` : '';
   const genresQuery = genres.length > 0 ? `&genres=${encodeURIComponent(genres.join(','))}` : '';
   const tagsQuery = tags.length > 0 ? `&tags=${encodeURIComponent(tags.join(','))}` : '';
   const url = `/api/media/list-totals?type=${type}&library_id=${libraryId}${searchQuery}${genresQuery}${tagsQuery}&_=${Date.now()}`;
-  const res = await safeFetch(url, {cache: 'no-store'});
+  const res = await safeFetch(url, {cache: 'no-store', signal});
   return res.json();
 }
 
@@ -53,8 +67,8 @@ export async function fetchAllBooksList(type, libraryId) {
   return res.json();
 }
 
-export async function fetchReadingHistory(type) {
-  const res = await fetch(`/api/media/history?type=${type}&_=${Date.now()}`, {cache: 'no-store'});
+export async function fetchReadingHistory(type, {signal} = {}) {
+  const res = await fetch(`/api/media/history?type=${type}&_=${Date.now()}`, {cache: 'no-store', signal});
   return res.json();
 }
 
@@ -110,8 +124,32 @@ export async function fetchMediaDetail(type, libraryId, series, representativeBo
     url += `&representative_book_id=${encodeURIComponent(representativeBookId)}`;
   }
   url += `&_=${Date.now()}`;
-  const res = await fetch(url, {cache: 'no-store'});
-  return res.json();
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const res = await fetch(url, {cache: 'no-store'});
+      const body = await res.text();
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch {
+        throw new Error(`상세 정보 응답을 읽지 못했습니다. (HTTP ${res.status})`);
+      }
+      if (!res.ok) throw new Error(data.error || data.message || `상세 정보 요청 실패 (${res.status})`);
+      return data;
+    } catch (error) {
+      lastError = error;
+      // A reverse proxy can briefly return an HTML 502/504 while the MariaDB
+      // query is finishing. One short retry prevents the detail view from
+      // being replaced by an error screen for that transient response.
+      if (attempt === 0 && /HTTP (?:502|503|504)|요청 실패 \((?:502|503|504)\)/.test(error.message || '')) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        continue;
+      }
+      break;
+    }
+  }
+  throw lastError || new Error('상세 정보 요청에 실패했습니다.');
 }
 
 // 도서 상세페이지 본문을 대체하는 플러그인(detail_view)의 UI 번들 조회
@@ -172,6 +210,26 @@ export async function deleteLibrary(formData) {
   return res.json();
 }
 
+export async function deleteSeriesData(type, bookId, libraryId) {
+  const res = await safeFetch('/api/media/series/delete-data', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({type, book_id: bookId, library_id: libraryId})
+  });
+  return res.json();
+}
+
+export async function deleteSeriesDataBatch(type, targets) {
+    const res = await safeFetch('/api/media/series/delete-data-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, targets: targets.map(target => ({
+            book_id: Number(target.id), library_id: Number(target.libraryId),
+        })) }),
+    });
+    return res.json();
+}
+
 export async function moveLibraries(items, type) {
   const res = await safeFetch('/api/media/libraries/move', {
     method: 'POST',
@@ -196,6 +254,22 @@ export async function assignPluginGroups(items, type) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({type, items})
   });
+  return res.json();
+}
+
+// 카테고리 속성(만화/소설/도서/웹툰 등) 종류 관리 (관리자 전용)
+export async function addLibraryKind(formData) {
+  const res = await safeFetch('/api/media/library-kinds/add', {method: 'POST', body: formData});
+  return res.json();
+}
+
+export async function editLibraryKind(formData) {
+  const res = await safeFetch('/api/media/library-kinds/edit', {method: 'POST', body: formData});
+  return res.json();
+}
+
+export async function deleteLibraryKind(formData) {
+  const res = await safeFetch('/api/media/library-kinds/delete', {method: 'POST', body: formData});
   return res.json();
 }
 
@@ -289,7 +363,17 @@ export async function scanSingleBook(type, bookId) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res, type);
+}
+
+// scope: 'book'(넘긴 ID 그대로) | 'series'(각 ID가 속한 시리즈의 모든 권으로 서버가 확장)
+export async function enqueueBatchBookScan(type, bookIds, { scope = 'book', force = false } = {}) {
+  const res = await fetch('/api/media/books/scan-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, book_ids: bookIds, scope, force })
+  });
+  return finishScanRequest(res, type);
 }
 
 export async function unlockMetadata(type, seriesName, libraryId, bookId) {
@@ -307,6 +391,23 @@ export async function unlockMetadata(type, seriesName, libraryId, bookId) {
 
 export async function markBookAsUnread(type, bookId, options = {}) {
   const res = await fetch('/api/media/unread', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      db_type: type,
+      book_id: bookId,
+      scope: options.scope || 'book',
+      series_name: options.seriesName || '',
+      library_id: options.libraryId ?? null,
+    })
+  });
+  return res.json();
+}
+
+export async function markBookAsRead(type, bookId, options = {}) {
+  const res = await fetch('/api/media/read', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
@@ -358,7 +459,7 @@ export async function triggerLibraryScan(type, libraryId, force = false) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res, type);
 }
 
 export async function triggerAllLibrariesScan(type, force = false, groupId = null) {
@@ -372,7 +473,7 @@ export async function triggerAllLibrariesScan(type, force = false, groupId = nul
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res, type);
 }
 
 export async function triggerLibraryCoversScan(type, libraryId) {
@@ -382,7 +483,35 @@ export async function triggerLibraryCoversScan(type, libraryId) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res, type);
+}
+
+export async function triggerLibraryLazyScan(type, libraryId) {
+  const formData = new FormData();
+  formData.append('type', type);
+  const res = await fetch(`/api/media/libraries/${libraryId}/lazy-scan`, {
+    method: 'POST',
+    body: formData
+  });
+  return finishScanRequest(res, type);
+}
+
+export async function triggerBooksLazyScan(type, bookIds) {
+  const res = await fetch('/api/media/books/lazy-scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, book_ids: bookIds })
+  });
+  return finishScanRequest(res, type);
+}
+
+export async function triggerSeriesLazyScan(type, libraryId, seriesName) {
+  const res = await fetch('/api/media/books/lazy-scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, library_id: libraryId, series_name: seriesName })
+  });
+  return finishScanRequest(res, type);
 }
 
 export async function cancelLibraryScan(type, libraryId) {
@@ -609,7 +738,7 @@ export async function triggerLazyScan() {
   const res = await fetch('/api/media/settings/trigger-lazy-scan', {
     method: 'POST'
   });
-  return res.json();
+  return finishScanRequest(res, state.currentLibraryType || 'general');
 }
 
 // "스마트 추천" 화면에 플러그인이 덧붙이는 섹션 데이터 조회 (smart_recommend_widget 계약).
@@ -697,6 +826,3 @@ export async function runAnnotationContextMenuPluginAction(type, pluginId, actio
   });
   return res.json();
 }
-
-
-

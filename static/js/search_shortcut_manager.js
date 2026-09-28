@@ -1,6 +1,8 @@
 /* search_shortcut_manager.js – 검색 창 포커싱, 단축키(Alt+`) 및 미디어 타입 핫키 전담 모듈 */
-import { filterBooks } from './book_list.js';
-import { switchLibraryType } from './library_type_toggle.js';
+import { filterBooks } from './book_list.js?rev=20260921-global-search-v1';
+import { switchLibraryType } from './library_type_toggle.js?rev=20260921-mobile-header-v6';
+import { closeLibrarySearchPreview } from './library_search_preview.js?rev=20260921-search-preview-v1';
+import { state } from './state.js';
 
 let searchShortcutConfig = { ctrlKey: false, altKey: true, shiftKey: false, metaKey: false, key: '`', code: 'Backquote', display: 'Alt + `' };
 
@@ -26,7 +28,7 @@ export function applySearchShortcutSetting() {
   const searchInput = document.getElementById('library-search');
   if (searchInput) {
     const displayShortcut = searchShortcutConfig ? searchShortcutConfig.display : 'Alt + `';
-    const fallbackText = `제목·시리즈·별칭 / 작가:작가명 (단축키: ${displayShortcut})`;
+    const fallbackText = `제목·시리즈·별칭 / 작가:작가명 / 그림작가:작가명 (단축키: ${displayShortcut})`;
     let translatedPlaceholder = (window.i18n && typeof window.i18n.t === 'function')
       ? window.i18n.t('header.search_placeholder', { shortcut: displayShortcut }, fallbackText)
       : fallbackText;
@@ -87,32 +89,38 @@ export function handleLibrarySearchAction() {
   const searchInput = document.getElementById('library-search');
   if (!searchInput) return;
 
-  const hasQuery = !!String(searchInput.value || '').trim();
-  if (hasQuery) {
+  const rawQuery = String(searchInput.value || '').trim();
+  const shouldClearCommittedQuery = !!state.searchQuery
+    && (!rawQuery || rawQuery.toLowerCase() === String(state.searchQuery).toLowerCase());
+  if (shouldClearCommittedQuery) {
     searchInput.value = '';
+    closeLibrarySearchPreview();
     if (typeof window.filterBooks === 'function') window.filterBooks();
     else filterBooks();
     focusLibrarySearchInput();
     return;
   }
 
-  if (document.activeElement !== searchInput) {
-    focusLibrarySearchInput();
-  } else {
+  if (rawQuery) {
+    closeLibrarySearchPreview();
     if (typeof window.filterBooks === 'function') window.filterBooks();
     else filterBooks();
+  } else if (document.activeElement !== searchInput) {
+    focusLibrarySearchInput();
   }
 }
 
 export function handleLibrarySearchKeydown(event) {
   if (event.key === 'Enter') {
     event.preventDefault();
+    closeLibrarySearchPreview();
     if (typeof window.filterBooks === 'function') window.filterBooks();
     else filterBooks();
   } else if (event.key === 'Escape') {
     const searchInput = document.getElementById('library-search');
     if (searchInput) {
       searchInput.value = '';
+      closeLibrarySearchPreview();
       if (typeof window.filterBooks === 'function') window.filterBooks();
       else filterBooks();
       searchInput.blur();

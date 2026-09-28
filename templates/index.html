@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" class="app-booting">
 <head>
     <script>
         (function() {
@@ -28,7 +28,7 @@
     <!-- i18n 다국어 지원 엔진 -->
     <script src="{{ static_asset_url('js/i18n.js') }}"></script>
     <!-- Marked.js (Markdown 파서) -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="{{ static_asset_url('lib/marked/marked.min.js') }}"></script>
     <!-- 외부 라이브러리 (로컬 다운로드 버전) -->
     <script src="{{ static_asset_url('lib/Sortable.min.js') }}"></script>
     <script>
@@ -39,7 +39,8 @@
             has_adult_access: Number({{ session.get('has_adult_access', 0) | tojson }}),
             has_audiobook_access: Number({{ session.get('has_audiobook_access', 0) | tojson }}),
             has_video_access: Number({{ session.get('has_video_access', 0) | tojson }}),
-            has_download_access: Number({{ session.get('has_download_access', 0) | tojson }})
+            has_download_access: Number({{ session.get('has_download_access', 0) | tojson }}),
+            content_rating_max: Number({{ session.get('content_rating_max', 18) | tojson }})
         };
         window.bookOasisConsoleLog = typeof console.log === 'function' ? console.log.bind(console) : function() {};
         
@@ -66,6 +67,13 @@
         /* html 요소에도 overflow: hidden 필수 */
         html {
             overflow: hidden;
+        }
+
+        /* 최초 경로와 번역이 확정되기 전에는 서버 템플릿의 기본 그리드가 잠깐
+           보이지 않게 한다. 초기화가 끝나면 JS가 이 클래스만 제거한다. */
+        html.app-booting .sidebar-menu-wrapper,
+        html.app-booting .library-main-content {
+            visibility: hidden;
         }
 
         body {
@@ -99,6 +107,12 @@
 
 <script>
     // 페이지 로드 시 다국어 초기화 및 렌더링 실행
+    // 모듈 자체가 네트워크 오류로 로드되지 않는 예외 상황에서도 화면이 영구히
+    // 숨겨지지 않도록 최종 안전장치를 둔다.
+    window.setTimeout(() => {
+        document.documentElement.classList.remove('app-booting');
+    }, 8000);
+
     document.addEventListener('DOMContentLoaded', async () => {
         await i18n.init();
         i18n.translateDOM();

@@ -13,6 +13,11 @@ This document describes the current plugin standard for BookOasis metadata/dashb
 - The core only relies on shared contracts.
 - Plugin extension should be completed inside `plugins/metadata/` without core code forks.
 
+### License and Documentation Principle
+
+- BookOasis core is licensed under [AGPLv3](../LICENSE). Paid or closed-source plugin distribution is not supported — the current plugin architecture (subclassing a core base class and running in-process with the core) sits directly at odds with the openness AGPL requires, and more fundamentally, it goes against BookOasis's development philosophy. Plugins are expected to be open source, same as the core.
+- **"An undocumented feature is a dead feature"** — this is BookOasis's development philosophy, and plugins are no exception. We strongly recommend every plugin ship its own `README.md` and any guide docs it needs inside its own folder. A feature with no documentation is invisible to other developers, and eventually to your own future self — which makes it effectively nonexistent.
+
 ### Compatibility Matrix (Core ↔ Plugin Contract)
 
 | Core Version Range | Required Contract | Optional Contract | Notes |
@@ -278,6 +283,21 @@ render(pluginId, container, context);
 The bundle is served from `GET /api/media/plugins/<plugin_id>/detail-ui`, which returns 404 for
 plugins that don't declare `detail_view` or are disabled.
 
+### Open Listen (`window.openListen`)
+
+Plugins that render their own volume list can link TXT/EPUB books to the shared listen screen:
+
+```javascript
+if (window.canListen?.(book.file_format)) {
+    btn.addEventListener('click', (event) => {
+        event.stopPropagation(); // avoid also opening the reader from the volume card
+        window.openListen(book.id); // dbType defaults to the current library; pass 'adult' if needed
+    });
+}
+```
+
+The core handles reading/listening position and progress sync. Speech is synthesized in the browser; model files are downloaded when listening starts for the first time.
+
 ### Plugin-Owned Update Contract (`update_manifest`)
 
 Update button visibility and execution rules are not core hardcoding anymore. They are driven by each plugin's own `update_manifest` declaration.
@@ -408,12 +428,18 @@ home_widget = {
     'sessions': 'all',  # same rule as _resolve_plugin_sessions() (all / a list / omitted → general)
     'layout': 'grid',  # 'full' (default) | 'grid' - see below
     'size': 2,  # only matters for 'grid'. 1 (default) / 2 / 3 - see below
+    'initial_data': True,  # optional: seed the first data in the initial HTML response
 }
 
 def get_dashboard_data(self, db_type, limit=10):
     # reuses the same method as dashboard_widget - no new method required
     return {'success': True, 'items': []}
 ```
+
+`initial_data` is an optional boolean. When `True`, the core calls `get_dashboard_data()`
+while rendering the home page and embeds the result in the initial HTML, so the browser can
+render the first widget data without an extra request or spinner. Omit it or set it to `False`
+to keep the normal client-side widget API request.
 
 ### Custom CSS/images (`dashboard.html` / `dashboard.css` / `dashboard.js`)
 
@@ -726,7 +752,7 @@ This convention was agreed with community developers. Anyone who can see the `pl
 
 > ⚠️ This is currently in beta and supports exactly one fixed plugin_id: **`security-bookoasis-plugin`**. Any other plugin_id is ignored, and a multi-id allowlist is not supported yet (may be extended later if needed).
 
-- The operator sets `ADD_PLUGIN=security-bookoasis-plugin` (exactly this value) either in `.env` or under `environment:` in `docker-compose.override.yml`.
+- The operator sets `ADD_PLUGIN=security-bookoasis-plugin` (exactly this value) in `.env`.
 - (Optional) Without touching the settings UI, storing the `ADD_PLUGIN` key directly in the DB `settings` table also works and takes precedence over the `.env` value.
 - The plugin's own code must call the API below, at the point where it decides whether to activate (e.g. inside `on_scan_new_books_detected`, `get_dashboard_data`, `search`, or similar hook entry points), to check whether the configured `ADD_PLUGIN` value exactly matches its own fixed plugin_id. If it doesn't match, the plugin must do nothing and quietly return an empty result / `success: False`.
 
@@ -1021,6 +1047,28 @@ def _count_books(self, db_type):
     gateway = self.get_db_gateway(db_type)
     row = gateway.fetch_one("SELECT COUNT(*) AS cnt FROM books WHERE COALESCE(is_deleted, 0) = 0")
     return int((row["cnt"] if row else 0) or 0)
+```
+
+### Reading the category type (`content_kind`, classification criterion)
+
+Each category (library) can carry a **type** assigned by the administrator (manga, book, magazine, ...). Plugins that search or match across categories (e.g. related works) can use it to tell which kind of category a same-titled series belongs to. The core only stores and exposes the value.
+
+- **Storage:** `libraries.content_kind` (code string, default `'unspecified'`) and the type list `library_kinds(code, name, is_builtin, sort_order)`, one per session DB.
+- **HTTP:** `libraries[].content_kind` / `content_kind_name` and the top-level `kinds` in the `GET /api/media/libraries` response.
+- **Code contract (additive only):**
+  - The built-in codes `manga`, `novel`, `book` and `magazine` are never deleted from the general/adult DBs and their meaning is fixed (display names can be renamed by the admin, so decide by **code**, not by name).
+  - Codes added by an administrator only have meaning on that installation. **Treat unknown codes as opaque strings** (only identical codes are "the same kind"), and treat `unspecified` or an empty value as not classified.
+  - Some DBs (audiobook/video) have no built-in kinds and some categories are unclassified, so never fail when the type is missing; use it for classification only when it is set.
+
+```python
+def _library_kinds(self, db_type):
+    gateway = self.get_db_gateway(db_type)
+    rows = gateway.fetch_all("SELECT id, content_kind FROM libraries") or []
+    return {row["id"]: row["content_kind"] for row in rows}
+
+# keep only the same-titled candidates that belong to a manga category
+kinds = self._library_kinds(db_type)
+manga_candidates = [c for c in candidates if kinds.get(c["library_id"]) == "manga"]
 ```
 
 ### Plugin Cache (Redis, Recommended)

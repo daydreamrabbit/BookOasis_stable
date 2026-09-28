@@ -4,7 +4,7 @@
 // 그리드 콘텐츠(강좌 카드)만 전용 렌더러로 대체한다. 카드 클릭은 오디오북과 동일하게 공용 상세화면
 // 파이프라인(openBookDetail)을 그대로 타서, 상세화면/에피소드 목록/재생시간 저장 UI가 오디오북과 일치한다.
 import { openBookDetail } from './detail/index.js';
-import { updateLibraryTotalCount, updateSearchActionButtonUI } from './book_list.js';
+import { updateLibraryTotalCount, updateSearchActionButtonUI } from './book_list.js?rev=20260920-mobile-request-cancel-v4';
 import { positionMenuAtPoint, hideFloatingMenu, bindFloatingMenuOutsideClose } from './context_menu_manager.js';
 import { state } from './state.js';
 import { formatDurationLong } from './utils/time.js';
@@ -218,7 +218,8 @@ export async function loadVideoCourseGrid(libraryId) {
     lastLoadedVideos = data.videos || [];
     lastLoadedLibraryId = libraryId;
 
-    // 검색창에 이미 입력된 검색어가 있으면(라이브러리 전환 시에도) 유지 적용
+    // 사이드바 라이브러리 전환은 selectCategory()가 검색어를 초기화한다.
+    // 같은 화면의 직접 재로딩이라면 입력창에 남아 있는 검색어를 그대로 적용한다.
     const query = (document.getElementById('library-search')?.value || '').toLowerCase().trim();
     const visibleVideos = query
       ? lastLoadedVideos.filter(v => (v.title || '').toLowerCase().includes(query))

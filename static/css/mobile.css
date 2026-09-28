@@ -12,7 +12,7 @@
 .media-library-container {
     flex-direction: column;
     gap: 0.9rem;
-    padding: calc(1rem + env(safe-area-inset-top, 0px)) 0.75rem calc(4.5rem + env(safe-area-inset-bottom, 0px)) 0.75rem;
+    padding: calc(1rem + env(safe-area-inset-top, 0px)) 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px)) 0.75rem;
 }
 
 /* 2. 좌측 사이드바 -> 상단 네비게이션 형태로 전환 및 햄버거 토글 */
@@ -28,13 +28,12 @@
     height: auto !important;
     position: relative !important;
     top: 0 !important;
-    border-right: none;
-    border-bottom: 1px solid var(--app-border-light);
+    border: 1px solid var(--app-border-light);
     padding: 0.8rem 0.75rem !important;
     gap: 0.35rem;
     overflow: hidden;
     background: var(--app-bg-sidebar);
-    border-radius: 8px;
+    border-radius: 10px;
     box-sizing: border-box;
 }
 
@@ -46,8 +45,7 @@
     opacity: 1 !important;
     pointer-events: auto !important;
     overflow: visible !important;
-    border-right: none;
-    border-bottom: 1px solid var(--app-border-light);
+    border: 1px solid var(--app-border-light);
 }
 
 .sidebar-header-wrapper {
@@ -142,27 +140,40 @@
     border-radius: 10px;
 }
 
-/* 사이드바 메뉴는 세로 나열 유지하여 가독성 개선 */
+/* 모바일 드로어는 하나의 연속된 탐색 목록으로 보이게 한다.
+   각 항목에 카드 테두리와 배경을 주면 좁은 화면에서 탭 묶음처럼 보이고
+   실제 탐색 가능한 항목 수도 크게 줄어든다. */
 .sidebar-menu {
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.1rem;
 }
 
 .sidebar-menu .menu-item {
-    padding: 0.6rem 0.8rem;
+    min-height: 38px;
+    padding: 0.5rem 0.65rem;
     font-size: 0.9rem;
     justify-content: flex-start;
-    border: 1px solid var(--app-border);
-    background: var(--app-bg-card);
+    border: 0 !important;
+    background: transparent;
+    box-shadow: none;
 }
 
 .sidebar-menu .menu-item:hover {
-    border-color: var(--app-accent);
     background: var(--app-bg-card-hover);
 }
 
 .sidebar-menu .menu-item.active {
-    border-color: rgba(216, 180, 254, 0.82);
+    border: 0 !important;
+    background: var(--app-accent-soft);
+    box-shadow: 3px 0 0 var(--app-accent) inset;
+}
+
+.sidebar-library-group {
+    margin: 0.1rem 0;
+}
+
+.sidebar-library-group-items {
+    padding-left: 0.85rem;
 }
 
 /* 프로필 및 로그아웃 영역 재배치 */
@@ -177,7 +188,8 @@
     flex: 1 1 auto;
     min-height: 0;
     width: 100%;
-    padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+    padding-right: 0;
+    padding-bottom: 1.5rem;
 }
 
 /* 컨텍스트 메뉴 닫기 버튼 모바일 가독성 강화 */
@@ -235,6 +247,27 @@
     flex-wrap: wrap;
 }
 
+/* 모바일에서는 기본/작가별 아래의 미디어 타입 탭이 헤더 높이를 크게 만들지 않도록
+   접어둘 수 있다. 필터 버튼 왼쪽의 토글로만 열고 닫으며, 데스크톱에는 적용하지 않는다. */
+#btn-toggle-library-types {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 34px;
+}
+
+#btn-toggle-library-types i {
+    transition: transform 0.2s ease;
+}
+
+#btn-toggle-library-types[aria-expanded="true"] i {
+    transform: rotate(180deg);
+}
+
+#library-type-toggle-group.library-type-toggle-group--collapsed {
+    display: none !important;
+}
+
 .library-controls {
     grid-area: controls;
     width: 100%;
@@ -251,11 +284,10 @@
 
 .scan-activity-popover {
     position: fixed;
-    top: auto;
     right: 0.75rem;
-    bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
-    left: 0.75rem;
-    width: auto;
+    bottom: auto;
+    left: auto;
+    width: min(360px, calc(100vw - 16px));
     max-height: min(70dvh, 520px);
 }
 
@@ -338,13 +370,370 @@
 /* 5. 카드 그리드 및 기타 패딩 미세 조정 */
 body {
     padding: 10px;
+    box-sizing: border-box;
+}
+
+/* 2026-09 모바일 앱 셸 정리: 상단의 별도 BookOasis 브랜드 카드를 없애고
+   메뉴·검색·계정과 보기 제어를 하나의 컴팩트한 스티키 헤더로 합친다. */
+@media screen and (max-width: 1200px) {
+    .media-library-container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+        padding-top: calc(0.5rem + env(safe-area-inset-top, 0px));
+    }
+
+    .library-sidebar,
+    .library-sidebar.collapsed {
+        position: fixed !important;
+        z-index: 10051;
+        inset: 0 auto 0 0 !important;
+        width: min(84vw, 330px) !important;
+        min-width: 0 !important;
+        height: 100dvh !important;
+        padding: calc(0.75rem + env(safe-area-inset-top, 0px)) 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px)) !important;
+        border-radius: 0 14px 14px 0;
+        transform: translate3d(-105%, 0, 0);
+        transition: transform 0.22s ease;
+        pointer-events: none !important;
+        overflow: hidden !important;
+        box-shadow: 18px 0 40px rgba(0, 0, 0, 0.45);
+    }
+
+    body.mobile-sidebar-open .library-sidebar {
+        transform: translate3d(0, 0, 0);
+        pointer-events: auto !important;
+    }
+
+    .sidebar-header-wrapper {
+        display: none !important;
+    }
+
+    .sidebar-collapsible-content,
+    .sidebar-collapsible-content.show,
+    body.mobile-sidebar-open .sidebar-collapsible-content {
+        width: 100%;
+        height: 100% !important;
+        max-height: none !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0;
+        flex: 1 1 auto !important;
+        flex-direction: column !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+    }
+
+    body.mobile-sidebar-open .sidebar-collapsible-content {
+        display: flex !important;
+    }
+
+    .mobile-sidebar-drawer-header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 44px;
+        padding: 0 0.25rem 0.6rem;
+        margin: 0 0 0.35rem !important;
+        border-bottom: 1px solid var(--app-border-light);
+        background: var(--app-bg-sidebar);
+        color: var(--app-text-primary);
+        font-size: 1rem;
+        font-weight: 700;
+    }
+
+    .mobile-sidebar-drawer-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        min-width: 0;
+        color: var(--app-text-primary);
+    }
+
+    .mobile-sidebar-drawer-brand .sidebar-brand-logo {
+        width: 32px;
+        height: 32px;
+    }
+
+    #btn-mobile-sidebar-close {
+        width: 40px;
+        height: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--app-border);
+        border-radius: 8px;
+        background: var(--app-bg-card);
+        color: var(--app-text-primary);
+    }
+
+    #mobile-sidebar-backdrop {
+        position: fixed;
+        z-index: 10050;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: rgba(0, 0, 0, 0.56);
+        backdrop-filter: blur(2px);
+    }
+
+    body:not(.mobile-sidebar-open) #mobile-sidebar-backdrop {
+        display: none !important;
+    }
+
+    body.mobile-sidebar-open #mobile-sidebar-backdrop {
+        display: block !important;
+    }
+
+    .library-main-content {
+        flex: 1 1 0;
+        height: auto;
+        width: 100%;
+        min-width: 0;
+        min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* 바깥 컨테이너의 오른쪽 여백까지 스크롤 영역만 확장한다.
+       내부 콘텐츠 폭은 padding-right로 그대로 유지하므로 카드 배치는
+       움직이지 않고 세로 스크롤바만 패널 오른쪽 끝에 놓인다.
+       자체적으로 좌우 여백을 제거하는 플러그인 상세 화면은 제외한다. */
+    .library-main-content:not(.detail-plugin-view) {
+        width: calc(100% + 0.75rem);
+        margin-right: -0.75rem;
+        padding-right: 0.75rem;
+    }
+
+    body.mobile-sidebar-open .library-main-content {
+        overflow-y: hidden !important;
+    }
+
+    .library-header {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        display: grid;
+        grid-template-columns: 40px minmax(0, 1fr) 40px;
+        grid-template-areas:
+            "menu search persistent"
+            "group group group"
+            "type controls controls";
+        gap: 0.45rem;
+        align-items: center;
+        padding: 0.5rem;
+        border-radius: 10px;
+        overflow: visible;
+    }
+
+    .library-header.library-header--hidden {
+        transform: translateY(calc(-100% - 1rem));
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .btn-mobile-sidebar-toggle {
+        grid-area: menu;
+        width: 40px;
+        height: 40px;
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 1px solid var(--app-border);
+        border-radius: 8px;
+        background: var(--app-bg-card);
+        color: var(--app-text-primary);
+        font-size: 1rem;
+    }
+
+    .library-search-box {
+        grid-area: search;
+    }
+
+    .library-header .library-search-center {
+        margin: 0;
+    }
+
+    .library-search-center .form-control {
+        min-height: 40px;
+        padding-left: 0.7rem;
+        font-size: 16px;
+    }
+
+    .library-controls-persistent {
+        grid-area: persistent;
+        position: static;
+        width: 40px;
+        justify-self: end;
+        gap: 0;
+    }
+
+    .library-controls-persistent #category-settings {
+        display: none !important;
+    }
+
+    #btn-account-menu {
+        width: 40px;
+        height: 40px;
+        border-color: var(--app-border);
+        border-radius: 8px;
+        background: var(--app-bg-card);
+    }
+
+    #btn-account-menu .account-menu-trigger-name,
+    #btn-account-menu .account-menu-trigger-chevron { display: none; }
+    #btn-account-menu .user-avatar--header { width: 30px; height: 30px; }
+
+    .user-profile-view { padding-bottom: 1rem; }
+    .user-profile-hero { min-height: 145px; align-items: center; gap: 0.9rem; padding: 1rem; border-radius: 11px; }
+    .user-avatar--profile { width: 84px; height: 84px; font-size: 2rem; }
+    .user-profile-avatar-edit-badge { width: 25px; height: 25px; right: -1px; bottom: 2px; border-width: 2px; font-size: 0.62rem; }
+    .user-profile-name-row h2 { font-size: 1.25rem; }
+    .user-profile-edit-button { position: absolute; right: 0.75rem; top: 0.75rem; width: 34px; height: 34px; justify-content: center; padding: 0; }
+    .user-profile-edit-button span { display: none; }
+    .user-profile-tabs { overflow-x: auto; }
+    .user-profile-tabs button { flex: 1 0 auto; padding: 0.65rem 0.75rem; }
+    .user-profile-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .user-profile-stats article { border-right: 0; border-bottom: 1px solid var(--app-border-light); }
+    .user-profile-stats article:nth-last-child(-n+2) { border-bottom: 0; }
+    .user-profile-stats article:nth-child(odd) { border-right: 1px solid var(--app-border-light); }
+    .user-profile-section { padding: 0.8rem; }
+    .user-profile-recent-grid { grid-template-columns: 1fr; }
+    .profile-avatar-options { grid-template-columns: repeat(4, 1fr); }
+
+    .account-menu-popover {
+        position: fixed;
+        top: calc(4.1rem + env(safe-area-inset-top, 0px));
+        right: 1rem;
+        width: min(230px, calc(100vw - 2rem));
+    }
+
+    #group-mode-toggle-group {
+        grid-area: group;
+        width: 100%;
+        min-width: 0;
+    }
+
+    #group-mode-toggle-group .btn-toggle {
+        min-height: 36px;
+    }
+
+    #btn-toggle-library-types {
+        grid-area: type;
+        width: auto;
+        min-width: 116px;
+        max-width: 150px;
+        height: 36px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.45rem;
+        padding: 0 0.7rem !important;
+        white-space: nowrap;
+    }
+
+    .mobile-library-type-label {
+        display: inline-flex;
+        align-items: center;
+        line-height: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    #library-type-toggle-group {
+        position: absolute;
+        z-index: 10100;
+        top: calc(100% + 0.4rem);
+        left: 0.5rem;
+        right: 0.5rem;
+        width: auto;
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.45rem;
+        padding: 0.55rem;
+        border: 1px solid var(--app-border);
+        border-radius: 10px;
+        background: var(--app-bg-card);
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.48);
+    }
+
+    #library-type-toggle-group.library-type-toggle-group--collapsed {
+        display: none !important;
+    }
+
+    #library-type-toggle-group .btn-toggle {
+        width: 100%;
+        min-width: 0;
+        min-height: 40px;
+        align-items: center;
+        justify-content: center;
+        line-height: 1.2;
+    }
+
+    .library-header-actions {
+        display: contents;
+    }
+
+    .library-controls {
+        grid-area: controls;
+        justify-self: end;
+        width: auto;
+        flex-wrap: nowrap;
+        justify-content: flex-end;
+        gap: 0.35rem;
+    }
+
+    .scan-activity-wrap {
+        margin-right: 0;
+    }
+
+    .home-widget-stack {
+        width: 100%;
+        min-width: 0;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .home-widget-slot,
+    .dashboard-section,
+    .plugin-card {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+}
+
+@media screen and (max-width: 768px) {
+    /* Kavita처럼 좁은 화면에서도 라이브러리 카드를 한 장씩 크게 늘이지 않고
+       두 열로 배치한다. minmax(0, 1fr)은 작은 휴대폰에서도 긴 제목이 열 폭을
+       밀어내지 않도록 한다. */
+    .books-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.8rem 0.65rem;
+    }
+
+    .books-grid .book-card-info {
+        padding: 0.55rem 0.55rem 0.45rem;
+    }
+
+    .books-grid .book-card-title {
+        font-size: 0.76rem;
+        line-height: 1.3;
+    }
 }
 
 /* 팝업 모달 크기 조정 */
 .floating-filter-modal {
-    width: 90%;
-    left: 5%;
-    right: 5%;
+    width: min(440px, calc(100vw - 16px));
+    right: auto;
 }
 
 /* 6. 환경설정 탭 가로 스크롤 및 테이블 반응형 튜닝 */
@@ -420,6 +809,41 @@ body {
 /* 7. 도서 상세 뷰 반응형 레이아웃 튜닝 */
 #book-detail-view {
     padding-bottom: 2rem;
+}
+
+/* Rabbit Plugins 상세 화면은 자체 배경과 여백을 사용하므로 코어의
+   라이브러리 패널을 한 겹 더 그리지 않는다. */
+.main-wrapper.detail-plugin-view {
+    margin: 0 !important;
+}
+
+.media-library-container.detail-plugin-view {
+    gap: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+
+.library-main-content.detail-plugin-view {
+    gap: 0 !important;
+    padding-right: 0 !important;
+    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+}
+
+#book-detail-view.detail-plugin-view {
+    width: 100%;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+}
+
+#book-detail-view.detail-plugin-view .detail-page-layout,
+#book-detail-view.detail-plugin-view .detail-page-main {
+    width: 100%;
+    max-width: none;
 }
 
 /* 작가의 다른 도서 사이드바 - 좁은 화면에서는 숨김(2단 레이아웃 자체도 1단으로 접음) */
@@ -532,6 +956,12 @@ body {
     justify-content: center;
 }
 
+.btn-read-row .btn-listen {
+    flex: 1;
+    min-width: 0;
+    padding-inline: 0.35rem;
+}
+
 /* 오디오북 상세 탭/테이블 모바일 최적화 */
 .ab-volumes-shell {
     padding: 0.75rem;
@@ -624,8 +1054,9 @@ body {
     .viewer-modal {
         padding-top: env(safe-area-inset-top, 0px);
         padding-bottom: env(safe-area-inset-bottom, 0px);
-        padding-left: env(safe-area-inset-left, 0px);
-        padding-right: env(safe-area-inset-right, 0px);
+        /* 가로 safe-area를 모달 패딩으로 만들면 콘텐츠 양옆에 어두운 띠가 생긴다. */
+        padding-left: 0;
+        padding-right: 0;
         height: 100% !important; /* dynamic viewport 대안 */
     }
     

@@ -189,12 +189,12 @@ class MetadataFactory:
     # 재import하는 비용이 그대로 반복돼 플러그인이 늘어날수록 체감 지연이 커졌다. 이 서버는
     # gunicorn 1-worker/4-thread로 운영되므로(project_page_turn_experiment_pilot 메모 참고)
     # Redis 없이 프로세스 메모리 캐시만으로 충분히 공유된다.
-    # TTL을 짧게(기본 30초) 둔 이유: 관리자가 SSH로 plugins/metadata/에 파일을 직접 넣거나
-    # 지우는 경로(샘플 설치 UI를 거치지 않는 경우)는 아래 명시적 invalidate 훅이 못 잡으므로,
-    # 최악의 경우에도 이 시간 안에는 스스로 새로고침되도록 하기 위함이다.
+    # 플러그인 매니저와 hot_reload_plugin()은 변경 시 캐시를 즉시 무효화한다.
+    # 직접 파일을 넣거나 지우는 경우도 관리자의 플러그인 상태 새로고침으로 즉시 반영되며,
+    # 이를 놓친 경우를 위한 자동 재검색 주기는 5분으로 둔다.
     _discovery_cache = None
     _discovery_cache_at = 0.0
-    _discovery_ttl_seconds = 30.0
+    _discovery_ttl_seconds = 300.0
     _discovery_lock = threading.Lock()
 
     @classmethod
@@ -374,6 +374,18 @@ class MetadataFactory:
                 print(f"[MetadataFactory] Plugin UI asset load failed ({provider_name}/{file_name}): {e}")
 
         return bundle if bundle else None
+
+    @classmethod
+    def add_dashboard_ui_bundle(cls, provider_name, result):
+        """위젯 데이터에 플러그인의 선택형 HTML/CSS/JS 번들을 붙입니다."""
+        if not isinstance(result, dict) or not result.get('success'):
+            return result
+        dashboard_ui = cls._load_plugin_ui_bundle(provider_name, target='dashboard')
+        if dashboard_ui:
+            result['html'] = dashboard_ui.get('html', '')
+            result['css'] = dashboard_ui.get('css', '')
+            result['js'] = dashboard_ui.get('js', '')
+        return result
 
     @classmethod
     def _record_load_status(cls, provider_name, status, message=None):

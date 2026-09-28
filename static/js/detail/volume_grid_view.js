@@ -13,7 +13,10 @@ export function renderVolumeGrid(orderedBooks, safeSeriesName, dbType = 'general
     const totalPages = Math.max(1, Number(book.total_pages) || 1);
     const isCompletedValue = Number(book.is_completed) === 1;
     const format = (book.file_format || '').toLowerCase();
-    let rawDisplayTitle = book.title_alias || book.title || '';
+    // title_alias is an alternate/original title, not the display title of an
+    // individual volume.  Prefer the core-provided volume title so a metadata
+    // alias such as "Wild Ranker" cannot replace "와일드 랭커 01화".
+    let rawDisplayTitle = book.title || '';
     const pathText = book.file_path || '';
     const imgdirPathDisplay = pathText.replace(/[\\/]__folder__\.imgdir$/i, '');
     const pathDisplay = format === 'imgdir' ? imgdirPathDisplay : pathText;
@@ -33,7 +36,7 @@ export function renderVolumeGrid(orderedBooks, safeSeriesName, dbType = 'general
     const coverObjectPosition = coverAlignToObjectPosition(book.cover_align);
     const progressPercent = totalPages > 0 ? Math.min(100, Math.round((pagesRead / totalPages) * 100)) : 0;
     const isNotCompleted = !isCompletedValue;
-    const isDownloadable = ['epub', 'pdf', 'txt', 'text'].includes(format) && canDownloadFiles();
+    const isDownloadable = format !== 'imgdir' && canDownloadFiles();
     const completedLabel = i18n.t('detail.badge_completed') || '완독';
 
     volumesHtml += `

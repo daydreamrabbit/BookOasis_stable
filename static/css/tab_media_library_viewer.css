@@ -128,6 +128,18 @@
     display: block;
 }
 
+/* 이미지형 뷰어의 폭맞춤/높이맞춤 두 가지 크기 방식. */
+.comic-image-wrapper.fit-width,
+.comic-image-wrapper.fit-height { overflow: auto; }
+.comic-image-wrapper.fit-width .comic-page-pair {
+    align-items: flex-start;
+    min-height: 100%;
+    height: auto;
+}
+.comic-image-wrapper.fit-width .comic-page-pair {
+    /* 작은 이미지는 중앙, 화면보다 긴 이미지는 위에서부터 안전하게 스크롤한다. */
+    align-items: safe center;
+}
 .comic-page-img {
     max-width: 100%;
     max-height: 100%;
@@ -144,7 +156,9 @@
     width: 100%;
     height: 100%;
     position: relative;
-    gap: 0.25rem;
+    gap: clamp(0px, 0.5vw, 8px);
+    padding: clamp(0px, 0.5vw, 8px);
+    box-sizing: border-box;
 }
 
 .comic-page-pair.no-center-gap {
@@ -173,7 +187,8 @@
     top: auto;
     left: auto;
     transform: none;
-    max-width: 50% !important;
+    width: calc(50% - 4px) !important;
+    max-width: calc(50% - 4px) !important;
     max-height: 100% !important;
     width: auto !important;
     height: auto !important;
@@ -181,20 +196,23 @@
     margin: 0;
 }
 
-.comic-page-img-left {
-    margin-right: 0.25rem;
-}
+.comic-page-img-left,
+.comic-page-img-right { margin: 0; }
 
-.comic-page-img-right {
-    margin-left: 0.25rem;
-}
-
-/* 🌟 2장 보기 모드에서 전체 페이지가 홀수라 마지막 한 장만 남을 때: 확대 대신 나머지 반쪽을 빈 페이지로 표시 */
-.comic-page-blank-slot {
-    flex: 0 0 50%;
-    max-width: 50%;
+.comic-page-blank {
+    flex: 0 1 auto;
+    width: calc(50% - 4px);
+    max-width: calc(50% - 4px);
     height: 100%;
     visibility: hidden;
+    pointer-events: none;
+}
+
+.pdf-page-blank {
+    flex: 0 0 calc(50% - 5px);
+    height: 100%;
+    visibility: hidden;
+    pointer-events: none;
 }
 
 /* 너비에 맞추기 모드 (웹툰 등 세로 스크롤용) */
@@ -237,25 +255,44 @@
     margin: 0;
 }
 
+/* 페이지 모드 높이맞춤 + 1장 보기: 너비를 화면 안에 가두지 않고 높이 기준으로만 확대한다.
+   세로가 긴 페이지를 억지로 너비에 맞추면(기존 동작) 페이지가 과하게 길어져 스크롤이 필요해지고
+   글자가 작아 눈에 부담이 크다는 피드백에 따라, 높이맞춤을 선택하면 실제로 높이만 기준으로
+   확대해 화면을 채우도록 한다 - 너비가 화면보다 커지는 것(좌우가 화면 밖으로 가려짐)이 의도된
+   동작이며, input_controller.js의 롱프레스+드래그 팬 로직이 --comic-pan-x를 갱신해 가려진
+   좌우를 볼 수 있게 한다. .single-page 기본 규칙(위쪽, max-width:100% !important)보다 이겨야
+   하므로 선택자 특이성을 더 높게 잡는다. */
+.comic-image-wrapper.fit-height .comic-page-pair.single-page img {
+    max-width: none !important;
+    max-height: 100% !important;
+    width: auto !important;
+    height: 100% !important;
+    position: absolute !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(calc(-50% + var(--comic-pan-x, 0px)), -50%) !important;
+}
+
 /* 페이지 모드 너비맞춤 2장 보기: auto로 발동하되 50% 제한 */
 .comic-image-wrapper.fit-width .comic-page-pair img {
     position: relative;
     top: auto;
     left: auto;
     transform: none;
-    max-width: 50%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
+    flex: 0 0 calc(50% - 4px);
+    width: calc(50% - 4px) !important;
+    max-width: calc(50% - 4px) !important;
+    max-height: none !important;
+    height: auto !important;
     margin: 0;
 }
 
 /* 페이지 모드 single-page에서 너비맞춤이 실제로 동작하도록 강제 (특이성 우선순위 확보) */
 .comic-image-wrapper.fit-width .comic-page-pair.single-page img {
     width: 100% !important;
-    max-width: 100%;
-    max-height: none;
-    height: auto;
+    max-width: 100% !important;
+    max-height: none !important;
+    height: auto !important;
 }
 
 /* 만화 세로 연속 스크롤 모드 전용 스타일 */
@@ -276,8 +313,8 @@
     transform: none;
     display: block;
     margin: 0 auto;
-    /* 스크롤 모드에서는 CSS 변수 너비 적용 (기본값 800px, 슬라이더로 조절) */
-    width: var(--comic-scroll-width, 800px);
+    /* 별도 높이/너비 버튼 없이 현재 창 너비에 자동 대응한다. */
+    width: min(100%, 1100px);
     max-width: 100%;
     height: auto;
     max-height: none;
@@ -290,6 +327,56 @@
     /* Safari 이미지 길게 누름 메뉴 차단 */
     user-select: none;
 }
+
+/* 이미지 한 장으로만 구성된 EPUB spine 두 개는 실제 펼침면처럼 나란히 표시한다. */
+#media-viewer-modal #txt-content-area.epub-image-spread {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    column-count: initial !important;
+    column-width: auto !important;
+    column-gap: clamp(0px, 0.5vw, 8px) !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 100% !important;
+    overflow: hidden !important;
+    padding: clamp(0px, 0.5vw, 8px) !important;
+    box-sizing: border-box !important;
+}
+
+#media-viewer-modal #txt-content-area.epub-image-spread .epub-image-only-chunk {
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+#media-viewer-modal #txt-content-area.epub-image-spread .epub-image-only-chunk > * {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+#media-viewer-modal #txt-content-area.epub-image-spread .epub-image-only-chunk img {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    object-fit: contain !important;
+    margin: 0 !important;
+}
+
+#media-viewer-modal[data-reading-direction="rtl"] #txt-content-area.epub-image-spread > .epub-image-only-chunk:first-child { grid-column: 2; grid-row: 1; }
+#media-viewer-modal[data-reading-direction="rtl"] #txt-content-area.epub-image-spread > .epub-image-only-chunk:nth-child(2) { grid-column: 1; grid-row: 1; }
 
 /* 스크롤 모드 + 너비맞춤: 위 규칙으로 통합 (별도 오버라이드 불필요) */
 
@@ -425,21 +512,27 @@
     pointer-events: auto;
 }
 
+/* EPUB/TXT 본문 입력은 도구 모음(chrome)의 표시 상태와 관계없이 항상 콘텐츠로 전달한다. */
+#media-viewer-modal[data-viewer-format="epub"] #common-viewer-hotspot,
+#media-viewer-modal[data-viewer-format="txt"] #common-viewer-hotspot {
+    pointer-events: none !important;
+}
+
 .hotspot-zone {
     height: 100%;
     cursor: pointer;
 }
 
 .left-zone {
-    width: 30%;
+    width: 35%;
 }
 
 .center-zone {
-    width: 40%;
+    width: 30%;
 }
 
 .right-zone {
-    width: 30%;
+    width: 35%;
 }
 
 /* 📌 상/하 탭존 모드 (한손 파지 대응: 좌/우 대신 위/아래로 넘기기) */
@@ -454,12 +547,63 @@
 
 .comic-hotspot-layer.vertical .left-zone,
 .comic-hotspot-layer.vertical .right-zone {
-    height: 30%;
+    height: 35%;
 }
 
 .comic-hotspot-layer.vertical .center-zone {
-    height: 40%;
+    height: 30%;
 }
+
+/* 방향 변경 직후 Kavita처럼 실제 탭 범위를 잠시 보여준다. */
+.comic-hotspot-layer.tap-zone-preview { pointer-events: none !important; }
+.comic-hotspot-layer.tap-zone-preview .hotspot-zone {
+    opacity: 1 !important;
+    transition: opacity 120ms ease;
+}
+.comic-hotspot-layer.tap-zone-preview .left-zone,
+.comic-hotspot-layer.tap-zone-preview .right-zone {
+    background: rgba(40, 174, 234, .16);
+    outline: 1px solid rgba(40, 174, 234, .5);
+}
+.comic-hotspot-layer.tap-zone-preview .center-zone {
+    background: rgba(255, 255, 255, .055);
+    outline: 1px dashed rgba(255, 255, 255, .2);
+}
+.comic-hotspot-layer.tap-zone-preview .hotspot-zone > i { opacity: .78 !important; }
+
+.viewer-boundary-notice {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 10020;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 96px;
+    min-height: 86px;
+    padding: 14px 18px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 12px;
+    background: rgba(28, 28, 30, 0.9);
+    color: #fff;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    opacity: 0;
+    transform: translate(-50%, -44%) scale(0.96);
+    pointer-events: none;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.viewer-boundary-notice.visible {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.viewer-boundary-notice i { font-size: 1.7rem; }
+.viewer-boundary-notice span { font-size: 0.78rem; font-weight: 700; }
 
 /* ────────────────────────────────────────────────────────
    📌 Kavita 스타일 플로팅 조작 오버레이 메뉴
@@ -960,6 +1104,16 @@
     font-variant-numeric: tabular-nums;
 }
 
+.overlay-footer.scroll-progress-mode .seekbar-btn {
+    display: none;
+}
+
+.overlay-footer.scroll-progress-mode .seekbar-current-badge {
+    background: transparent;
+    border-color: transparent;
+    padding-top: 0;
+}
+
 
 @keyframes slideDown {
     from {
@@ -1112,7 +1266,20 @@
     border-radius: 6px;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
     background: rgba(255, 255, 255, 0.03);
-    content-visibility: auto;
+    /* 가로 페이지 밖 이미지도 처음부터 레이아웃에 포함해야 scrollWidth가 읽는 중
+       계속 늘어나며 챕터 경계를 조기에 통과하는 현상이 생기지 않는다. */
+    content-visibility: visible;
+}
+
+/* EPUB 원본의 흰 여백 가장자리에 공통 그림자가 겹치면 이미지 자체가 번진 것처럼 보인다. */
+#media-viewer-modal #txt-content-area .epub-chunk img,
+#media-viewer-modal #txt-content-area .epub-full-content img {
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
 
 /* TXT 페이지 넘김 모드 */
@@ -1138,6 +1305,7 @@
     /* Firefox */
     -ms-overflow-style: none;
     /* IE and Edge */
+    contain: paint;
 }
 
 #txt-scroll-wrapper.scroll-mode-page::-webkit-scrollbar {
@@ -1158,6 +1326,24 @@
     height: 100%;
     box-sizing: border-box;
     break-inside: avoid;
+    backface-visibility: hidden;
+}
+
+#media-viewer-modal .comic-image-wrapper,
+#media-viewer-modal #pdf-viewer-container {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    will-change: scroll-position;
+}
+
+/* 표지·속표지처럼 이미지 한 장만 든 EPUB 챕터는 100% 높이 래퍼가 Chromium의
+   multi-column 레이아웃에서 빈 다음 컬럼을 만들 수 있다. JS에서 부여하는 클래스와
+   구조 선택자를 함께 사용해, 프록시에 이전 하위 JS 모듈이 남아 있어도 첫 클릭이
+   빈 컬럼에 소비되지 않도록 한다. */
+#txt-scroll-wrapper.scroll-mode-page .epub-chunk.epub-image-only-chunk,
+#txt-scroll-wrapper.scroll-mode-page .epub-chunk:has(> img:only-child),
+#txt-scroll-wrapper.scroll-mode-page .epub-chunk:has(> div:only-child > img:only-child) {
+    height: auto !important;
 }
 
 #media-viewer-modal .txt-reader-theme-epaper {
@@ -1184,6 +1370,11 @@
     font-family: 'Nanum Myeongjo', serif;
 }
 
+#media-viewer-modal .txt-reader-theme-mint { background: #dceee9; color: #16332f; font-family: 'Nanum Myeongjo', serif; }
+#media-viewer-modal .txt-reader-theme-gray { background: #cfd2d6; color: #25282c; font-family: 'Nanum Myeongjo', serif; }
+#media-viewer-modal .txt-reader-theme-blue { background: #dce8f3; color: #17324a; font-family: 'Nanum Myeongjo', serif; }
+#media-viewer-modal .txt-reader-theme-navy { background: #17243a; color: #dce7f7; font-family: 'Nanum Myeongjo', serif; }
+
 #media-viewer-modal .txt-reader-theme-dark {
     background: #0f172a;
     color: #f1f5f9;
@@ -1202,6 +1393,102 @@
     line-height: 2.0;
     letter-spacing: 0.5px;
     box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* 상위 요소를 none으로 두면 Chromium이 자식의 user-select:text까지 막으므로 auto로 유지한다.
+   빈 영역 선택 시작은 annotation_ui.js의 실제 글자 좌표 검사로 차단한다. */
+#media-viewer-modal .viewer-body,
+#media-viewer-modal #txt-viewer-container,
+#media-viewer-modal #txt-scroll-wrapper,
+#media-viewer-modal #txt-content-area {
+    -webkit-user-select: auto !important;
+    user-select: auto !important;
+}
+
+#media-viewer-modal #txt-content-area .txt-chunk,
+#media-viewer-modal #txt-content-area .txt-scroll-chunk {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+}
+
+#media-viewer-modal img,
+#media-viewer-modal svg,
+#media-viewer-modal canvas,
+#media-viewer-modal video {
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    -webkit-user-drag: none;
+}
+
+.viewer-selection-menu {
+    position: fixed;
+    z-index: 20070;
+    display: none;
+    width: 230px;
+    overflow: hidden;
+    border: 1px solid rgba(120, 120, 120, .28);
+    border-radius: 8px;
+    background: var(--viewer-panel-bg, rgba(255, 255, 255, .98));
+    color: var(--viewer-theme-text, #222);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+}
+
+.viewer-selection-colors {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--viewer-panel-border, rgba(100, 100, 100, .18));
+}
+
+.viewer-selection-colors button {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 2px solid rgba(255, 255, 255, .72);
+    border-radius: 50%;
+    outline: 1px solid rgba(50, 50, 50, .14);
+    background: var(--selection-color);
+    cursor: pointer;
+}
+
+.viewer-selection-colors button:hover,
+.viewer-selection-colors button:focus-visible {
+    transform: scale(1.1);
+    outline: 2px solid #22a7ef;
+}
+
+.viewer-selection-action {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 13px 16px;
+    border: 0;
+    border-bottom: 1px solid var(--viewer-panel-border, rgba(100, 100, 100, .13));
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.viewer-selection-action:last-child { border-bottom: 0; }
+.viewer-selection-action:hover { background: var(--viewer-panel-soft, rgba(120, 120, 120, .12)); }
+.viewer-selection-action i { width: 18px; color: var(--viewer-panel-muted, #777); text-align: center; }
+
+#txt-scroll-wrapper:not(.scroll-mode-page) .txt-full-content,
+#txt-scroll-wrapper:not(.scroll-mode-page) .txt-scroll-chunk,
+#txt-scroll-wrapper:not(.scroll-mode-page) .txt-scroll-chunk > * {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 #txt-scroll-wrapper:not(.scroll-mode-page) {
@@ -1281,10 +1568,10 @@
     right: 50px;
     width: 380px;
     max-height: 70vh;
-    background: rgba(var(--app-panel-rgb), 0.78);
+    background: var(--app-bg-card);
     backdrop-filter: blur(12px) saturate(160%);
     -webkit-backdrop-filter: blur(12px) saturate(160%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--app-border);
     border-radius: 12px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     z-index: 999;
@@ -1308,8 +1595,8 @@
 
 .filter-modal-header {
     padding: 0.8rem 1rem;
-    background: rgba(var(--app-panel-rgb), 0.5);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background: var(--app-bg-card-hover);
+    border-bottom: 1px solid var(--app-border-light);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1345,7 +1632,7 @@
 
 .btn-filter-icon:hover {
     color: var(--app-text-primary);
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--app-accent-soft);
 }
 
 #btn-filter-close:hover {
@@ -1364,8 +1651,8 @@
 }
 
 .selected-chips-container {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px dashed rgba(255, 255, 255, 0.08);
+    background: var(--app-input-bg);
+    border: 1px dashed var(--app-border);
     border-radius: 8px;
     padding: 0.6rem;
     max-height: 160px;
@@ -1380,9 +1667,9 @@
 
 .filter-chip-selected {
     font-size: 0.75rem;
-    background: rgba(168, 85, 247, 0.2);
-    border: 1px solid rgba(168, 85, 247, 0.4);
-    color: #e9d5ff;
+    background: var(--app-accent-soft);
+    border: 1px solid var(--app-accent);
+    color: var(--app-accent-hover);
     padding: 0.2rem 0.5rem;
     border-radius: 12px;
     cursor: pointer;
@@ -1425,8 +1712,8 @@
 
 #filter-search-input {
     width: 100%;
-    background: rgba(var(--app-panel-rgb), 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--app-input-bg);
+    border: 1px solid var(--app-border);
     border-radius: 6px;
     padding: 0.45rem 0.8rem 0.45rem 2rem;
     color: var(--app-text-primary);
@@ -1438,12 +1725,12 @@
 
 #filter-search-input:focus {
     border-color: var(--app-accent);
-    background: rgba(var(--app-panel-rgb), 0.6);
+    background: var(--app-bg-card);
 }
 
 .filter-tabs {
     display: flex;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid var(--app-border-light);
 }
 
 .filter-tab {
@@ -1481,8 +1768,8 @@
 
 .filter-chip-item {
     font-size: 0.78rem;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--app-input-bg);
+    border: 1px solid var(--app-border);
     color: var(--app-text-muted);
     padding: 0.25rem 0.6rem;
     border-radius: 14px;
@@ -1492,9 +1779,9 @@
 }
 
 .filter-chip-item:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--app-bg-card-hover);
     color: var(--app-text-primary);
-    border-color: rgba(255, 255, 255, 0.15);
+    border-color: var(--app-accent);
 }
 
 .filter-chip-item.active {
@@ -1507,8 +1794,8 @@
 
 .filter-modal-footer {
     padding: 0.8rem 1rem;
-    background: rgba(var(--app-panel-rgb), 0.3);
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background: var(--app-bg-card-hover);
+    border-top: 1px solid var(--app-border-light);
     display: flex;
     justify-content: flex-end;
 }
@@ -1531,11 +1818,13 @@
     box-shadow: 0 0 12px color-mix(in srgb, var(--app-accent) 50%, transparent);
 }
 
-/* 뷰어 전용 얇고 세련된 커스텀 스크롤바 디자인 */
+/* 뷰어 본문 스크롤바는 콘텐츠 위에 손잡이가 겹치지 않도록 감춘다.
+   휠·터치·키보드 스크롤 기능은 그대로 유지된다. */
 #media-viewer-modal #epub-viewer-container::-webkit-scrollbar,
 #media-viewer-modal #txt-scroll-wrapper::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    display: none;
+    width: 0;
+    height: 0;
 }
 
 #media-viewer-modal #epub-viewer-container::-webkit-scrollbar-track,
@@ -1558,8 +1847,8 @@
 /* Firefox 대응 */
 #media-viewer-modal #epub-viewer-container,
 #media-viewer-modal #txt-scroll-wrapper {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(168, 85, 247, 0.4) rgba(var(--app-panel-rgb), 0.3);
+    scrollbar-width: none;
+    -ms-overflow-style: none;
 }
 
 /* 모바일 및 터치 디바이스 가독성 최적화 (가로폭 768px 이하) */
@@ -1572,31 +1861,186 @@
     }
 }
 
-/* 뷰어 내 여백 상세 설정 퀵 패널 */
-.viewer-padding-panel {
-    position: absolute;
-    bottom: 120px;
-    right: 30px;
-    width: 320px;
-    background: rgba(var(--app-panel-rgb), 0.85);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 12px;
-    padding: 1.2rem;
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+@media (max-width: 480px) {
+    .overlay-header {
+        padding: 0.45rem 3rem 0.45rem 0.45rem;
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+    }
+
+    .overlay-tab-nav {
+        min-width: 0;
+        width: 100%;
+        flex: 1 1 auto;
+        flex-wrap: nowrap;
+        gap: 3px;
+    }
+
+    .overlay-tab-btn {
+        min-width: 0;
+        flex: 1 1 0;
+        justify-content: center;
+        gap: 0.2rem;
+        padding: 0.35rem 0.2rem;
+        font-size: 0.7rem;
+        white-space: nowrap;
+    }
+
+    .overlay-close-btn {
+        right: 0.5rem;
+        padding: 0.3rem 0.6rem;
+    }
+}
+
+@media (max-width: 768px) {
+    #annotation-mode-toggle { display: none !important; }
+}
+
+/* 뷰어 설정은 화면 위아래에 흩어진 팝업 대신 하나의 하단 시트로 표시한다. */
+.comic-overlay-menu {
+    background: rgba(3, 7, 18, 0.56);
+    padding: 12px;
+    box-sizing: border-box;
+}
+
+.comic-overlay-menu .overlay-header,
+.comic-overlay-menu .overlay-controls-panel,
+.comic-overlay-menu .overlay-footer {
+    width: min(680px, calc(100vw - 24px));
+    max-width: 680px;
+    align-self: center;
+    box-sizing: border-box;
+    background: rgba(var(--app-panel-rgb), 0.97);
+    border-color: var(--app-border, rgba(255, 255, 255, 0.12));
+}
+
+.comic-overlay-menu .overlay-header {
+    margin-top: auto;
+    justify-content: flex-start;
+    border: 1px solid var(--app-border, rgba(255, 255, 255, 0.12));
+    border-bottom: 0;
+    border-radius: 16px 16px 0 0;
+    padding: 10px 52px 8px 10px;
+}
+
+.comic-overlay-menu .overlay-controls-panel {
+    align-self: center;
+    border: 1px solid var(--app-border, rgba(255, 255, 255, 0.12));
+    border-top: 0;
+    border-bottom: 0;
+    border-radius: 0;
+    padding: 12px;
+    box-shadow: none;
+    max-height: min(44dvh, 360px);
+    overflow-y: auto;
+}
+
+.comic-overlay-menu .overlay-footer {
+    margin-top: 0;
+    border: 1px solid var(--app-border, rgba(255, 255, 255, 0.12));
+    border-top: 1px solid var(--app-border, rgba(255, 255, 255, 0.12));
+    border-radius: 0 0 16px 16px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+}
+
+.overlay-tab-nav {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 6px;
+}
+
+.overlay-tab-btn,
+.btn-overlay-fit,
+.btn-overlay-action {
+    min-height: 38px;
+    justify-content: center;
+    border: 1px solid var(--app-border, rgba(255, 255, 255, 0.12));
+    border-radius: 9px;
+    background: var(--app-input-bg, rgba(255, 255, 255, 0.05));
+    box-shadow: none;
+}
+
+.overlay-tab-btn.active,
+.btn-overlay-fit.active {
+    background: color-mix(in srgb, var(--app-accent) 22%, var(--app-input-bg, #111827));
+    color: var(--app-text-primary);
+    border-color: var(--app-accent);
+    box-shadow: none;
+}
+
+.overlay-controls-row {
+    gap: 8px;
+}
+
+.viewer-control-label {
+    flex: 0 0 100%;
     color: var(--app-text-muted);
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+}
+
+.overlay-txt-group {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.viewer-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    color: var(--app-text-muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.viewer-field .overlay-select {
+    width: 100%;
+    min-height: 38px;
+    border-radius: 9px;
+}
+
+#epub-toc-btn {
+    top: calc(14px + env(safe-area-inset-top, 0px)) !important;
+    left: auto !important;
+    right: calc(14px + env(safe-area-inset-right, 0px)) !important;
+    width: auto !important;
+    min-width: 72px;
+    height: 40px !important;
+    padding: 0 14px;
+    gap: 7px;
+    border-radius: 10px !important;
+    background: rgba(var(--app-panel-rgb), 0.96) !important;
+}
+
+.epub-toc-container ul {
+    font-size: 0.82rem !important;
+}
+
+.epub-toc-container li {
+    margin-bottom: 0 !important;
+    line-height: 1.35 !important;
+}
+
+.epub-toc-page-number {
+    color: #777;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
 }
 
 @media (max-width: 480px) {
-    .viewer-padding-panel {
-        left: 10px;
-        right: 10px;
-        bottom: 110px;
-        width: auto;
-        padding: 1rem;
+    .comic-overlay-menu { padding: 6px; }
+    .comic-overlay-menu .overlay-header,
+    .comic-overlay-menu .overlay-controls-panel,
+    .comic-overlay-menu .overlay-footer {
+        width: calc(100vw - 12px);
     }
+    .overlay-tab-nav { gap: 4px; }
+    .overlay-tab-btn { font-size: 0.72rem; }
+    .comic-overlay-menu .overlay-controls-panel { max-height: 48dvh; }
 }
 
 /* 🌟 뷰어 설정 커스텀 토글 스위치 스타일 */
@@ -1635,4 +2079,539 @@ input:checked + .toggle-switch-slider::before {
     transform: translateX(20px);
     background-color: #ffffff;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+/* ── RIDI형 공통 뷰어 크롬 ─────────────────────────────────────────────── */
+#media-viewer-modal .ridi-viewer-toolbar {
+    position: fixed;
+    left: 0;
+    width: 100%;
+    z-index: 10004;
+    box-sizing: border-box;
+    color: var(--viewer-theme-text, #303030);
+    background: var(--viewer-panel-bg, rgba(250, 250, 250, 0.96));
+    border-color: var(--viewer-panel-border, #dedede);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    transition: opacity 180ms ease, transform 180ms ease;
+}
+
+#media-viewer-modal .ridi-viewer-toolbar-top {
+    top: 0;
+    display: flex !important;
+    height: 64px;
+    padding: 0 18px;
+    gap: 14px;
+    border-bottom: 1px solid var(--viewer-panel-border, #dedede);
+}
+
+#media-viewer-modal .ridi-viewer-toolbar-bottom {
+    bottom: 0;
+    display: flex;
+    height: 62px;
+    margin: 0;
+    padding: 8px 20px calc(8px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--viewer-panel-border, #dedede);
+    animation: none;
+}
+
+@media (max-width: 768px) {
+    /* iOS 홈 인디케이터/브라우저 하단 영역과 겹치지 않도록 게이지 바 전체를
+       safe-area 위로 올린다. 내부 padding만 늘리면 실제 조작 영역은 아래에 남는다. */
+    #media-viewer-modal .ridi-viewer-toolbar-bottom {
+        bottom: env(safe-area-inset-bottom, 0px);
+        padding-bottom: 8px;
+    }
+}
+
+#media-viewer-modal.viewer-chrome-hidden .ridi-viewer-toolbar {
+    opacity: 0;
+    pointer-events: none;
+}
+
+#media-viewer-modal.viewer-chrome-hidden .ridi-viewer-toolbar-top { transform: translateY(-100%); }
+#media-viewer-modal.viewer-chrome-hidden .ridi-viewer-toolbar-bottom { transform: translateY(100%); }
+
+.ridi-viewer-back,
+.ridi-viewer-settings {
+    flex: 0 0 auto;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    color: var(--viewer-theme-text, #3d3d3d);
+    background: transparent;
+    cursor: pointer;
+    font-size: 1rem;
+}
+
+.ridi-viewer-back:hover,
+.ridi-viewer-settings:hover,
+#media-viewer-modal .btn-fullscreen:hover {
+    color: var(--viewer-theme-text, #111);
+    background: var(--viewer-panel-soft, rgba(0, 0, 0, 0.06));
+    border-color: transparent;
+}
+
+#media-viewer-modal .viewer-title {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    margin: 0;
+    color: var(--viewer-theme-text, #303030);
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+.ridi-viewer-mode-group {
+    position: static;
+    flex-shrink: 0;
+    display: flex;
+    height: 34px;
+    overflow: hidden;
+    border: 1px solid var(--viewer-panel-border, #d8d8d8);
+    border-radius: 5px;
+    transform: none;
+}
+
+.ridi-viewer-mode-group button {
+    min-width: 64px;
+    padding: 0 11px;
+    border: 0;
+    border-right: 1px solid var(--viewer-panel-border, #dedede);
+    color: var(--viewer-panel-muted, #8a8a8a);
+    background: transparent;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.ridi-viewer-mode-group button:last-child { border-right: 0; }
+.ridi-viewer-mode-group button:hover { color: var(--viewer-theme-text, #303030); background: var(--viewer-panel-soft, #f0f0f0); }
+.ridi-viewer-mode-group button.is-active { color: var(--viewer-theme-text, #202020); background: var(--viewer-panel-soft, #dedede); font-weight: 700; }
+
+#media-viewer-modal .viewer-controls { gap: 4px; }
+#media-viewer-modal .viewer-controls > .txt-controls-panel,
+#media-viewer-modal .viewer-controls > .comic-fit-panel { display: none !important; }
+#media-viewer-modal .btn-fullscreen {
+    width: 38px;
+    height: 38px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    color: var(--viewer-theme-text, #3d3d3d);
+}
+
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-nav-row {
+    max-width: none;
+}
+
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-page-num,
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-current-badge {
+    color: var(--viewer-panel-muted, #777);
+}
+
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-btn {
+    color: var(--viewer-theme-text, #404040);
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-btn:hover { background: var(--viewer-panel-soft, rgba(0, 0, 0, 0.06)); }
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-input { accent-color: #1e9eff; }
+
+.viewer-legacy-mode-controls[hidden] { display: none !important; }
+
+@media (max-width: 760px) {
+    #media-viewer-modal .ridi-viewer-toolbar-top {
+        height: 56px;
+        padding: 0 8px;
+        gap: 6px;
+    }
+    #media-viewer-modal .viewer-title { font-size: 0.78rem; }
+    .ridi-viewer-mode-group { position: static; height: 32px; margin-left: auto; transform: none; }
+    .ridi-viewer-mode-group button { min-width: 47px; padding: 0 6px; font-size: 0.69rem; }
+    #media-viewer-modal .ridi-viewer-toolbar-bottom { height: 58px; padding-inline: 8px; }
+    #media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-current-badge { display: none; }
+}
+
+@media (max-width: 620px) {
+    #media-viewer-modal .viewer-title { display: none; }
+}
+
+/* 내장 TTS는 별도 페이지로 이동하지 않고 현재 텍스트 뷰어 위에 재생 도크만 표시한다. */
+#media-viewer-modal .viewer-tts-host {
+    position: fixed;
+    z-index: 10020;
+    left: 0;
+    bottom: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+    overflow: hidden;
+    background: transparent;
+    transition: none;
+}
+#media-viewer-modal .viewer-tts-host iframe {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: transparent;
+}
+#media-viewer-modal #viewer-tts-settings-panel[hidden] { display: none !important; }
+#media-viewer-modal #viewer-tts-settings-panel {
+    position: fixed;
+    z-index: 10021;
+    top: calc(72px + env(safe-area-inset-top, 0px));
+    left: auto;
+    right: 16px;
+    bottom: auto;
+    width: min(420px, calc(100vw - 32px));
+    max-height: min(520px, calc(100dvh - 310px));
+    border: 1px solid var(--viewer-panel-border, rgba(255,255,255,.14));
+    border-radius: 10px;
+    background: var(--viewer-panel-bg);
+    box-shadow: 0 16px 46px rgba(0,0,0,.45);
+    transition: none;
+}
+@media (max-width: 760px) {
+    #media-viewer-modal #viewer-tts-settings-panel {
+        top: auto;
+        bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+        width: calc(100vw - 32px);
+        max-height: min(48dvh, calc(100dvh - 280px));
+    }
+}
+#media-viewer-modal .ridi-viewer-tools #btn-viewer-tts-settings {
+    color: var(--viewer-toolbar-ink, inherit);
+}
+#media-viewer-modal .ridi-viewer-tools #btn-viewer-tts-settings[style*="display: none"] {
+    display: none !important;
+}
+::highlight(bookoasis-tts-current) {
+    background: rgba(255, 194, 58, .62);
+    color: inherit;
+    text-decoration: underline 2px rgba(255, 194, 58, .95);
+    text-underline-offset: .15em;
+}
+
+@media (max-width: 620px) {
+    #media-viewer-modal .ridi-viewer-tools #btn-viewer-tts-settings span { display: none; }
+}
+
+/* 설정 시트는 고정 하단 진행 막대 위에 붙는다. 진행 막대를 오버레이 밖으로
+   이동한 뒤에도 과거 margin-top:auto 규칙이 시트를 화면 아래로 밀지 않게 한다. */
+#comic-overlay-menu {
+    justify-content: flex-end;
+    padding-bottom: calc(74px + env(safe-area-inset-bottom, 0px));
+}
+
+#comic-overlay-menu .overlay-header { margin-top: 0; }
+#comic-overlay-menu .overlay-controls-panel {
+    border-bottom: 1px solid var(--app-border, rgba(255, 255, 255, 0.12));
+    border-radius: 0 0 16px 16px;
+}
+
+@media (max-width: 760px) {
+    #comic-overlay-menu { padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ── RIDI식 뷰어 도구 재구성 ─────────────────────────────────────────── */
+.ridi-viewer-mode-group button {
+    display: grid;
+    place-items: center;
+    min-width: 44px;
+    padding: 0 8px;
+}
+
+.viewer-mode-icon { display: inline-flex; align-items: center; justify-content: center; height: 21px; color: currentColor; }
+.viewer-mode-icon i { display: grid; place-items: center; width: 14px; height: 19px; border: 1.5px solid currentColor; font: 700 8px/1 sans-serif; font-style: normal; }
+.viewer-mode-icon--spread i + i { margin-left: -1px; }
+.viewer-mode-icon--scroll i { width: 24px; border: 0; font-size: 14px; }
+
+.ridi-viewer-tools {
+    display: flex;
+    flex-shrink: 0;
+    align-items: stretch;
+    align-self: stretch;
+    gap: 2px;
+    margin-left: auto;
+}
+.ridi-viewer-tools button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 58px;
+    padding: 5px 7px;
+    border: 0;
+    background: transparent;
+    color: var(--viewer-panel-muted, #555);
+    cursor: pointer;
+    font-size: 11px;
+}
+.ridi-viewer-tools button i { font-size: 17px; }
+.ridi-viewer-tools button:hover { color: var(--viewer-theme-text, #111); background: var(--viewer-panel-soft, rgba(0, 0, 0, .055)); }
+.ridi-viewer-tools button.is-active { color: #1594dc; }
+.ridi-viewer-tools button.is-active i { font-weight: 900; }
+
+.hotspot-zone { position: relative; display: flex; align-items: center; }
+.hotspot-zone > i {
+    position: absolute;
+    top: 50%;
+    padding: 16px 11px;
+    border-radius: 6px;
+    background: rgba(20, 20, 20, .28);
+    color: rgba(255, 255, 255, .82);
+    font-size: 25px;
+    opacity: 0;
+    transform: translateY(-50%);
+    transition: opacity 150ms ease, background 150ms ease;
+    pointer-events: none;
+}
+.left-zone > i { left: 18px; }
+.right-zone { justify-content: flex-end; }
+.right-zone > i { right: 18px; }
+.hotspot-zone:hover > i { opacity: .7; }
+.comic-hotspot-layer.vertical .hotspot-zone { justify-content: center; }
+.comic-hotspot-layer.vertical .left-zone > i { left: 50%; top: 18px; transform: translateX(-50%) rotate(90deg); }
+.comic-hotspot-layer.vertical .right-zone > i { right: auto; left: 50%; top: auto; bottom: 18px; transform: translateX(-50%) rotate(90deg); }
+
+#media-viewer-modal .ridi-viewer-toolbar-bottom { padding-inline: 12px; }
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-nav-row { gap: 8px; width: 100%; }
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-track-wrap { gap: 12px; }
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-page-num {
+    position: absolute;
+    top: 18px;
+    left: 0;
+    min-width: 68px;
+    color: #595959;
+    font-size: 12px;
+    text-align: left;
+}
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-track-wrap {
+    position: relative;
+    display: block;
+    padding-bottom: 16px;
+}
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-slider-container { width: 100%; }
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-input {
+    display: block !important;
+    height: 28px;
+    border: 0;
+    background: linear-gradient(to right, #159fe7 0 var(--seek-progress, 0%), #8f9aa2 var(--seek-progress, 0%) 100%);
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 100% 5px;
+    accent-color: #22a7ef;
+    touch-action: none;
+    direction: ltr;
+}
+#media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-btn { display: flex !important; }
+.viewer-page-info-source { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+
+/* 툴팁은 현재 위치 표시이므로 조작 중뿐 아니라 도구 모음이 열린 동안 계속 표시한다. */
+#media-viewer-modal .seekbar-tooltip { display: block; }
+
+/* 2←1 텍스트 펼침은 RTL 컬럼 흐름을 사용한다. scaleX 반전은 시각적으로만 뒤집고
+   overflow 폭을 뷰포트 1개로 축소해 매번 다음 챕터로 건너뛰는 원인이었다. */
+#media-viewer-modal[data-display-mode="two-one"] #txt-scroll-wrapper.scroll-mode-page,
+#media-viewer-modal[data-display-mode="two-one"] #txt-content-area:not(.epub-image-spread) {
+    direction: rtl;
+}
+#media-viewer-modal[data-display-mode="two-one"] #txt-content-area:not(.epub-image-spread) > .txt-chunk {
+    direction: ltr;
+}
+
+/* 기존 탭형 설정은 DOM 호환성을 위해 유지하되 사용자에게는 새 보기 설정만 노출한다. */
+#comic-overlay-menu > .overlay-header,
+#comic-overlay-menu > .overlay-controls-panel { display: none !important; }
+#comic-overlay-menu {
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 0 22px calc(76px + env(safe-area-inset-bottom, 0px));
+    background: rgba(0, 0, 0, .18);
+}
+.ridi-view-settings {
+    position: absolute;
+    top: calc(72px + env(safe-area-inset-top, 0px));
+    right: 16px;
+    width: min(420px, calc(100vw - 32px));
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 10px;
+    max-height: calc(100dvh - 150px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--viewer-panel-bg, rgba(30, 30, 30, .97));
+    color: var(--viewer-theme-text, #f5f5f5);
+    box-shadow: 0 16px 46px rgba(0,0,0,.45);
+}
+.ridi-view-settings > header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--viewer-panel-border, rgba(255,255,255,.1)); }
+.ridi-view-settings > header button { width: 30px; height: 30px; border: 0; border-radius: 5px; background: transparent; color: var(--viewer-theme-text, #ddd); cursor: pointer; }
+.ridi-theme-options { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--viewer-panel-border, rgba(255,255,255,.1)); }
+.ridi-setting-group-label { flex: 0 0 100%; color: var(--viewer-theme-text, #f5f5f5); font-size: 14px; }
+.ridi-theme-options button { position: relative; width: 34px; height: 34px; border: 2px solid color-mix(in srgb, var(--viewer-theme-text, #fff) 30%, transparent); border-radius: 50%; cursor: pointer; }
+.ridi-theme-options button.is-active::after { position: absolute; inset: -5px; border: 2px solid #28aeea; border-radius: inherit; content: ''; }
+.ridi-theme-options button[data-value="epaper"] { background: linear-gradient(135deg, #fff 50%, #111 50%); }
+.ridi-theme-options button[data-value="white"] { background: #fff; }
+.ridi-theme-options button[data-value="sepia"] { background: #eadfc9; }
+.ridi-theme-options button[data-value="light"] { background: #e2e8f0; }
+.ridi-theme-options button[data-value="mint"] { background: #b9d9d5; }
+.ridi-theme-options button[data-value="gray"] { background: #9fa4aa; }
+.ridi-theme-options button[data-value="blue"] { background: #9fc5df; }
+.ridi-theme-options button[data-value="navy"] { background: #17243a; }
+.ridi-theme-options button[data-value="dark"] { background: #343434; }
+.ridi-theme-options button[data-value="black"] { background: #090909; }
+.ridi-setting-row { display: flex; align-items: center; justify-content: space-between; min-height: 54px; padding: 7px 16px; border-bottom: 1px solid var(--viewer-panel-border, rgba(255,255,255,.08)); }
+.ridi-setting-row > span { display: flex; align-items: center; gap: 10px; }
+.ridi-setting-row > .ridi-step-control { display: grid; grid-template-columns: 42px 68px 42px; overflow: hidden; border: 1px solid #36aeea; border-radius: 22px; }
+.ridi-setting-row button { height: 34px; border: 0; background: transparent; color: #54c1f4; font-size: 21px; cursor: pointer; }
+.ridi-setting-row output { display: grid; place-items: center; border-inline: 1px solid #36aeea; color: var(--viewer-theme-text, #f5f5f5); font-size: 12px; font-weight: 700; }
+.ridi-image-settings[hidden], .ridi-page-direction-settings[hidden], .ridi-text-setting[hidden] { display: none !important; }
+.ridi-image-setting-row { padding: 13px 16px; border-bottom: 1px solid var(--viewer-panel-border, rgba(255,255,255,.08)); }
+.ridi-image-setting-row > span { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; font-weight: 700; }
+.ridi-choice-grid { display: grid; gap: 7px; }
+.ridi-fit-choices, .ridi-direction-choices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ridi-choice-grid button { min-height: 38px; border: 1px solid var(--viewer-panel-border, #555); border-radius: 6px; background: var(--viewer-panel-soft, #292929); color: var(--viewer-theme-text, #f5f5f5); cursor: pointer; }
+.ridi-choice-grid button.is-active { border-color: #28aeea; background: color-mix(in srgb, #28aeea 16%, var(--viewer-panel-soft, #292929)); color: #1594dc; font-weight: 700; }
+.ridi-font-row select { width: min(210px, 56vw); padding: 8px 32px 8px 10px; border: 1px solid var(--viewer-panel-border, #555); border-radius: 6px; background: var(--viewer-panel-soft, #292929); color: var(--viewer-theme-text, #f5f5f5); }
+.ridi-spread-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 16px; }
+.ridi-spread-settings[hidden] { display: none !important; }
+.ridi-spread-settings button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; border: 1px solid var(--viewer-panel-border, #555); border-radius: 7px; background: var(--viewer-panel-soft, #292929); color: var(--viewer-theme-text, #f5f5f5); cursor: pointer; }
+.ridi-spread-settings button.is-active { border-color: #28aeea; color: #1594dc; }
+
+@media (max-width: 980px) {
+    #media-viewer-modal .viewer-title { display: none; }
+    .ridi-viewer-mode-group { position: static; margin-left: 4px; transform: none; }
+    .ridi-viewer-tools button { min-width: 48px; }
+    .ridi-viewer-tools button span { display: none; }
+}
+
+@media (max-width: 620px) {
+    #media-viewer-modal .ridi-viewer-toolbar-top { height: 48px; padding-inline: 3px; gap: 1px; }
+    .ridi-viewer-back { width: 28px; height: 28px; flex-shrink: 0; }
+    .ridi-viewer-mode-group { margin-left: 0; }
+    .ridi-viewer-mode-group { height: 28px; }
+    .ridi-viewer-mode-group button { min-width: 27px; padding-inline: 2px; }
+    .viewer-mode-icon { height: 18px; }
+    .viewer-mode-icon i { width: 12px; height: 16px; font-size: 7px; }
+    .ridi-viewer-tools { gap: 0; min-width: 0; flex-shrink: 1; overflow-x: auto; }
+    .ridi-viewer-tools button { min-width: 28px; flex-shrink: 0; padding-inline: 1px; }
+    .ridi-viewer-tools button i { font-size: 13px; }
+    #media-viewer-modal .viewer-controls { display: none; }
+    #comic-overlay-menu { padding-inline: 8px; }
+    .ridi-view-settings { top: auto; right: 16px; bottom: calc(68px + env(safe-area-inset-bottom, 0px)); width: calc(100vw - 32px); max-height: min(48dvh, 430px); touch-action: pan-y; }
+    .ridi-theme-options { gap: 8px; padding: 11px 12px; }
+    .ridi-theme-options button { width: 30px; height: 30px; }
+    .ridi-setting-row { min-height: 48px; padding-inline: 12px; }
+    .ridi-setting-row > .ridi-step-control { grid-template-columns: 38px 60px 38px; }
+    .ridi-spread-settings { padding-inline: 12px; }
+    #ridi-image-settings [data-comic-fit-mode="original"] { display: none !important; }
+    #media-viewer-modal[data-display-mode="one-two"] #ridi-image-settings,
+    #media-viewer-modal[data-display-mode="two-one"] #ridi-image-settings { display: none !important; }
+}
+
+#epub-toc-container {
+    top: 64px !important;
+    bottom: 62px !important;
+    height: auto !important;
+    width: min(380px, 92vw) !important;
+    padding: 16px !important;
+    background: var(--viewer-panel-bg, rgba(250, 250, 250, .98)) !important;
+    color: var(--viewer-theme-text, #303030) !important;
+    border-left: 1px solid var(--viewer-panel-border, #ddd) !important;
+    box-shadow: -12px 0 34px rgba(0,0,0,.18) !important;
+}
+.viewer-note-filters { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 14px; border-bottom: 1px solid var(--viewer-panel-border, #ddd); }
+.viewer-note-filters button { padding: 10px 3px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--viewer-panel-muted, #777); cursor: pointer; }
+.viewer-note-filters button.active { border-bottom-color: var(--viewer-theme-text, #333); color: var(--viewer-theme-text, #222); font-weight: 700; }
+.viewer-note-list { display: flex; flex-direction: column; gap: 8px; }
+.viewer-note-card { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; width: 100%; padding: 12px; border: 1px solid var(--viewer-panel-border, #e1e1e1); border-radius: 7px; background: var(--viewer-panel-soft, #fff); color: var(--viewer-theme-text, #333); text-align: left; cursor: pointer; }
+.viewer-note-card > i { margin-top: 2px; color: #e5b800; }
+.viewer-note-card > span { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.viewer-note-card strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-note-card small { color: var(--viewer-panel-muted, #999); }
+
+.viewer-side-panel {
+    position: fixed;
+    z-index: 10010;
+    top: 64px;
+    right: 0;
+    bottom: 62px;
+    width: min(380px, 92vw);
+    padding: 16px;
+    box-sizing: border-box;
+    border-left: 1px solid var(--viewer-panel-border, #ddd);
+    background: var(--viewer-panel-bg, rgba(250,250,250,.98));
+    color: var(--viewer-theme-text, #303030);
+    box-shadow: -12px 0 34px rgba(0,0,0,.18);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+}
+.viewer-side-panel > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.viewer-side-panel > header button { width: 32px; height: 32px; border: 0; background: transparent; color: var(--viewer-panel-muted, #555); cursor: pointer; }
+.viewer-search-field { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }
+.viewer-search-field input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #222; }
+.viewer-search-results { display: flex; flex-direction: column; gap: 7px; max-height: calc(100% - 92px); margin-top: 14px; overflow-y: auto; }
+.viewer-search-result { display: flex; flex-direction: column; gap: 5px; padding: 11px; border: 1px solid #e0e0e0; border-radius: 6px; background: #fff; color: #333; text-align: left; cursor: pointer; }
+.viewer-search-result small, .viewer-panel-empty { color: #888; }
+
+@media (max-width: 760px) {
+    #epub-toc-container,
+    .viewer-side-panel {
+        top: 52px !important;
+        bottom: auto !important;
+        max-height: min(68dvh, 560px) !important;
+        height: auto !important;
+        width: calc(100vw - 24px) !important;
+        margin-right: 12px;
+        border: 1px solid var(--viewer-panel-border, #ddd) !important;
+        border-radius: 10px;
+        box-shadow: 0 8px 28px rgba(0, 0, 0, .16) !important;
+    }
+
+    /* 터치 기기에서는 hover 상태가 탭 뒤에도 남아 양옆이 어둡게 보일 수 있다. */
+    .hotspot-zone:hover > i { opacity: 0; }
+    .comic-hotspot-layer:not(.tap-zone-preview) .hotspot-zone { background: transparent !important; }
+
+    /* 페이지 가장자리에는 별도의 그림자나 필터를 씌우지 않는다. */
+    #media-viewer-modal .comic-image-wrapper,
+    #media-viewer-modal #pdf-viewer-container,
+    #media-viewer-modal #txt-viewer-container,
+    #media-viewer-modal .comic-page-pair img,
+    #media-viewer-modal #pdf-render-area canvas {
+        box-shadow: none !important;
+        filter: none !important;
+    }
+
+    /* 모바일 뷰어 양옆에 합성 레이어 그림자/필터가 남지 않도록 콘텐츠 계층도
+       명시적으로 평탄화한다. */
+    #media-viewer-modal,
+    #media-viewer-modal .viewer-body,
+    #media-viewer-modal .viewer-pane,
+    #media-viewer-modal .epub-area,
+    #media-viewer-modal .pdf-area,
+    #media-viewer-modal #txt-scroll-wrapper {
+        box-shadow: none !important;
+        filter: none !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+}
+
+@media (max-width: 620px) {
+    .viewer-selection-menu {
+        width: min(230px, calc(100vw - 24px));
+        max-height: min(46dvh, 320px);
+        overflow-y: auto;
+        touch-action: manipulation;
+    }
 }

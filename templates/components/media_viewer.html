@@ -5,30 +5,30 @@
         <i class="fa-solid fa-xmark"></i>
     </button>
 
-    <div class="viewer-header">
-
+    <div class="viewer-header ridi-viewer-toolbar ridi-viewer-toolbar-top">
+        <button class="ridi-viewer-back" type="button" data-role="viewer-action" data-action="close" aria-label="뷰어 닫기" title="뒤로가기">
+            <i class="fa-solid fa-arrow-left"></i>
+        </button>
         <span class="viewer-title" id="viewer-title-text" data-i18n="viewer.reading">독서 중...</span>
+        <div class="ridi-viewer-mode-group" role="group" aria-label="보기 방식">
+            <button type="button" data-role="viewer-action" data-action="viewer-display-mode" data-value="one" data-viewer-display-mode="one" aria-label="한쪽 보기" title="한쪽 보기"><span class="viewer-mode-icon viewer-mode-icon--one"><i>1</i></span></button>
+            <button type="button" data-role="viewer-action" data-action="viewer-display-mode" data-value="one-two" data-viewer-display-mode="one-two" aria-label="왼쪽에서 오른쪽 두 쪽 보기" title="1→2 두 쪽 보기"><span class="viewer-mode-icon viewer-mode-icon--spread"><i>1</i><i>2</i></span></button>
+            <button type="button" data-role="viewer-action" data-action="viewer-display-mode" data-value="two-one" data-viewer-display-mode="two-one" aria-label="오른쪽에서 왼쪽 두 쪽 보기" title="2←1 두 쪽 보기"><span class="viewer-mode-icon viewer-mode-icon--spread"><i>2</i><i>1</i></span></button>
+            <button type="button" data-role="viewer-action" data-action="viewer-display-mode" data-value="scroll" data-viewer-display-mode="scroll" aria-label="세로 스크롤 보기" title="세로 스크롤 보기"><span class="viewer-mode-icon viewer-mode-icon--scroll"><i>↕</i></span></button>
+        </div>
+        <nav class="ridi-viewer-tools" aria-label="독서 도구">
+            <button type="button" id="btn-viewer-listen" data-role="viewer-action" data-action="listen" data-i18n-title="tts.viewer_listen_title" title="읽던 위치부터 음성으로 듣기" style="display: none;"><i class="fa-solid fa-headphones"></i><span data-i18n="tts.viewer_listen">듣기</span></button>
+            <button type="button" id="btn-viewer-tts-settings" data-role="viewer-action" data-action="tts-settings" title="TTS 설정" aria-label="TTS 설정" style="display: none;"><i class="fa-solid fa-sliders"></i><span>TTS 설정</span></button>
+            <button type="button" data-role="viewer-action" data-action="open-toc"><i class="fa-solid fa-list"></i><span>목차</span></button>
+            <button type="button" data-role="viewer-action" data-action="open-reading-notes"><i class="fa-regular fa-note-sticky"></i><span>독서노트</span></button>
+            <button type="button" data-role="viewer-action" data-action="toggle-overlay"><i class="fa-solid fa-font"></i><span>보기 설정</span></button>
+            <button type="button" data-role="viewer-action" data-action="open-viewer-search"><i class="fa-solid fa-magnifying-glass"></i><span>검색</span></button>
+            <button type="button" id="btn-add-bookmark" data-role="viewer-action" data-action="toggle-page-bookmark" aria-pressed="false"><i class="fa-regular fa-bookmark"></i><span>책갈피</span></button>
+        </nav>
         <div class="viewer-controls">
-            <!-- 텍스트 뷰어용 폰트 제어판 -->
-            <div id="txt-controls" class="txt-controls-panel" style="display:none;">
-                <button data-role="viewer-action" data-action="font-size" data-value="-1" class="btn-txt-ctrl">A-</button>
-                <button data-role="viewer-action" data-action="font-size" data-value="1" class="btn-txt-ctrl">A+</button>
-                <button data-role="viewer-action" data-action="toggle-reader-theme" class="btn-txt-ctrl"><i class="fa-solid fa-circle-half-stroke"></i></button>
-            </div>
-            <!-- 만화 뷰어용 화면 맞추기 토글 -->
-            <div id="comic-fit-controls" class="comic-fit-panel" style="display:none;">
-                <button id="btn-fit-height" class="btn-fit active" data-role="viewer-action" data-action="comic-fit" data-value="height" data-i18n-title="viewer.fit_height" title="높이에 맞추기">
-                    <i class="fa-solid fa-arrows-up-down"></i> <span data-i18n="viewer.height">높이</span>
-                </button>
-                <button id="btn-fit-width" class="btn-fit" data-role="viewer-action" data-action="comic-fit" data-value="width" data-i18n-title="viewer.fit_width" title="너비에 맞추기">
-                    <i class="fa-solid fa-arrows-left-right"></i> <span data-i18n="viewer.width">너비</span>
-                </button>
-            </div>
-            <!-- 전체화면 토글 버튼 -->
-            <button id="btn-fullscreen-toggle" class="btn-fullscreen" data-role="viewer-action" data-action="toggle-fullscreen" data-i18n-title="viewer.fullscreen" title="전체화면 (F)">
-                <i class="fa-solid fa-expand" id="fullscreen-icon"></i>
-            </button>
-            <span class="close-viewer-btn" data-role="viewer-action" data-action="close">&times;</span>
+            <div id="txt-controls" class="txt-controls-panel" style="display:none;"></div>
+            <div id="comic-fit-controls" class="comic-fit-panel" style="display:none;"></div>
+            <button id="btn-fullscreen-toggle" class="btn-fullscreen" data-role="viewer-action" data-action="toggle-fullscreen" data-i18n-title="viewer.fullscreen" title="전체화면 (F)"><i class="fa-solid fa-expand" id="fullscreen-icon"></i></button>
         </div>
 
     </div>
@@ -36,13 +36,53 @@
     <div class="viewer-body" id="viewer-body-container" style="position: relative;">
         <!-- 공통 3분할 투명 핫스팟 터치 레이어 (뷰어 최상단 배치) -->
         <div class="comic-hotspot-layer" id="common-viewer-hotspot" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10002; display: flex; pointer-events: auto;">
-            <div class="hotspot-zone left-zone" data-role="viewer-action" data-action="prev-page" data-i18n-title="viewer.prev_page" title="이전 페이지" style="width: 30%; height: 100%; cursor: pointer;"></div>
-            <div class="hotspot-zone center-zone" data-role="viewer-action" data-action="toggle-overlay" data-i18n-title="viewer.open_menu" title="메뉴 열기" style="width: 40%; height: 100%; cursor: pointer;"></div>
-            <div class="hotspot-zone right-zone" data-role="viewer-action" data-action="next-page" data-i18n-title="viewer.next_page" title="다음 페이지" style="width: 30%; height: 100%; cursor: pointer;"></div>
+            <div class="hotspot-zone left-zone" data-role="viewer-action" data-action="prev-page" data-i18n-title="viewer.prev_page" title="이전 페이지"><i class="fa-solid fa-chevron-left"></i></div>
+            <div class="hotspot-zone center-zone" data-role="viewer-action" data-action="toggle-viewer-controls" title="도구 모음 표시/숨기기"></div>
+            <div class="hotspot-zone right-zone" data-role="viewer-action" data-action="next-page" data-i18n-title="viewer.next_page" title="다음 페이지"><i class="fa-solid fa-chevron-right"></i></div>
         </div>
 
         <!-- Kavita 스타일 플로팅 조작 오버레이 메뉴 (탭 형식 개편 & 푸른색 테마) -->
         <div id="comic-overlay-menu" class="comic-overlay-menu" style="display: none; z-index: 10003;">
+            <section class="ridi-view-settings" aria-label="보기 설정">
+                <header><strong>보기 설정</strong><button type="button" data-role="viewer-action" data-action="toggle-overlay" aria-label="닫기"><i class="fa-solid fa-xmark"></i></button></header>
+                <div class="ridi-theme-options" role="group" aria-label="배경색">
+                    <strong class="ridi-setting-group-label">배경색</strong>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="epaper" title="E-Paper"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="white" title="화이트"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="sepia" title="세피아"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="light" title="라이트"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="mint" title="민트"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="gray" title="그레이"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="blue" title="블루"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="navy" title="네이비"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="dark" title="다크"></button>
+                    <button type="button" data-role="viewer-action" data-action="viewer-theme" data-value="black" title="블랙"></button>
+                </div>
+                <label class="ridi-setting-row ridi-font-row ridi-text-setting"><span><i class="fa-solid fa-font"></i> 글꼴</span><select id="ridi-viewer-font-select" data-role="viewer-action-change" data-action="font-family" aria-label="뷰어 글꼴"><option value="pretendard">Pretendard</option><option value="gothic">나눔고딕</option><option value="batang">바탕체</option><option value="monospace">고정폭</option></select></label>
+                <div class="ridi-setting-row ridi-text-setting"><span><i class="fa-solid fa-text-width"></i> 글자 크기</span><div class="ridi-step-control"><button type="button" data-role="viewer-action" data-action="font-size" data-value="-1">−</button><output id="ridi-font-size-value">18px</output><button type="button" data-role="viewer-action" data-action="font-size" data-value="1">＋</button></div></div>
+                <div class="ridi-setting-row ridi-text-setting"><span><i class="fa-solid fa-text-height"></i> 줄 간격</span><div class="ridi-step-control"><button type="button" data-role="viewer-action" data-action="line-height-step" data-value="-1">−</button><output id="ridi-line-height-value">1.8</output><button type="button" data-role="viewer-action" data-action="line-height-step" data-value="1">＋</button></div></div>
+                <div class="ridi-setting-row ridi-text-setting"><span><i class="fa-solid fa-align-justify"></i> 문단 간격</span><div class="ridi-step-control"><button type="button" data-role="viewer-action" data-action="paragraph-spacing-step" data-value="-1">−</button><output id="ridi-paragraph-spacing-value">1.0em</output><button type="button" data-role="viewer-action" data-action="paragraph-spacing-step" data-value="1">＋</button></div></div>
+                <div class="ridi-image-settings" id="ridi-image-settings" hidden>
+                    <div class="ridi-image-setting-row">
+                        <span><i class="fa-regular fa-image"></i> 이미지 크기</span>
+                        <div class="ridi-choice-grid ridi-fit-choices">
+                            <button type="button" data-role="viewer-action" data-action="comic-fit" data-value="width" data-comic-fit-mode="width">폭맞춤</button>
+                            <button type="button" data-role="viewer-action" data-action="comic-fit" data-value="height" data-comic-fit-mode="height">높이맞춤</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="ridi-image-setting-row ridi-page-direction-settings" id="ridi-page-direction-settings" hidden>
+                    <span><i class="fa-solid fa-hand-pointer"></i> 페이지 이동</span>
+                    <div class="ridi-choice-grid ridi-direction-choices">
+                        <button type="button" data-role="viewer-action" data-action="tap-zone-direction" data-value="horizontal" data-tap-zone-direction="horizontal"><i class="fa-solid fa-arrows-left-right"></i> 좌우</button>
+                        <button type="button" data-role="viewer-action" data-action="tap-zone-direction" data-value="vertical" data-tap-zone-direction="vertical"><i class="fa-solid fa-arrows-up-down"></i> 상하</button>
+                    </div>
+                </div>
+                <div class="ridi-spread-settings" id="ridi-spread-settings" hidden>
+                    <button type="button" id="ridi-center-gap-button" data-role="viewer-action" data-action="toggle-center-gap"><i class="fa-solid fa-grip-lines-vertical"></i><span>가운데 여백 제거</span></button>
+                    <button type="button" id="ridi-spread-shift-button" data-role="viewer-action" data-action="shift-spread"><i class="fa-solid fa-forward-step"></i><span>한 장 밀기</span></button>
+                </div>
+            </section>
             <div class="overlay-header">
                 <!-- 탭 네비게이션: 항상 상단에 노출되는 메뉴 버튼들 (예전엔 화면 중앙 카드 안에 있었음) -->
                 <div class="overlay-tab-nav">
@@ -53,7 +93,7 @@
                         <i class="fa-solid fa-book-open"></i> <span data-i18n="viewer.tab_layout">보기</span>
                     </button>
                     <button class="overlay-tab-btn" id="tab-btn-style" data-role="viewer-action" data-action="overlay-tab" data-value="style">
-                        <i class="fa-solid fa-font"></i> <span data-i18n="viewer.tab_style">스타일</span>
+                        <i class="fa-solid fa-font"></i> <span>글꼴</span>
                     </button>
                     <button class="overlay-tab-btn" id="tab-btn-margin" data-role="viewer-action" data-action="overlay-tab" data-value="margin">
                         <i class="fa-solid fa-arrows-up-down-left-right"></i> <span data-i18n="viewer.tab_margin">여백</span>
@@ -69,15 +109,18 @@
                         <button class="btn-overlay-action" data-role="viewer-action" data-action="jump-first"><i class="fa-solid fa-backward-step"></i> <span data-i18n="viewer.from_beginning">처음부터</span></button>
                         <button class="btn-overlay-action" data-role="viewer-action" data-action="mark-completed"><i class="fa-solid fa-circle-check"></i> <span data-i18n="viewer.mark_completed">읽음 완료</span></button>
                         <button class="btn-overlay-action" data-role="viewer-action" data-action="jump-last"><i class="fa-solid fa-forward-step"></i> <span data-i18n="viewer.to_last_page">마지막으로</span></button>
-                        <button class="btn-overlay-action btn-overlay-action-icon-only" id="btn-add-bookmark" data-role="viewer-action" data-action="add-bookmark" data-i18n-title="viewer.add_bookmark" title="북마크 추가"><i class="fa-solid fa-bookmark"></i></button>
+                        <button class="btn-overlay-action" id="annotation-mode-toggle" data-role="viewer-action" data-action="toggle-highlight-mode" title="본문을 드래그해 형광펜 표시">
+                            <i class="fa-solid fa-highlighter"></i> <span>형광펜</span>
+                        </button>
                     </div>
                 </div>
 
                 <!-- 탭 2: 레이아웃 / 보기 방식 -->
                 <div class="overlay-tab-content" id="overlay-tab-layout">
                     <div class="overlay-controls-row">
-                        <!-- 공용 스크롤 방식 선택 -->
-                        <div class="overlay-scroll-group" id="overlay-scroll-mode-group">
+                        <span class="viewer-control-label">읽기 방식</span>
+                        <!-- 하위 호환용 상태 컨트롤: 실제 모드 선택은 상단 4분할 버튼에서 한다. -->
+                        <div class="overlay-scroll-group viewer-legacy-mode-controls" id="overlay-scroll-mode-group" hidden>
                             <button id="btn-scroll-page" class="btn-overlay-fit active" data-role="viewer-action" data-action="scroll-mode" data-value="page" data-i18n-title="viewer.scroll_page" title="책장처럼 넘기기">
                                 <i class="fa-solid fa-book-open"></i> <span data-i18n="viewer.page">페이지</span>
                             </button>
@@ -86,30 +129,17 @@
                             </button>
                         </div>
 
-                        <!-- 만화 맞춤 모드 -->
-                        <div class="overlay-fit-group" id="overlay-comic-fit-group">
-                            <button id="btn-overlay-fit-height" class="btn-overlay-fit active" data-role="viewer-action" data-action="comic-fit" data-value="height" data-i18n="viewer.fit_height_label">높이맞춤</button>
-                            <button id="btn-overlay-fit-width" class="btn-overlay-fit" data-role="viewer-action" data-action="comic-fit" data-value="width" data-i18n="viewer.fit_width_label">너비맞춤</button>
-                        </div>
-
                         <!-- 1장/2장 보기 -->
-                        <button id="btn-comic-page-step" class="btn-overlay-fit" data-role="viewer-action" data-action="toggle-page-step" title="1장/2장 보기 전환">
+                        <button id="btn-comic-page-step" class="btn-overlay-fit viewer-legacy-mode-controls" data-role="viewer-action" data-action="toggle-page-step" title="1장/2장 보기 전환" hidden>
                             <i class="fa-solid fa-file-lines"></i> <span id="comic-page-step-label">1장</span>
                         </button>
 
-                        <!-- 2쪽보기 정렬 한 장 밀기: 예) (9,10)(11,12)로 짝지어지던 스프레드를 (10,11)로 보정.
-                             2쪽보기일 때만 노출(reader_settings.js의 syncComicPageStepUI가 표시 제어). -->
-                        <button id="btn-spread-shift" class="btn-overlay-fit" data-role="viewer-action" data-action="shift-spread" data-i18n-title="viewer.shift_spread_title" title="두 페이지 짝을 한 장 밀어서 보기" style="display: none;">
-                            <i class="fa-solid fa-arrows-left-right"></i> <span data-i18n="viewer.shift_spread">한 장 밀기</span>
+                        <button id="btn-spread-shift" class="btn-overlay-fit viewer-legacy-mode-controls" data-role="viewer-action" data-action="shift-spread" title="첫 표지는 단독으로, 다음 페이지부터 두 장씩 보기" style="display: none;" hidden>
+                            <i class="fa-solid fa-book-open-reader"></i> <span>표지 단독</span>
                         </button>
 
                         <!-- 다음 버튼부터 줄바꿈 (컨트롤이 많아 한 줄에 다 안 들어감) -->
                         <div class="overlay-row-break"></div>
-
-                        <!-- 스프레드 이미지 좌/우 분할 보기 -->
-                        <button id="btn-comic-split-spread" class="btn-overlay-fit" data-role="viewer-action" data-action="toggle-split-spread" data-i18n-title="viewer.split_spread_title" title="페이지 분할 보기 전환">
-                            <i class="fa-solid fa-columns"></i> <span id="comic-split-spread-label" data-i18n="viewer.split_spread_off">분할 끔</span>
-                        </button>
 
                         <!-- 2장 보기 중앙 여백 토글 -->
                         <button id="btn-comic-center-gap" class="btn-overlay-fit" data-role="viewer-action" data-action="toggle-center-gap" title="2장 보기 중앙 여백 토글">
@@ -123,7 +153,7 @@
 
                         <!-- 탭존 방향 (좌/우 ↔ 상/하, 한손 파지 대응) -->
                         <button id="btn-tap-zone-direction" class="btn-overlay-fit" data-role="viewer-action" data-action="toggle-tap-zone-direction" data-i18n-title="viewer.tap_zone_direction" title="탭존 방향 전환 (좌/우 ↔ 상/하)">
-                            <i class="fa-solid fa-arrows-up-down"></i> <span id="tap-zone-direction-label" data-i18n="viewer.tap_zone_horizontal">좌/우</span>
+                            <i class="fa-solid fa-arrows-left-right"></i> <span id="tap-zone-direction-label" data-i18n="viewer.tap_zone_horizontal">좌/우</span>
                         </button>
 
                         <!-- 모바일 전용 전체화면 전환 버튼 (안드로이드, iOS) -->
@@ -153,10 +183,13 @@
                 <div class="overlay-tab-content" id="overlay-tab-style">
                     <div class="overlay-controls-row" id="overlay-txt-controls-row">
                         <div class="overlay-txt-group" id="overlay-txt-controls-group">
+                            <label class="viewer-field"><span>글꼴</span>
                             <select id="viewer-font-select" data-role="viewer-action-change" data-action="font-family" class="overlay-select">
                                 <option value="gothic">나눔고딕</option>
                                 <option value="pretendard">Pretendard</option>
                             </select>
+                            </label>
+                            <label class="viewer-field"><span>배경</span>
                             <select id="viewer-theme-select" data-role="viewer-action-change" data-action="theme" class="overlay-select" title="배경색 선택">
                                 <option value="epaper">E-Paper (순백/순검정)</option>
                                 <option value="white">화이트 (순백)</option>
@@ -165,6 +198,8 @@
                                 <option value="dark">다크 (기본)</option>
                                 <option value="black">블랙 (OLED)</option>
                             </select>
+                            </label>
+                            <label class="viewer-field"><span>행간</span>
                             <select id="viewer-line-height-select" data-role="viewer-action-change" data-action="line-height" class="overlay-select" title="행간 조절">
                                 <option value="1.2">행간 1.2</option>
                                 <option value="1.4">행간 1.4</option>
@@ -173,6 +208,8 @@
                                 <option value="2.0">행간 2.0</option>
                                 <option value="2.2">행간 2.2</option>
                             </select>
+                            </label>
+                            <label class="viewer-field"><span>단락</span>
                             <select id="viewer-paragraph-spacing-select" data-role="viewer-action-change" data-action="paragraph-spacing" class="overlay-select" title="단락 간격 조절">
                                 <option value="0.5">단락 0.5em</option>
                                 <option value="1.0">단락 1.0em (기본)</option>
@@ -180,6 +217,7 @@
                                 <option value="2.0">단락 2.0em</option>
                                 <option value="2.5">단락 2.5em</option>
                             </select>
+                            </label>
                             <button data-role="viewer-action" data-action="font-size" data-value="-1" class="btn-overlay-fit" data-i18n-title="viewer.font_smaller" title="글자 작게">A-</button>
                             <button data-role="viewer-action" data-action="font-size" data-value="1" class="btn-overlay-fit" data-i18n-title="viewer.font_larger" title="글자 크게">A+</button>
                             <button data-role="viewer-action" data-action="toggle-theme-cycle" class="btn-overlay-fit" data-i18n-title="viewer.toggle_theme" title="배경 테마 순환 전환"><i class="fa-solid fa-circle-half-stroke"></i> <span id="viewer-theme-label">다크</span></button>
@@ -209,15 +247,16 @@
                     </div>
                 </div>
             </div>
+        </div>
 
-            <div class="overlay-footer">
+            <div class="overlay-footer ridi-viewer-toolbar ridi-viewer-toolbar-bottom">
                 <!-- 시크바 네비게이션 행 -->
                 <div class="seekbar-nav-row">
                     <button class="seekbar-btn" id="seekbar-btn-first" data-role="viewer-action" data-action="jump-first" data-i18n-title="viewer.from_beginning" title="처음으로">
                         <i class="fa-solid fa-backward-step"></i>
                     </button>
                     <div class="seekbar-track-wrap">
-                        <span class="seekbar-page-num" id="seekbar-start-label">1</span>
+                        <span class="seekbar-page-num" id="seekbar-start-label">1 / 1</span>
                         <div class="seekbar-slider-container">
                             <div class="seekbar-tooltip" id="seekbar-tooltip">1</div>
                             <input
@@ -229,55 +268,13 @@
                                 class="seekbar-input"
                             >
                         </div>
-                        <span class="seekbar-page-num" id="seekbar-end-label">1</span>
                     </div>
-                    <button class="seekbar-btn" id="seekbar-btn-last" data-role="viewer-action" data-action="jump-last" data-i18n-title="viewer.to_last_page" title="마지막으로">
-                        <i class="fa-solid fa-forward-step"></i>
+                    <button class="seekbar-btn" id="seekbar-btn-last" data-role="viewer-action" data-action="return-last-position" title="이전 읽던 위치로 돌아가기">
+                        <i class="fa-solid fa-rotate-left"></i>
                     </button>
                 </div>
-
-                <!-- 현재 페이지 뱃지 -->
-                <div class="seekbar-current-badge">
-                    <span id="comic-overlay-page-info">1 / 1</span>
-                </div>
+                <span id="comic-overlay-page-info" class="viewer-page-info-source" aria-hidden="true">1 / 1</span>
             </div>
-        </div>
-
-        <!-- 뷰어 여백 설정 퀵 조절 패널 -->
-        <div id="viewer-padding-overlay-panel" class="viewer-padding-panel" style="display: none; z-index: 10004;">
-            <div class="padding-panel-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.5rem; margin-bottom: 0.75rem;">
-                <h4 style="margin: 0; color: var(--app-text-primary); font-size: 0.88rem; font-weight: 700; display: flex; align-items: center; gap: 0.4rem;">
-                    <i class="fa-solid fa-arrows-up-down-left-right" style="color: var(--app-accent);"></i>
-                    <span data-i18n="viewer.spacing_settings">뷰어 여백 상세 설정</span>
-                </h4>
-                <span class="padding-panel-close" data-role="viewer-action" data-action="toggle-padding-panel" style="cursor: pointer; color: var(--app-text-muted); font-size: 1.2rem; font-weight: bold;">&times;</span>
-            </div>
-            <div class="padding-panel-body">
-                <!-- 소설/텍스트 조절 폼 (TXT, EPUB) -->
-                <div id="quick-padding-novel-group" style="display: none; flex-direction: column; gap: 0.6rem;">
-                    <!-- 1. 상단 여백 -->
-                    <div class="quick-padding-row" style="display: flex; flex-direction: column; gap: 0.2rem;">
-                        <label style="font-size: 0.76rem; color: var(--app-text-muted); display: flex; justify-content: space-between;"><span data-i18n="settings.padding_top_label">상단 여백</span> <span><span id="quick-novel-top-val">40</span>px</span></label>
-                        <input type="range" id="quick-novel-top-slider" min="0" max="200" step="5" value="40" style="width: 100%; cursor: pointer; accent-color: var(--app-accent);">
-                    </div>
-                    <!-- 2. 하단 여백 -->
-                    <div class="quick-padding-row" style="display: flex; flex-direction: column; gap: 0.2rem;">
-                        <label style="font-size: 0.76rem; color: var(--app-text-muted); display: flex; justify-content: space-between;"><span data-i18n="settings.padding_bottom_label">하단 여백</span> <span><span id="quick-novel-bottom-val">60</span>px</span></label>
-                        <input type="range" id="quick-novel-bottom-slider" min="0" max="200" step="5" value="60" style="width: 100%; cursor: pointer; accent-color: var(--app-accent);">
-                    </div>
-                    <!-- 3. 좌측 여백 -->
-                    <div class="quick-padding-row" style="display: flex; flex-direction: column; gap: 0.2rem;">
-                        <label style="font-size: 0.76rem; color: var(--app-text-muted); display: flex; justify-content: space-between;"><span data-i18n="settings.padding_left_label">좌측 여백</span> <span><span id="quick-novel-left-val">20</span>px</span></label>
-                        <input type="range" id="quick-novel-left-slider" min="0" max="200" step="5" value="20" style="width: 100%; cursor: pointer; accent-color: var(--app-accent);">
-                    </div>
-                    <!-- 4. 우측 여백 -->
-                    <div class="quick-padding-row" style="display: flex; flex-direction: column; gap: 0.2rem;">
-                        <label style="font-size: 0.76rem; color: var(--app-text-muted); display: flex; justify-content: space-between;"><span data-i18n="settings.padding_right_label">우측 여백</span> <span><span id="quick-novel-right-val">20</span>px</span></label>
-                        <input type="range" id="quick-novel-right-slider" min="0" max="200" step="5" value="20" style="width: 100%; cursor: pointer; accent-color: var(--app-accent);">
-                    </div>
-                </div>
-            </div>
-        </div>
 
         <!-- 이미지(만화) 뷰어 -->
         <div id="comic-viewer-container" class="viewer-pane" style="display:none; position: relative;">
@@ -287,7 +284,7 @@
         </div>
 
         <!-- 공통 로딩/에러 오버레이 -->
-        <div id="viewer-common-overlay" class="comic-loading-overlay" style="display:none; z-index: 10006;">
+        <div id="viewer-common-overlay" class="comic-loading-overlay" style="display:none; z-index: 10003;">
             <div class="comic-loading-content">
                 <div id="viewer-common-spinner" class="comic-loading-spinner"></div>
                 <p id="viewer-common-text" class="comic-loading-text" data-i18n="viewer.downloading">다운로드 중...</p>

@@ -1,18 +1,20 @@
 // Thin wrapper for backward compatibility — re-export modular viewer APIs
 import * as Viewer from './viewer/viewer_init.js';
 import * as Settings from './viewer/reader_settings.js';
-import * as Renderer from './viewer/renderer.js';
-import * as Nav from './viewer/navigation.js';
+import * as Renderer from './viewer/renderer.js?rev=20260923-reader-session-v45';
+import * as Nav from './viewer/navigation.js?rev=20260927-tts-session-v8';
 import { state } from './state.js';
-import { saveProgress } from './viewer_progress.js';
+import { saveProgress } from './viewer_progress.js?rev=20260927-tts-session-v8';
 
 // Re-export commonly used APIs as wrappers to avoid circular-import undefineds
 export function initComicViewer(...args) { return (Viewer.initComicViewer || Viewer.initViewer).apply(null, args); }
 export function nextComicPage(...args) { return Nav.nextComicPage.apply(null, args); }
 export function prevComicPage(...args) { return Nav.prevComicPage.apply(null, args); }
+export function moveComicPageByOne(...args) { return Nav.moveComicPageByOne.apply(null, args); }
 export function comicSliderInput(...args) { return Nav.comicSliderInput.apply(null, args); }
 export function comicSliderChange(...args) { return Nav.comicSliderChange.apply(null, args); }
 export function setComicFitMode(...args) { return (Renderer.setComicFitMode || Settings.setFitMode).apply(null, args); }
+export function getComicFitMode(...args) { return Settings.getFitMode.apply(null, args); }
 export function toggleComicOverlay(...args) { return Nav.toggleComicOverlay.apply(null, args); }
 export function markAsCompleted(...args) { return Nav.markAsCompleted.apply(null, args); }
 export function applyComicFitMode(...args) { return Renderer.applyComicFitMode.apply(null, args); }
@@ -20,6 +22,7 @@ export function loadComicPage(...args) { return Renderer.loadComicPage.apply(nul
 export function comicJumpToFirstPage(...args) { return Nav.comicJumpToFirstPage.apply(null, args); }
 export function comicJumpToLastPage(...args) { return Nav.comicJumpToLastPage.apply(null, args); }
 export function getComicReadingDirection(...args) { return Settings.getComicReadingDirection.apply(null, args); }
+export function initReadingDirection(...args) { return Settings.initReadingDirection.apply(null, args); }
 export function toggleComicReadingDirection(...args) { return Settings.toggleComicReadingDirection.apply(null, args); }
 export function getComicPageStep(...args) { return Settings.getComicPageStep.apply(null, args); }
 export function toggleComicPageStep(...args) { return Settings.toggleComicPageStep.apply(null, args); }
@@ -27,7 +30,9 @@ export function setComicPageStep(...args) { return Settings.setComicPageStep.app
 export function setComicScrollWidth(px) { return Settings.setScrollWidth(px); }
 export function getTapZoneDirection(...args) { return Settings.getTapZoneDirection.apply(null, args); }
 export function toggleTapZoneDirection(...args) { return Settings.toggleTapZoneDirection.apply(null, args); }
+export function setTapZoneDirection(...args) { return Settings.setTapZoneDirection.apply(null, args); }
 export function initTapZoneDirection(...args) { return Settings.initTapZoneDirection.apply(null, args); }
+export function initPageStep(...args) { return Settings.initPageStep.apply(null, args); }
 export function getComicSplitSpread(...args) { return Settings.getComicSplitSpread.apply(null, args); }
 export function toggleComicSplitSpread(...args) { return Settings.toggleComicSplitSpread.apply(null, args); }
 export function initSplitSpread(...args) { return Settings.initSplitSpread.apply(null, args); }
@@ -96,6 +101,9 @@ export const ComicViewer = {
   nextPage() {
     nextComicPage();
   },
+  moveByOne(direction) {
+    moveComicPageByOne(direction);
+  },
   jumpTo(target) {
     if (target === 'first') {
       comicJumpToFirstPage();
@@ -110,4 +118,3 @@ export const ComicViewer = {
     applyComicFitMode();
   }
 };
-

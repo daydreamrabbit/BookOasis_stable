@@ -1,4 +1,6 @@
 import { VIEWER_FONTS } from '../viewer_settings.js';
+import { applyMobileTextInsets } from './text_mobile_insets.js';
+import { getTxtPageScrollLeft, setTxtPageScrollLeft } from './txt_page_utils.js?rev=20260922-reader-session-v45';
 
 // 내장 폰트 로드 실패 시(파일 누락/네트워크 오류) 되돌아갈 시스템 폰트 체인
 const BUILTIN_FONT_FALLBACKS = {
@@ -71,9 +73,6 @@ export function applyTxtSettingsCore(ctx) {
       }
     }
     if (container) container.style.pointerEvents = 'none';
-    if (typeof showRestoreLoadingToast === 'function') {
-      showRestoreLoadingToast('보기 모드 전환 중...');
-    }
 
     // 앵커 복원이 실패하더라도 모드 전환 직전의 실제 뷰포트 비율을 기준으로 복원한다.
     if (previousMode === 'scroll') {
@@ -82,7 +81,7 @@ export function applyTxtSettingsCore(ctx) {
       preservedViewport = { mode: 'scroll', topRatio: Math.max(0, Math.min(1, topRatio)) };
     } else {
       const maxScrollLeft = Math.max(0, scrollWrapper.scrollWidth - scrollWrapper.clientWidth);
-      const leftRatio = maxScrollLeft > 0 ? (scrollWrapper.scrollLeft / maxScrollLeft) : 0;
+      const leftRatio = maxScrollLeft > 0 ? (getTxtPageScrollLeft(scrollWrapper) / maxScrollLeft) : 0;
       preservedViewport = { mode: 'page', leftRatio: Math.max(0, Math.min(1, leftRatio)) };
     }
 
@@ -101,6 +100,7 @@ export function applyTxtSettingsCore(ctx) {
     contentArea.style.lineHeight = lineHeight;
 
     if (scrollMode === 'page') {
+      scrollWrapper.scrollTop = 0;
       scrollWrapper.classList.add('scroll-mode-page');
       container.classList.add('scroll-mode-page');
 
@@ -161,12 +161,17 @@ export function applyTxtSettingsCore(ctx) {
       scrollWrapper.style.columnWidth = '';
       scrollWrapper.style.columnGap = '';
     } else {
+      // 페이지 모드에서 남은 가로 위치와 레이아웃 인라인 값을 먼저 제거한다.
+      // 특히 2장 보기의 확장 폭이 남으면 연속 스크롤 본문이 좌우로 잘린다.
+      setTxtPageScrollLeft(scrollWrapper, 0);
       scrollWrapper.classList.remove('scroll-mode-page');
       container.classList.remove('scroll-mode-page');
 
       scrollWrapper.style.height = '100%';
       scrollWrapper.style.width = '';
       scrollWrapper.style.maxWidth = '850px';
+      scrollWrapper.style.marginTop = '0';
+      scrollWrapper.style.marginBottom = '0';
       scrollWrapper.style.marginLeft = 'auto';
       scrollWrapper.style.marginRight = 'auto';
       scrollWrapper.style.padding = '0';
@@ -179,6 +184,8 @@ export function applyTxtSettingsCore(ctx) {
       contentArea.style.columnGap = '';
       contentArea.style.columnFill = '';
       contentArea.style.height = '';
+      contentArea.style.width = '';
+      contentArea.style.marginRight = '0';
 
       const padTop = parseInt(localStorage.getItem('viewer_padding_top') || '40', 10);
       const padBottom = parseInt(localStorage.getItem('viewer_padding_bottom') || '60', 10);
@@ -190,6 +197,7 @@ export function applyTxtSettingsCore(ctx) {
       contentArea.style.paddingRight = `${padRight}px`;
     }
 
+    applyMobileTextInsets(scrollWrapper, contentArea, localStorage);
     applyFontFamily(contentArea, fontFamily);
 
     if (scrollMode === 'page' && document.fonts && document.fonts.ready) {
@@ -221,7 +229,7 @@ export function applyTxtSettingsCore(ctx) {
                 scrollWrapper.dispatchEvent(new Event('scroll'));
               }
             } else {
-              scrollWrapper.scrollLeft = pos.scrollLeft;
+              setTxtPageScrollLeft(scrollWrapper, pos.scrollLeft);
               snapTxtPageScrollLeft(scrollWrapper);
             }
             setPendingRestoreTimer(null);
@@ -235,7 +243,6 @@ export function applyTxtSettingsCore(ctx) {
     }
 
     if (!restored && isModeSwitch && preservedAnchor) {
-      showRestoreLoadingToast('보기 모드 전환 중...');
       const timerId = setTimeout(() => {
         const ok = restoreTxtAnchorInfo(preservedAnchor);
         if (ok) {
@@ -268,7 +275,9 @@ export function applyTxtSettingsCore(ctx) {
       restored = true;
     }
 
-    if (!restored) {
+    // Initial server/local resume is owned by initTxtViewer. A delayed fallback
+    // here can otherwise reset a successfully restored scroll position to zero.
+    if (!restored && !options.resumePending) {
       if (scrollMode === 'scroll') {
         setTimeout(() => {
           const maxScrollTop = Math.max(0, scrollWrapper.scrollHeight - scrollWrapper.clientHeight);
@@ -297,15 +306,13 @@ export function applyTxtSettingsCore(ctx) {
         if (isModeSwitch && preservedViewport) {
           const maxScrollLeft = Math.max(0, scrollWrapper.scrollWidth - scrollWrapper.clientWidth);
           let ratio = 0;
-          if (preservedViewport.mode === 'scroll') {
-            ratio = preservedViewport.topRatio || 0;
-          } else {
+          if (preservedViewport.mode === 'page') {
             ratio = preservedViewport.leftRatio || 0;
           }
-          scrollWrapper.scrollLeft = maxScrollLeft * ratio;
+          setTxtPageScrollLeft(scrollWrapper, maxScrollLeft * ratio);
           console.log(`[Viewer-Txt] 모드 전환 비율 복원 적용 (scrollLeft ratio=${ratio.toFixed(4)})`);
         } else {
-          scrollWrapper.scrollLeft = 0;
+          setTxtPageScrollLeft(scrollWrapper, 0);
         }
         snapTxtPageScrollLeft(scrollWrapper);
         if (container) container.style.pointerEvents = '';
@@ -321,8 +328,8 @@ export function applyTxtSettingsCore(ctx) {
   };
 
   if (isModeSwitch) {
-    // double-rAF: 첫 번째 rAF에서 토스트가 DOM에 등록되고,
-    // 두 번째 rAF에서 실제로 화면에 Paint된 뒤 무거운 DOM 작업을 시작한다.
+    // double-rAF: viewer.js의 전환 피드백 오버레이가 먼저 화면에 그려진 뒤
+    // 무거운 DOM 재배치를 시작한다.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         runApply();

@@ -79,12 +79,12 @@ MariaDB 제로데이트(`0000-00-00 00:00:00`) 처리가 `db_schema_updater.py`�
 2. 임시 디렉토리로 `database.DB_GENERAL_PATH` 등을 갈아끼운 뒤 `database.init_databases()`를
    직접 호출해 SQLite 경로가 정상 동작하는지 확인 (테이블 생성, admin 시딩 등).
 3. **가능하면 Docker로 SQLite/MariaDB 둘 다 신선한 컨테이너로 실측한다** — 이번 세션에서
-   쓴 방법: `docker-compose.build.yml`/`docker-compose.mariadb.yml` 패턴을 참고해 격리된
+   쓴 방법: 통합 `docker-compose.yml` 패턴을 참고해 격리된
    테스트용 compose 파일(다른 포트/컨테이너 이름/볼륨 경로)을 만들어 `docker compose up
    -d --build`로 띄우고, `docker logs <container>`에서 "1단계"(마이그레이션)와 "2단계"
    (SQLite는 WAL 체크포인트, MariaDB는 컬럼/인덱스 안전망) 로그가 에러 없이 끝까지
-   나오는지, 그리고 실제로 `/login`에 admin/admin으로 로그인되는지까지 확인한다.
-   MariaDB는 `docker-compose.mariadb.yml`의 `mariadb`/`mariadb-grant-repair` 서비스
+   나오는지, 그리고 실제로 `/login`에서 직접 만든 관리자 계정으로 로그인되는지까지 확인한다.
+   MariaDB는 `docker-compose.yml`의 `mariadb`/`mariadb-grant-repair` 서비스
    정의를 그대로 재사용하면 된다 (이미지: `mariadb:10.11`).
 4. 확인 후 테스트용 컨테이너/볼륨은 정리한다 (실제 배포 컨테이너와 이름이 겹치지
    않게 하고, 확인 끝나면 `docker compose down`).

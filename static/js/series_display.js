@@ -7,6 +7,14 @@ export function stripLeadingBracketTags(value) {
   return stripped || raw;
 }
 
+export function stripTrailingBracketSuffix(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const stripped = raw.replace(/(?:\s*\[[^\]]*\])+\s*$/u, '').trim();
+  return stripped || raw;
+}
+
 /**
  * 썸네일 아래 제목 말줄임 시 권수(01권, v02, #3 등) 및 후반부 식별자가 잘리지 않도록
  * 중간을 말줄임(Middle Truncation)해 주는 헬퍼 함수
@@ -34,4 +42,3 @@ export function middleTruncateTitle(title, maxLen = 8) {
   const backLen = maxLen - 2 - frontLen;
   return `${str.substring(0, frontLen)}..${str.substring(str.length - backLen)}`;
 }
-

@@ -19,6 +19,31 @@ MAX_LIBRARY_NAME_LENGTH = 25
 MAX_LIBRARY_GROUP_NAME_LENGTH = 25
 
 
+@library_bp.route('/api/media/libraries/<int:library_id>/watch', methods=['GET', 'POST'])
+@admin_required
+def library_watch(library_id):
+    from services.folder_watch_service import validate_config, status
+    from services import folder_watch_store as store
+    db_type = request.args.get('type', 'general')
+    if db_type not in ('general', 'adult'):
+        return jsonify(success=False, error='폴더 감시는 일반/성인 도서 라이브러리에서 지원합니다.'), 400
+    lib = CategoryRepository.get_library_by_id(db_type, library_id)
+    if not lib:
+        return jsonify(success=False, error='라이브러리를 찾을 수 없습니다.'), 404
+    key = f'{db_type}:{library_id}'
+    if request.method == 'POST':
+        try:
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                raise ValueError('JSON 설정이 필요합니다.')
+            store.configure(key, validate_config(data, lib))
+        except (ValueError, TypeError) as error:
+            return jsonify(success=False, error=str(error)), 400
+    response = jsonify(success=True, watch=status(key))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 def _parse_group_id(raw_value):
     if raw_value in (None, '', 'null'):
         return None
@@ -68,6 +93,53 @@ def delete_library_group():
         return jsonify({'success': True, 'message': '그룹을 삭제하고 하위 카테고리를 미분류로 이동했습니다.'})
     except Exception as error:
         return jsonify({'success': False, 'error': str(error)}), 400
+
+
+@library_bp.route('/api/media/library-kinds/add', methods=['POST'])
+@admin_required
+def add_library_kind():
+    """카테고리 속성(만화/도서/잡지 등) 종류 추가 (관리자 전용)"""
+    db_type = request.form.get('type', 'general')
+    try:
+        code = CategoryService.add_library_kind(
+            db_type, request.form.get('code', ''), request.form.get('name', '')
+        )
+        return jsonify({'success': True, 'code': code, 'message': '속성을 추가했습니다.'})
+    except ValueError as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+    except Exception as error:
+        error_text = str(error)
+        if 'UNIQUE' in error_text or 'Duplicate' in error_text or '1062' in error_text:
+            return jsonify({'success': False, 'error': '같은 코드 또는 이름의 속성이 이미 있습니다.'}), 400
+        return jsonify({'success': False, 'error': error_text}), 500
+
+
+@library_bp.route('/api/media/library-kinds/edit', methods=['POST'])
+@admin_required
+def edit_library_kind():
+    """속성 이름 변경 (코드는 바꿀 수 없다)"""
+    db_type = request.form.get('type', 'general')
+    try:
+        CategoryService.edit_library_kind(db_type, request.form.get('code', ''), request.form.get('name', ''))
+        return jsonify({'success': True, 'message': '속성 이름을 변경했습니다.'})
+    except ValueError as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+    except Exception as error:
+        return jsonify({'success': False, 'error': str(error)}), 500
+
+
+@library_bp.route('/api/media/library-kinds/delete', methods=['POST'])
+@admin_required
+def delete_library_kind():
+    """속성 삭제 - 기본 속성과 사용 중인 속성은 삭제할 수 없다"""
+    db_type = request.form.get('type', 'general')
+    try:
+        CategoryService.delete_library_kind(db_type, request.form.get('code', ''))
+        return jsonify({'success': True, 'message': '속성을 삭제했습니다.'})
+    except ValueError as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+    except Exception as error:
+        return jsonify({'success': False, 'error': str(error)}), 500
 
 
 @library_bp.route('/api/media/library-groups/move', methods=['POST'])
@@ -151,6 +223,7 @@ def add_media_library():
     is_remote = parse_remote_flag(is_remote_val, target_paths)
     hide_cover = 1 if request.form.get('hide_cover', '0') in ('1', 'true', 'True', 'on') else 0
     hide_title = 1 if request.form.get('hide_title', '0') in ('1', 'true', 'True', 'on') else 0
+    use_folder_cover = 1 if request.form.get('use_folder_cover', '0') in ('1', 'true', 'True', 'on') else 0
     cover_aspect_ratio = request.form.get('cover_aspect_ratio', '4:3').strip()
     if cover_aspect_ratio not in ('4:3', '16:9'):
         cover_aspect_ratio = '4:3'
@@ -159,13 +232,21 @@ def add_media_library():
     color = request.form.get('color', '#94a3b8').strip() or '#94a3b8'
     gdrive_copy_remote = request.form.get('gdrive_copy_remote', '').strip() or None
     gdrive_view_local_mirror_path = request.form.get('gdrive_view_local_mirror_path', '').strip() or None
+    # 속성은 선택 항목이다 - 보내지 않으면 '미지정'이라 기존 호출(자동화 등)이 그대로 동작한다.
+    content_kind = request.form.get('content_kind')
     try:
         group_id = _parse_group_id(request.form.get('group_id'))
     except ValueError as error:
         return jsonify({'success': False, 'error': str(error)}), 400
 
     try:
-        library_id = CategoryService.add_library(db_type, name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title)
+        library_id = CategoryService.add_library(
+            db_type, name, physical_path, is_remote, rclone_rc_url, icon, color,
+            hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path,
+            cover_aspect_ratio, hide_title, content_kind,
+            use_folder_cover=use_folder_cover,
+            grant_existing_users=True,
+        )
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except sqlite3.IntegrityError:
@@ -187,7 +268,7 @@ def add_media_library():
     except Exception as e:
         print(f"[API] Background scan failed: {e}")
     
-    return jsonify({'success': True, 'message': _t('api.msg_library_added')})
+    return jsonify({'success': True, 'library_id': library_id, 'message': _t('api.msg_library_added')})
 
 @library_bp.route('/api/media/libraries/edit', methods=['POST'])
 @admin_required
@@ -224,6 +305,8 @@ def edit_media_library():
     
     hide_cover = 1 if request.form.get('hide_cover', '0') in ('1', 'true', 'True', 'on') else 0
     hide_title = 1 if request.form.get('hide_title', '0') in ('1', 'true', 'True', 'on') else 0
+    use_folder_cover_provided = 'use_folder_cover' in request.form
+    use_folder_cover = 1 if request.form.get('use_folder_cover', '0') in ('1', 'true', 'True', 'on') else 0
     cover_aspect_ratio = request.form.get('cover_aspect_ratio', '4:3').strip()
     if cover_aspect_ratio not in ('4:3', '16:9'):
         cover_aspect_ratio = '4:3'
@@ -232,6 +315,7 @@ def edit_media_library():
     color = request.form.get('color', '#94a3b8').strip() or '#94a3b8'
     gdrive_copy_remote = request.form.get('gdrive_copy_remote', '').strip() or None
     gdrive_view_local_mirror_path = request.form.get('gdrive_view_local_mirror_path', '').strip() or None
+    raw_content_kind = request.form.get('content_kind')
     try:
         group_id = _parse_group_id(request.form.get('group_id'))
     except ValueError as error:
@@ -244,8 +328,18 @@ def edit_media_library():
         old_library = None
         print(f"[API Warning] Failed to fetch old library: {e}")
 
+    if raw_content_kind is None:
+        content_kind = (old_library or {}).get('content_kind') or 'unspecified'
+    else:
+        content_kind = raw_content_kind.strip().lower()
+    if old_library and not use_folder_cover_provided:
+        # Older clients do not send the optional folder-cover field. Preserve
+        # the existing setting during an otherwise unrelated library edit.
+        use_folder_cover = int(old_library.get('use_folder_cover') or 0)
+
     try:
-        CategoryService.edit_library(db_type, int(library_id), name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title)
+        # content_kind 필드를 보내지 않으면(None) 기존 속성을 유지한다.
+        CategoryService.edit_library(db_type, int(library_id), name, physical_path, is_remote, rclone_rc_url, icon, color, hide_cover, group_id, gdrive_copy_remote, gdrive_view_local_mirror_path, cover_aspect_ratio, hide_title, content_kind, use_folder_cover=use_folder_cover)
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except sqlite3.IntegrityError:
@@ -263,7 +357,8 @@ def edit_media_library():
         new_path = CategoryService._clean_physical_path(physical_path)
         is_path_changed = (old_path != new_path)
         
-        if is_path_changed:
+        folder_cover_just_enabled = bool(use_folder_cover and not old_folder_cover_value)
+        if is_path_changed or folder_cover_just_enabled:
             db_path = get_db_path_for_scan(db_type)
             from services.scanner_queue import scanner_queue
             scanner_queue.enqueue('library_scan', db_type=db_type, db_path=db_path, 
@@ -304,6 +399,10 @@ def get_libraries_schedules():
     try:
         rows = CategoryRepository.get_all_libraries(db_type)
         libraries = [_format_library_row(r) for r in rows]
+        if db_type in ('general', 'adult'):
+            from services.folder_watch_service import status
+            for lib in libraries:
+                lib['watch'] = status(f"{db_type}:{lib['id']}")
         from services.scanner_queue import scanner_queue
         libraries = apply_running_scan_status(libraries, db_type, scanner_queue.get_queue_status())
         return jsonify({'success': True, 'libraries': libraries})
@@ -416,4 +515,3 @@ def move_media_library():
     except Exception as e:
         print(f"[API ERROR] 카테고리 이관 실패: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
-

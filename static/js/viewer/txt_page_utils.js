@@ -2,6 +2,30 @@ import { viewerStorage } from './storage.js';
 
 const localStorage = viewerStorage;
 
+export function isTxtRtlPageFlow() {
+  const modal = document.getElementById('media-viewer-modal');
+  return (localStorage.getItem('viewer_scroll_mode') || 'page') === 'page'
+    && modal?.dataset.displayMode === 'two-one';
+}
+
+// Chromium의 direction:rtl 스크롤은 첫 화면이 0이고 다음 화면이 음수다.
+// 나머지 뷰어 로직에는 항상 0..max의 논리적 진행 위치만 노출한다.
+export function getTxtPageScrollLeft(scrollWrapper) {
+  if (!scrollWrapper) return 0;
+  return isTxtRtlPageFlow() ? Math.max(0, -scrollWrapper.scrollLeft) : Math.max(0, scrollWrapper.scrollLeft);
+}
+
+export function setTxtPageScrollLeft(scrollWrapper, value, behavior = 'auto') {
+  if (!scrollWrapper) return;
+  const logical = Math.max(0, Number(value) || 0);
+  const left = isTxtRtlPageFlow() ? -logical : logical;
+  if (behavior === 'smooth' && typeof scrollWrapper.scrollTo === 'function') {
+    scrollWrapper.scrollTo({ left, top: scrollWrapper.scrollTop, behavior: 'smooth' });
+  } else {
+    scrollWrapper.scrollLeft = left;
+  }
+}
+
 export function getTxtPageGapPx(scrollWrapper) {
   if (!scrollWrapper) return 0;
   const pageStep = localStorage.getItem('comic_page_step') || '1';
@@ -26,6 +50,29 @@ export function getTxtPageMaxScroll(scrollWrapper) {
   return Math.max(0, scrollWrapper.scrollWidth - scrollWrapper.clientWidth);
 }
 
+export function getTxtViewportPageInfo(scrollWrapper) {
+  const advance = getTxtPageAdvanceWidth(scrollWrapper);
+  if (!scrollWrapper || advance <= 0) return { current: 1, total: 1 };
+  const maxScroll = getTxtPageMaxScroll(scrollWrapper);
+  const total = Math.max(1, Math.ceil(maxScroll / advance) + 1);
+  const current = Math.max(1, Math.min(total, Math.round(getTxtPageScrollLeft(scrollWrapper) / advance) + 1));
+  return { current, total };
+}
+
+export function getTxtPhysicalPageInfo(scrollWrapper) {
+  const contentArea = document.getElementById('txt-content-area');
+  if (!scrollWrapper || !contentArea) return { first: 1, last: 1, total: 1 };
+  const step = localStorage.getItem('comic_page_step') === '2' ? 2 : 1;
+  const styles = window.getComputedStyle(contentArea);
+  const columnWidth = parseFloat(styles.columnWidth) || scrollWrapper.clientWidth || 1;
+  const columnGap = parseFloat(styles.columnGap) || 0;
+  const unit = Math.max(1, columnWidth + columnGap);
+  const total = Math.max(1, Math.round((contentArea.scrollWidth + columnGap) / unit));
+  const spreadIndex = Math.max(0, Math.round(getTxtPageScrollLeft(scrollWrapper) / Math.max(1, getTxtPageAdvanceWidth(scrollWrapper))));
+  const first = Math.min(total, spreadIndex * step + 1);
+  return { first, last: Math.min(total, first + step - 1), total };
+}
+
 // 챕터의 마지막 페이지(컬럼 스프레드)는 폭이 꽉 차지 않는 경우가 많아,
 // maxScroll이 stepWidth의 정확한 배수가 아닐 수 있다. 이 경우 "가장 가까운
 // stepWidth 배수"로의 단순 반올림은 실제로는 마지막 페이지(maxScroll)에 더
@@ -37,7 +84,7 @@ export function isTxtScrollLeftAtMaxPage(scrollWrapper) {
   const stepWidth = getTxtPageAdvanceWidth(scrollWrapper);
   if (stepWidth <= 0) return false;
   const maxScroll = getTxtPageMaxScroll(scrollWrapper);
-  const current = scrollWrapper.scrollLeft;
+  const current = getTxtPageScrollLeft(scrollWrapper);
   const roundedStop = Math.min(maxScroll, Math.max(0, Math.round(current / stepWidth) * stepWidth));
   return Math.abs(current - maxScroll) < Math.abs(current - roundedStop);
 }
@@ -48,9 +95,9 @@ export function snapTxtPageScrollLeft(scrollWrapper) {
   if (stepWidth <= 0) return;
 
   const maxScroll = getTxtPageMaxScroll(scrollWrapper);
-  const current = scrollWrapper.scrollLeft;
+  const current = getTxtPageScrollLeft(scrollWrapper);
   const roundedStop = Math.min(maxScroll, Math.max(0, Math.round(current / stepWidth) * stepWidth));
-  scrollWrapper.scrollLeft = isTxtScrollLeftAtMaxPage(scrollWrapper) ? maxScroll : roundedStop;
+  setTxtPageScrollLeft(scrollWrapper, isTxtScrollLeftAtMaxPage(scrollWrapper) ? maxScroll : roundedStop);
 }
 
 // 삽화 이미지의 max-height가 뷰포트(vh) 기준으로 박혀 있으면, 실제 한 페이지(컬럼)
@@ -82,18 +129,20 @@ export function applyTxtImageMaxHeight(scrollWrapper, contentArea) {
 export function applyTxtTwoPageTrailingSpacer(scrollWrapper, contentArea) {
   if (!scrollWrapper || !contentArea) return;
 
+  // 이전 2장 보기에서 늘린 폭을 먼저 무조건 제거한다. 모드/장수 조건을 먼저
+  // 검사해 반환하면 이 인라인 폭이 스크롤 또는 1장 보기에 남아 본문이 잘린다.
+  contentArea.style.marginRight = '0px';
+  contentArea.style.width = '';
+
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   const pageStep = localStorage.getItem('comic_page_step') || '1';
   if (scrollMode !== 'page' || pageStep !== '2') return;
 
   // Recalculate from a clean baseline to avoid oscillation across repeated renders.
   // (marginRight/spacer-div 방식은 둘 다 실기기 로그로 무효 확인됨 — 아래 참고)
-  contentArea.style.marginRight = '0px';
   // .txt-content CSS 규칙이 width:100%로 고정돼 있어(CSS class, tab_media_library_viewer.css),
   // 아래 실측 전에 반드시 인라인 width를 걷어내야 "이전 홀수 보정으로 넓혀둔 폭"이
   // 이번 측정에 섞여 들어가지 않는다.
-  contentArea.style.width = '';
-
   if (!Number.isFinite(scrollWrapper.clientWidth) || scrollWrapper.clientWidth <= 0) return;
 
   // column-count:auto + 고정 column-width 조합에서는 컨텐츠가 필요로 하는 만큼

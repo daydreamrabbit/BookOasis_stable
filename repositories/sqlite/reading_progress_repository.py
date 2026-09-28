@@ -8,17 +8,16 @@ class ReadingProgressRepository:
     @staticmethod
     def get_book_for_progress(db_type, book_id):
         """진행률 기록에 필요한 도서 정보 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT file_format, total_pages, title, author, publisher, series_name, created_at
-            FROM books WHERE id = ?
-            """,
-            (book_id,),
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT file_format, total_pages, title, author, publisher, series_name, created_at
+                FROM books WHERE id = ?
+                """,
+                (book_id,),
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -39,42 +38,40 @@ class ReadingProgressRepository:
     @staticmethod
     def get_progress_only(db_type, book_id, user_id):
         """특정 사용자의 도서 읽기 진행률만 단순 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT pages_read, is_completed FROM user_progress WHERE book_id = ? AND user_id = ?",
-            (book_id, user_id),
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT pages_read, is_completed FROM user_progress WHERE book_id = ? AND user_id = ?",
+                (book_id, user_id),
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_progress_state(db_type, book_id, user_id):
         """특정 사용자의 도서 진행 상태 상세 조회 (책 포맷 정보 결합)"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT
-                b.file_format,
-                b.total_pages,
-                p.pages_read,
-                p.last_read_at,
-                p.last_epub_cfi,
-                p.last_epub_href,
-                p.last_epub_spine_index,
-                p.last_epub_percent,
-                p.last_epub_fingerprint,
-                p.last_epub_updated_at
-            FROM books b
-            LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
-            WHERE b.id = ?
-            """,
-            (user_id, book_id),
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    b.file_format,
+                    b.total_pages,
+                    p.pages_read,
+                    p.last_read_at,
+                    p.last_epub_cfi,
+                    p.last_epub_href,
+                    p.last_epub_spine_index,
+                    p.last_epub_percent,
+                    p.last_epub_fingerprint,
+                    p.last_epub_updated_at
+                FROM books b
+                LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
+                WHERE b.id = ?
+                """,
+                (user_id, book_id),
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -189,127 +186,138 @@ class ReadingProgressRepository:
     @staticmethod
     def get_username_by_id(db_type, user_id):
         """특정 사용자의 사용자명 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT username FROM users WHERE id = ?", (user_id,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
         return row['username'] if row else None
 
     @staticmethod
     def get_settings_value(db_type, key):
         """설정 테이블에서 특정 설정 키 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("SELECT `value` FROM settings WHERE `key` = ?", (key,))
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT `value` FROM settings WHERE `key` = ?", (key,))
+            row = cursor.fetchone()
         return row['value'] if row else None
 
     @staticmethod
     def fetch_reading_history(db_type, user_id, limit, hide_completed):
         """특정 사용자의 독서 진척 이력 조회 (완독 숨김 옵션 결합)"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
 
-        if db_type == 'audiobook':
-            cursor.execute("""
-                SELECT a.id, a.library_id, a.title, '' AS title_alias, a.title AS series_name, '' AS series_alias,
-                       '/api/media/audiobooks/' || a.id || '/cover' AS cover_image,
-                       a.updated_at AS cover_updated_at, 'audiobook' AS file_format,
-                       COALESCE(p.current_time, 0) AS pages_read, a.total_tracks AS total_pages, a.total_tracks AS total_tracks,
-                       COALESCE(a.is_favorite, 0) AS is_favorite, COALESCE(p.is_completed, 0) AS is_completed,
-                       0 AS has_unfinished_siblings, p.last_listened_at AS last_read_at, 0 AS metadata_locked
-                FROM audiobooks a
-                JOIN audiobook_progress p ON a.id = p.audiobook_id
-                WHERE p.user_id = ? AND COALESCE(a.is_deleted, 0) = 0 AND (COALESCE(p.current_time, 0) > 0 OR COALESCE(p.is_completed, 0) = 1)
-                ORDER BY p.last_listened_at DESC
-                LIMIT ?
-            """, (user_id, limit))
-            rows = cursor.fetchall()
-            conn.close()
-            return [dict(row) for row in rows]
+            if db_type == 'audiobook':
+                cursor.execute("""
+                    SELECT a.id, a.library_id, a.title, '' AS title_alias, a.title AS series_name, '' AS series_alias,
+                           '/api/media/audiobooks/' || a.id || '/cover' AS cover_image,
+                           a.updated_at AS cover_updated_at, 'audiobook' AS file_format,
+                           COALESCE(p.current_time, 0) AS pages_read, a.total_tracks AS total_pages, a.total_tracks AS total_tracks,
+                           COALESCE(a.is_favorite, 0) AS is_favorite, COALESCE(p.is_completed, 0) AS is_completed,
+                           0 AS has_unfinished_siblings, p.last_listened_at AS last_read_at, 0 AS metadata_locked
+                    FROM audiobooks a
+                    JOIN audiobook_progress p ON a.id = p.audiobook_id
+                    WHERE p.user_id = ? AND COALESCE(a.is_deleted, 0) = 0 AND (COALESCE(p.current_time, 0) > 0 OR COALESCE(p.is_completed, 0) = 1)
+                    ORDER BY p.last_listened_at DESC
+                    LIMIT ?
+                """, (user_id, limit))
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
 
-        if db_type == 'video':
-            cursor.execute("""
-                SELECT v.id, v.library_id, v.title, '' AS title_alias, v.title AS series_name, '' AS series_alias,
-                       '/api/media/videos/' || v.id || '/cover' AS cover_image,
-                       v.updated_at AS cover_updated_at, 'video' AS file_format,
-                       COALESCE(p.current_time, 0) AS pages_read, v.total_episodes AS total_pages, v.total_episodes AS total_tracks,
-                       COALESCE(v.is_favorite, 0) AS is_favorite, COALESCE(p.is_completed, 0) AS is_completed,
-                       0 AS has_unfinished_siblings, p.last_watched_at AS last_read_at, 0 AS metadata_locked
-                FROM videos v
-                JOIN video_progress p ON v.id = p.video_id
-                WHERE p.user_id = ? AND COALESCE(v.is_deleted, 0) = 0 AND (COALESCE(p.current_time, 0) > 0 OR COALESCE(p.is_completed, 0) = 1)
-                ORDER BY p.last_watched_at DESC
-                LIMIT ?
-            """, (user_id, limit))
-            rows = cursor.fetchall()
-            conn.close()
-            return [dict(row) for row in rows]
+            if db_type == 'video':
+                cursor.execute("""
+                    SELECT v.id, v.library_id, v.title, '' AS title_alias, v.title AS series_name, '' AS series_alias,
+                           '/api/media/videos/' || v.id || '/cover' AS cover_image,
+                           v.updated_at AS cover_updated_at, 'video' AS file_format,
+                           COALESCE(p.current_time, 0) AS pages_read, v.total_episodes AS total_pages, v.total_episodes AS total_tracks,
+                           COALESCE(v.is_favorite, 0) AS is_favorite, COALESCE(p.is_completed, 0) AS is_completed,
+                           0 AS has_unfinished_siblings, p.last_watched_at AS last_read_at, 0 AS metadata_locked
+                    FROM videos v
+                    JOIN video_progress p ON v.id = p.video_id
+                    WHERE p.user_id = ? AND COALESCE(v.is_deleted, 0) = 0 AND (COALESCE(p.current_time, 0) > 0 OR COALESCE(p.is_completed, 0) = 1)
+                    ORDER BY p.last_watched_at DESC
+                    LIMIT ?
+                """, (user_id, limit))
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
 
-        base_select = """
-            SELECT * FROM (
-            SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format,
-                   p.pages_read, b.total_pages, p.last_read_at,
-                   CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
-                                     p.is_completed,
-                                     CASE WHEN EXISTS (
-                                             SELECT 1
-                                             FROM books b2
-                                             LEFT JOIN user_progress p2 ON b2.id = p2.book_id AND p2.user_id = p.user_id
-                                             WHERE COALESCE(b2.is_deleted, 0) = 0
-                                                 AND b2.library_id = b.library_id
-                                                 AND COALESCE(NULLIF(b2.series_name, ''), CAST(b2.id AS TEXT)) = COALESCE(NULLIF(b.series_name, ''), CAST(b.id AS TEXT))
-                                                 AND (
-                                                     p2.book_id IS NULL
-                                                     OR COALESCE(p2.is_completed, 0) = 0
-                                                     OR (COALESCE(b2.total_pages, 0) > 0 AND COALESCE(p2.pages_read, 0) < COALESCE(b2.total_pages, 0))
-                                                 )
-                                     ) THEN 1 ELSE 0 END AS has_unfinished_siblings,
-                                     COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY b.library_id, COALESCE(NULLIF(TRIM(b.series_name), ''), '__single__:' || CAST(b.id AS TEXT))
-                       ORDER BY p.last_read_at DESC, b.id DESC
-                   ) AS series_rank,
-                   COUNT(*) OVER (
-                       PARTITION BY b.library_id, COALESCE(NULLIF(TRIM(b.series_name), ''), '__single__:' || CAST(b.id AS TEXT))
-                   ) AS history_book_count
-            FROM user_progress p
-            JOIN books b ON p.book_id = b.id
-            JOIN user_category_permissions ucp ON b.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
-            LEFT JOIN user_favorites uf ON uf.book_id = b.id AND uf.user_id = p.user_id
-            WHERE COALESCE(b.is_deleted, 0) = 0 AND p.user_id = ? AND COALESCE(p.pages_read, 0) > 0
-        """
-        if hide_completed:
-            base_select += """
-                            AND NOT (
-                                (COALESCE(p.is_completed, 0) = 1 OR (COALESCE(b.total_pages, 0) > 0 AND COALESCE(p.pages_read, 0) >= COALESCE(b.total_pages, 0)))
-                                AND NOT EXISTS (
-                                    SELECT 1
-                                    FROM books b2
-                                    LEFT JOIN user_progress p2 ON b2.id = p2.book_id AND p2.user_id = p.user_id
-                                    WHERE COALESCE(b2.is_deleted, 0) = 0
-                                        AND b2.library_id = b.library_id
-                                        AND COALESCE(NULLIF(b2.series_name, ''), CAST(b2.id AS TEXT)) = COALESCE(NULLIF(b.series_name, ''), CAST(b.id AS TEXT))
-                                        AND (
-                                            p2.book_id IS NULL
-                                            OR COALESCE(p2.is_completed, 0) = 0
-                                            OR (COALESCE(b2.total_pages, 0) > 0 AND COALESCE(p2.pages_read, 0) < COALESCE(b2.total_pages, 0))
-                                        )
-                                )
-                            )
+            # 순위(시리즈당 최신 1권)와 LIMIT을 먼저 적용하고, has_unfinished_siblings는 그렇게 추려진
+            # 최종 행에만 계산한다. 예전에는 상관 EXISTS를 진행 기록 행마다 순위 계산 전에 돌려서
+            # (COALESCE 비교라 인덱스도 못 탐) 진행 기록이 수백 건이면 홈 히스토리가 십수 초 걸렸다.
+            # MariaDB 저장소의 optimized_query와 같은 구조이다.
+            optimized_query = """
+                SELECT limited_history.*,
+                       CASE
+                           WHEN limited_history.series_name IS NULL OR limited_history.series_name = '' THEN
+                               CASE WHEN COALESCE(limited_history.is_completed, 0) = 0
+                                         OR (COALESCE(limited_history.total_pages, 0) > 0
+                                             AND COALESCE(limited_history.pages_read, 0) < COALESCE(limited_history.total_pages, 0))
+                                    THEN 1 ELSE 0 END
+                           WHEN EXISTS (
+                               SELECT 1
+                               FROM books b2
+                               LEFT JOIN user_progress p2 ON b2.id = p2.book_id AND p2.user_id = limited_history.user_id
+                               WHERE COALESCE(b2.is_deleted, 0) = 0
+                                   AND b2.library_id = limited_history.library_id
+                                   AND b2.series_name = limited_history.series_name
+                                   AND (
+                                       p2.book_id IS NULL
+                                       OR COALESCE(p2.is_completed, 0) = 0
+                                       OR (COALESCE(b2.total_pages, 0) > 0
+                                           AND COALESCE(p2.pages_read, 0) < COALESCE(b2.total_pages, 0))
+                                   )
+                           ) THEN 1 ELSE 0
+                       END AS has_unfinished_siblings
+                FROM (
+                    SELECT * FROM (
+                        SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format,
+                               p.pages_read, b.total_pages, p.last_read_at, p.user_id,
+                               CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
+                               p.is_completed,
+                               COALESCE(b.metadata_locked, 0) AS metadata_locked,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY b.library_id, COALESCE(NULLIF(TRIM(b.series_name), ''), '__single__:' || CAST(b.id AS TEXT))
+                                   ORDER BY p.last_read_at DESC, b.id DESC
+                               ) AS series_rank,
+                               COUNT(*) OVER (
+                                   PARTITION BY b.library_id, COALESCE(NULLIF(TRIM(b.series_name), ''), '__single__:' || CAST(b.id AS TEXT))
+                               ) AS history_book_count
+                        FROM user_progress p
+                        JOIN books b ON p.book_id = b.id
+                        JOIN user_category_permissions ucp ON b.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
+                        LEFT JOIN user_favorites uf ON uf.book_id = b.id AND uf.user_id = p.user_id
+                        WHERE COALESCE(b.is_deleted, 0) = 0 AND p.user_id = ? AND COALESCE(p.pages_read, 0) > 0
+                    ) ranked_history
+                    WHERE series_rank = 1
+                    ORDER BY last_read_at DESC
+                    LIMIT ? OFFSET ?
+                ) limited_history
+                ORDER BY limited_history.last_read_at DESC
             """
-        base_select += """
-            ) ranked_history
-            WHERE series_rank = 1
-            ORDER BY last_read_at DESC
-            LIMIT ?
-        """
-        cursor.execute(base_select, (user_id, limit))
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+
+            target_limit = int(limit)
+            # 완독 숨김: 시리즈에 안 읽은 권이 있는 행만 남기므로, 걸러져 모자라면 다음 배치를 이어서 채운다.
+            page_size = target_limit if not hide_completed else max(50, target_limit * 2)
+            offset = 0
+            selected_rows = []
+
+            while True:
+                cursor.execute(optimized_query, (user_id, page_size, offset))
+                batch = [dict(row) for row in cursor.fetchall()]
+
+                if not hide_completed:
+                    return batch
+
+                selected_rows.extend(
+                    row for row in batch
+                    if int(row.get('has_unfinished_siblings') or 0) == 1
+                )
+                if len(selected_rows) >= target_limit or len(batch) < page_size:
+                    return selected_rows[:target_limit]
+
+                offset += page_size
 
     @staticmethod
     def fetch_recently_added_by_user(db_type, user_id):
@@ -318,132 +326,138 @@ class ReadingProgressRepository:
         """
         if db_type == 'audiobook':
             safe_user_id = int(user_id) if user_id is not None else -1
-            conn = database.get_connection(db_type)
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT a.id, a.library_id, a.title, '' AS title_alias, a.title AS series_name, '' AS series_alias,
-                       '/api/media/audiobooks/' || a.id || '/cover' AS cover_image,
-                       a.updated_at AS cover_updated_at, 'audiobook' AS file_format, a.total_tracks AS total_pages, a.total_tracks AS total_tracks, a.created_at,
-                       COALESCE(a.is_favorite, 0) AS is_favorite, 0 AS metadata_locked
-                FROM audiobooks a
-                JOIN user_category_permissions p ON a.library_id = p.library_id
-                WHERE COALESCE(a.is_deleted, 0) = 0 AND p.user_id = ? AND p.has_access = 1
-                ORDER BY a.created_at DESC, a.id DESC
-                LIMIT 20
-            """, (safe_user_id,))
-            rows = cursor.fetchall()
-            conn.close()
+            with database.connection(db_type) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT a.id, a.library_id, a.title, '' AS title_alias, a.title AS series_name, '' AS series_alias,
+                           '/api/media/audiobooks/' || a.id || '/cover' AS cover_image,
+                           a.updated_at AS cover_updated_at, 'audiobook' AS file_format, a.total_tracks AS total_pages, a.total_tracks AS total_tracks, a.created_at,
+                           COALESCE(a.is_favorite, 0) AS is_favorite, 0 AS metadata_locked
+                    FROM audiobooks a
+                    JOIN user_category_permissions p ON a.library_id = p.library_id
+                    WHERE COALESCE(a.is_deleted, 0) = 0 AND p.user_id = ? AND p.has_access = 1
+                    ORDER BY a.created_at DESC, a.id DESC
+                    LIMIT 20
+                """, (safe_user_id,))
+                rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
         if db_type == 'video':
             safe_user_id = int(user_id) if user_id is not None else -1
-            conn = database.get_connection(db_type)
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT v.id, v.library_id, v.title, '' AS title_alias, v.title AS series_name, '' AS series_alias,
-                       '/api/media/videos/' || v.id || '/cover' AS cover_image,
-                       v.updated_at AS cover_updated_at, 'video' AS file_format, v.total_episodes AS total_pages, v.created_at,
-                       COALESCE(v.is_favorite, 0) AS is_favorite, 0 AS metadata_locked
-                FROM videos v
-                JOIN user_category_permissions p ON v.library_id = p.library_id
-                WHERE COALESCE(v.is_deleted, 0) = 0 AND p.user_id = ? AND p.has_access = 1
-                ORDER BY v.created_at DESC, v.id DESC
-                LIMIT 20
-            """, (safe_user_id,))
-            rows = cursor.fetchall()
-            conn.close()
+            with database.connection(db_type) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT v.id, v.library_id, v.title, '' AS title_alias, v.title AS series_name, '' AS series_alias,
+                           '/api/media/videos/' || v.id || '/cover' AS cover_image,
+                           v.updated_at AS cover_updated_at, 'video' AS file_format, v.total_episodes AS total_pages, v.created_at,
+                           COALESCE(v.is_favorite, 0) AS is_favorite, 0 AS metadata_locked
+                    FROM videos v
+                    JOIN user_category_permissions p ON v.library_id = p.library_id
+                    WHERE COALESCE(v.is_deleted, 0) = 0 AND p.user_id = ? AND p.has_access = 1
+                    ORDER BY v.created_at DESC, v.id DESC
+                    LIMIT 20
+                """, (safe_user_id,))
+                rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
         # user_id=None 이면 매칭 불가한 값(-1)으로 치환 → 권한 행 없음 → 빈 결과
         safe_user_id = int(user_id) if user_id is not None else -1
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
-                   CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, COALESCE(b.metadata_locked, 0) AS metadata_locked
-            FROM books b
-            INNER JOIN (
-                SELECT MAX(id) as max_id
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
+                       CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, b.metadata_locked
                 FROM (
-                    SELECT id, series_name
-                    FROM books
-                    WHERE COALESCE(is_deleted, 0) = 0
-                    ORDER BY id DESC
-                    LIMIT 1000
-                ) sub
-                GROUP BY CASE WHEN series_name IS NOT NULL AND series_name != '' THEN series_name ELSE CAST(id AS TEXT) END
-            ) g ON b.id = g.max_id
-            JOIN user_category_permissions p ON b.library_id = p.library_id
-            LEFT JOIN user_favorites uf ON uf.book_id = b.id AND uf.user_id = ?
-            WHERE COALESCE(b.is_deleted, 0) = 0 AND p.user_id = ? AND p.has_access = 1
-            ORDER BY b.created_at DESC, b.id DESC
-            LIMIT 20
-        """, (safe_user_id, safe_user_id))
-        rows = cursor.fetchall()
-        conn.close()
+                    SELECT recent_books.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY recent_books.library_id,
+                                   CASE WHEN recent_books.series_name IS NULL OR recent_books.series_name = '' THEN recent_books.id ELSE NULL END,
+                                   CASE WHEN recent_books.series_name IS NULL OR recent_books.series_name = '' THEN NULL ELSE recent_books.series_name END
+                               ORDER BY recent_books.created_at DESC, recent_books.id DESC
+                           ) AS series_rank
+                    FROM (
+                        SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias,
+                               b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
+                               COALESCE(b.metadata_locked, 0) AS metadata_locked
+                        FROM books b
+                        JOIN user_category_permissions p ON b.library_id = p.library_id
+                        WHERE COALESCE(b.is_deleted, 0) = 0 AND p.user_id = ? AND p.has_access = 1
+                        ORDER BY b.created_at DESC, b.id DESC
+                        LIMIT 1000
+                    ) recent_books
+                ) b
+                LEFT JOIN user_favorites uf ON uf.book_id = b.id AND uf.user_id = ?
+                WHERE b.series_rank = 1
+                ORDER BY b.created_at DESC, b.id DESC
+                LIMIT 20
+            """, (safe_user_id, safe_user_id))
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
     def fetch_recently_added_all(db_type, user_id):
         """어드민 등 제한 없이 최근 추가된 도서 목록 전체 조회"""
         if db_type == 'audiobook':
-            conn = database.get_connection(db_type)
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT a.id, a.library_id, a.title, '' AS title_alias, a.title AS series_name, '' AS series_alias,
-                       '/api/media/audiobooks/' || a.id || '/cover' AS cover_image,
-                       a.updated_at AS cover_updated_at, 'audiobook' AS file_format, a.total_tracks AS total_pages, a.total_tracks AS total_tracks, a.created_at,
-                       COALESCE(a.is_favorite, 0) AS is_favorite, 0 AS metadata_locked
-                FROM audiobooks a
-                WHERE COALESCE(a.is_deleted, 0) = 0
-                ORDER BY a.created_at DESC, a.id DESC
-                LIMIT 20
-            """)
-            rows = cursor.fetchall()
-            conn.close()
+            with database.connection(db_type) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT a.id, a.library_id, a.title, '' AS title_alias, a.title AS series_name, '' AS series_alias,
+                           '/api/media/audiobooks/' || a.id || '/cover' AS cover_image,
+                           a.updated_at AS cover_updated_at, 'audiobook' AS file_format, a.total_tracks AS total_pages, a.total_tracks AS total_tracks, a.created_at,
+                           COALESCE(a.is_favorite, 0) AS is_favorite, 0 AS metadata_locked
+                    FROM audiobooks a
+                    WHERE COALESCE(a.is_deleted, 0) = 0
+                    ORDER BY a.created_at DESC, a.id DESC
+                    LIMIT 20
+                """)
+                rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
         if db_type == 'video':
-            conn = database.get_connection(db_type)
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT v.id, v.library_id, v.title, '' AS title_alias, v.title AS series_name, '' AS series_alias,
-                       '/api/media/videos/' || v.id || '/cover' AS cover_image,
-                       v.updated_at AS cover_updated_at, 'video' AS file_format, v.total_episodes AS total_pages, v.created_at,
-                       COALESCE(v.is_favorite, 0) AS is_favorite, 0 AS metadata_locked
-                FROM videos v
-                WHERE COALESCE(v.is_deleted, 0) = 0
-                ORDER BY v.created_at DESC, v.id DESC
-                LIMIT 20
-            """)
-            rows = cursor.fetchall()
-            conn.close()
+            with database.connection(db_type) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT v.id, v.library_id, v.title, '' AS title_alias, v.title AS series_name, '' AS series_alias,
+                           '/api/media/videos/' || v.id || '/cover' AS cover_image,
+                           v.updated_at AS cover_updated_at, 'video' AS file_format, v.total_episodes AS total_pages, v.created_at,
+                           COALESCE(v.is_favorite, 0) AS is_favorite, 0 AS metadata_locked
+                    FROM videos v
+                    WHERE COALESCE(v.is_deleted, 0) = 0
+                    ORDER BY v.created_at DESC, v.id DESC
+                    LIMIT 20
+                """)
+                rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
-                   CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, COALESCE(b.metadata_locked, 0) AS metadata_locked
-            FROM books b
-            INNER JOIN (
-                SELECT MAX(id) as max_id
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
+                       CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, b.metadata_locked
                 FROM (
-                    SELECT id, series_name
-                    FROM books
-                    WHERE COALESCE(is_deleted, 0) = 0
-                    ORDER BY id DESC
-                    LIMIT 1000
-                ) sub
-                GROUP BY CASE WHEN series_name IS NOT NULL AND series_name != '' THEN series_name ELSE CAST(id AS TEXT) END
-            ) g ON b.id = g.max_id
-            LEFT JOIN user_favorites uf ON uf.book_id = b.id AND uf.user_id = ?
-            WHERE COALESCE(b.is_deleted, 0) = 0
-            ORDER BY b.created_at DESC, b.id DESC
-            LIMIT 20
-        """, (int(user_id) if user_id is not None else 0,))
-        rows = cursor.fetchall()
-        conn.close()
+                    SELECT recent_books.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY recent_books.library_id,
+                                   CASE WHEN recent_books.series_name IS NULL OR recent_books.series_name = '' THEN recent_books.id ELSE NULL END,
+                                   CASE WHEN recent_books.series_name IS NULL OR recent_books.series_name = '' THEN NULL ELSE recent_books.series_name END
+                               ORDER BY recent_books.created_at DESC, recent_books.id DESC
+                           ) AS series_rank
+                    FROM (
+                        SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias,
+                               b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
+                               COALESCE(b.metadata_locked, 0) AS metadata_locked
+                        FROM books b
+                        WHERE COALESCE(b.is_deleted, 0) = 0
+                        ORDER BY b.created_at DESC, b.id DESC
+                        LIMIT 1000
+                    ) recent_books
+                ) b
+                LEFT JOIN user_favorites uf ON uf.book_id = b.id AND uf.user_id = ?
+                WHERE b.series_rank = 1
+                ORDER BY b.created_at DESC, b.id DESC
+                LIMIT 20
+            """, (int(user_id) if user_id is not None else 0,))
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -529,21 +543,87 @@ class ReadingProgressRepository:
             conn.close()
 
     @staticmethod
+    def get_book_ids_by_series(db_type, series_name, library_id):
+        """특정 시리즈에 속한 ID 목록 조회 (읽기 전용 - mark_read의 시리즈 범위 완독 처리용).
+        delete_user_progress_by_series와 동일한 조회 조건이지만 삭제는 하지 않는다."""
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            if db_type == 'audiobook':
+                cursor.execute(
+                    "SELECT id FROM audiobooks WHERE title = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (series_name, library_id)
+                )
+            elif db_type == 'video':
+                cursor.execute(
+                    "SELECT id FROM videos WHERE title = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (series_name, library_id)
+                )
+            else:
+                cursor.execute(
+                    "SELECT id FROM books WHERE series_name = ? AND library_id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (series_name, library_id)
+                )
+            return [row['id'] for row in cursor.fetchall()]
+
+    @staticmethod
     def get_distinct_read_dates(db_type, user_id):
         """특정 사용자가 책을 읽은 고유 날짜 목록 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
 
-        if db_type == 'audiobook':
+            if db_type == 'audiobook':
+                cursor.execute("""
+                    SELECT DISTINCT DATE(p.last_listened_at) AS read_date
+                    FROM audiobook_progress p
+                    JOIN audiobooks a ON p.audiobook_id = a.id
+                    JOIN user_category_permissions ucp ON a.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
+                    WHERE p.user_id = ?
+                      AND p.last_listened_at IS NOT NULL
+                      AND COALESCE(a.is_deleted, 0) = 0
+                      AND (COALESCE(p.current_time, 0) > 0 OR COALESCE(p.is_completed, 0) = 1)
+                    ORDER BY read_date DESC
+                """, (user_id,))
+                rows = cursor.fetchall()
+                conn.close()
+                normalized = []
+                for r in rows:
+                    try:
+                        val = r['read_date']
+                    except Exception:
+                        val = r[0] if r else None
+                    if val:
+                        normalized.append(str(val))
+                return normalized
+
+            if db_type == 'video':
+                cursor.execute("""
+                    SELECT DISTINCT DATE(p.last_watched_at) AS read_date
+                    FROM video_progress p
+                    JOIN videos v ON p.video_id = v.id
+                    WHERE p.user_id = ?
+                      AND p.last_watched_at IS NOT NULL
+                      AND COALESCE(v.is_deleted, 0) = 0
+                      AND (COALESCE(p.current_time, 0) > 0 OR COALESCE(p.is_completed, 0) = 1)
+                    ORDER BY read_date DESC
+                """, (user_id,))
+                rows = cursor.fetchall()
+                conn.close()
+                normalized = []
+                for r in rows:
+                    try:
+                        val = r['read_date']
+                    except Exception:
+                        val = r[0] if r else None
+                    if val:
+                        normalized.append(str(val))
+                return normalized
+
             cursor.execute("""
-                SELECT DISTINCT DATE(p.last_listened_at) AS read_date
-                FROM audiobook_progress p
-                JOIN audiobooks a ON p.audiobook_id = a.id
-                JOIN user_category_permissions ucp ON a.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
-                WHERE p.user_id = ?
-                  AND p.last_listened_at IS NOT NULL
-                  AND COALESCE(a.is_deleted, 0) = 0
-                  AND (COALESCE(p.current_time, 0) > 0 OR COALESCE(p.is_completed, 0) = 1)
+                SELECT DISTINCT DATE(p.last_read_at) as read_date
+                FROM user_progress p
+                JOIN books b ON p.book_id = b.id
+                JOIN user_category_permissions ucp ON b.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
+                WHERE p.user_id = ? AND p.last_read_at IS NOT NULL AND COALESCE(b.is_deleted, 0) = 0
                 ORDER BY read_date DESC
             """, (user_id,))
             rows = cursor.fetchall()
@@ -557,66 +637,65 @@ class ReadingProgressRepository:
                 if val:
                     normalized.append(str(val))
             return normalized
-
-        if db_type == 'video':
-            cursor.execute("""
-                SELECT DISTINCT DATE(p.last_watched_at) AS read_date
-                FROM video_progress p
-                JOIN videos v ON p.video_id = v.id
-                WHERE p.user_id = ?
-                  AND p.last_watched_at IS NOT NULL
-                  AND COALESCE(v.is_deleted, 0) = 0
-                  AND (COALESCE(p.current_time, 0) > 0 OR COALESCE(p.is_completed, 0) = 1)
-                ORDER BY read_date DESC
-            """, (user_id,))
-            rows = cursor.fetchall()
-            conn.close()
-            normalized = []
-            for r in rows:
-                try:
-                    val = r['read_date']
-                except Exception:
-                    val = r[0] if r else None
-                if val:
-                    normalized.append(str(val))
-            return normalized
-
-        cursor.execute("""
-            SELECT DISTINCT DATE(p.last_read_at) as read_date
-            FROM user_progress p
-            JOIN books b ON p.book_id = b.id
-            JOIN user_category_permissions ucp ON b.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
-            WHERE p.user_id = ? AND p.last_read_at IS NOT NULL AND COALESCE(b.is_deleted, 0) = 0
-            ORDER BY read_date DESC
-        """, (user_id,))
-        rows = cursor.fetchall()
-        conn.close()
-        normalized = []
-        for r in rows:
-            try:
-                val = r['read_date']
-            except Exception:
-                val = r[0] if r else None
-            if val:
-                normalized.append(str(val))
-        return normalized
 
     @staticmethod
     def get_completed_count_by_year(db_type, user_id, year_str):
         """연간 완독 도서 수 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
 
-        if db_type == 'audiobook':
+            if db_type == 'audiobook':
+                cursor.execute("""
+                    SELECT COUNT(*)
+                    FROM audiobook_progress p
+                    JOIN audiobooks a ON p.audiobook_id = a.id
+                    JOIN user_category_permissions ucp ON a.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
+                    WHERE p.user_id = ?
+                      AND COALESCE(p.is_completed, 0) = 1
+                      AND strftime('%Y', p.last_listened_at) = ?
+                      AND COALESCE(a.is_deleted, 0) = 0
+                """, (user_id, str(year_str)))
+                row = cursor.fetchone()
+                conn.close()
+                if not row:
+                    return 0
+                try:
+                    return int(row[0] or 0)
+                except Exception:
+                    try:
+                        return int(row['COUNT(*)'] or 0)
+                    except Exception:
+                        return 0
+
+            if db_type == 'video':
+                cursor.execute("""
+                    SELECT COUNT(*)
+                    FROM video_progress p
+                    JOIN videos v ON p.video_id = v.id
+                    WHERE p.user_id = ?
+                      AND COALESCE(p.is_completed, 0) = 1
+                      AND strftime('%Y', p.last_watched_at) = ?
+                      AND COALESCE(v.is_deleted, 0) = 0
+                """, (user_id, str(year_str)))
+                row = cursor.fetchone()
+                conn.close()
+                if not row:
+                    return 0
+                try:
+                    return int(row[0] or 0)
+                except Exception:
+                    try:
+                        return int(row['COUNT(*)'] or 0)
+                    except Exception:
+                        return 0
+
             cursor.execute("""
                 SELECT COUNT(*)
-                FROM audiobook_progress p
-                JOIN audiobooks a ON p.audiobook_id = a.id
-                JOIN user_category_permissions ucp ON a.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
-                WHERE p.user_id = ?
-                  AND COALESCE(p.is_completed, 0) = 1
-                  AND strftime('%Y', p.last_listened_at) = ?
-                  AND COALESCE(a.is_deleted, 0) = 0
+                FROM user_progress p
+                JOIN books b ON p.book_id = b.id
+                JOIN user_category_permissions ucp ON b.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
+                WHERE p.user_id = ? AND (p.is_completed = 1 OR p.last_epub_percent >= 99)
+                  AND strftime('%Y', p.last_read_at) = ? AND COALESCE(b.is_deleted, 0) = 0
             """, (user_id, str(year_str)))
             row = cursor.fetchone()
             conn.close()
@@ -629,65 +708,65 @@ class ReadingProgressRepository:
                     return int(row['COUNT(*)'] or 0)
                 except Exception:
                     return 0
-
-        if db_type == 'video':
-            cursor.execute("""
-                SELECT COUNT(*)
-                FROM video_progress p
-                JOIN videos v ON p.video_id = v.id
-                WHERE p.user_id = ?
-                  AND COALESCE(p.is_completed, 0) = 1
-                  AND strftime('%Y', p.last_watched_at) = ?
-                  AND COALESCE(v.is_deleted, 0) = 0
-            """, (user_id, str(year_str)))
-            row = cursor.fetchone()
-            conn.close()
-            if not row:
-                return 0
-            try:
-                return int(row[0] or 0)
-            except Exception:
-                try:
-                    return int(row['COUNT(*)'] or 0)
-                except Exception:
-                    return 0
-
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM user_progress p
-            JOIN books b ON p.book_id = b.id
-            JOIN user_category_permissions ucp ON b.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
-            WHERE p.user_id = ? AND (p.is_completed = 1 OR p.last_epub_percent >= 99)
-              AND strftime('%Y', p.last_read_at) = ? AND COALESCE(b.is_deleted, 0) = 0
-        """, (user_id, str(year_str)))
-        row = cursor.fetchone()
-        conn.close()
-        if not row:
-            return 0
-        try:
-            return int(row[0] or 0)
-        except Exception:
-            try:
-                return int(row['COUNT(*)'] or 0)
-            except Exception:
-                return 0
 
     @staticmethod
     def get_completed_count_by_month(db_type, user_id, year_month_str):
         """월간 완독 도서 수 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
 
-        if db_type == 'audiobook':
+            if db_type == 'audiobook':
+                cursor.execute("""
+                    SELECT COUNT(*)
+                    FROM audiobook_progress p
+                    JOIN audiobooks a ON p.audiobook_id = a.id
+                    JOIN user_category_permissions ucp ON a.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
+                    WHERE p.user_id = ?
+                      AND COALESCE(p.is_completed, 0) = 1
+                      AND strftime('%Y-%m', p.last_listened_at) = ?
+                      AND COALESCE(a.is_deleted, 0) = 0
+                """, (user_id, year_month_str))
+                row = cursor.fetchone()
+                conn.close()
+                if not row:
+                    return 0
+                try:
+                    return int(row[0] or 0)
+                except Exception:
+                    try:
+                        return int(row['COUNT(*)'] or 0)
+                    except Exception:
+                        return 0
+
+            if db_type == 'video':
+                cursor.execute("""
+                    SELECT COUNT(*)
+                    FROM video_progress p
+                    JOIN videos v ON p.video_id = v.id
+                    WHERE p.user_id = ?
+                      AND COALESCE(p.is_completed, 0) = 1
+                      AND strftime('%Y-%m', p.last_watched_at) = ?
+                      AND COALESCE(v.is_deleted, 0) = 0
+                """, (user_id, year_month_str))
+                row = cursor.fetchone()
+                conn.close()
+                if not row:
+                    return 0
+                try:
+                    return int(row[0] or 0)
+                except Exception:
+                    try:
+                        return int(row['COUNT(*)'] or 0)
+                    except Exception:
+                        return 0
+
             cursor.execute("""
                 SELECT COUNT(*)
-                FROM audiobook_progress p
-                JOIN audiobooks a ON p.audiobook_id = a.id
-                JOIN user_category_permissions ucp ON a.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
-                WHERE p.user_id = ?
-                  AND COALESCE(p.is_completed, 0) = 1
-                  AND strftime('%Y-%m', p.last_listened_at) = ?
-                  AND COALESCE(a.is_deleted, 0) = 0
+                FROM user_progress p
+                JOIN books b ON p.book_id = b.id
+                JOIN user_category_permissions ucp ON b.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
+                WHERE p.user_id = ? AND (p.is_completed = 1 OR p.last_epub_percent >= 99)
+                  AND strftime('%Y-%m', p.last_read_at) = ? AND COALESCE(b.is_deleted, 0) = 0
             """, (user_id, year_month_str))
             row = cursor.fetchone()
             conn.close()
@@ -700,48 +779,6 @@ class ReadingProgressRepository:
                     return int(row['COUNT(*)'] or 0)
                 except Exception:
                     return 0
-
-        if db_type == 'video':
-            cursor.execute("""
-                SELECT COUNT(*)
-                FROM video_progress p
-                JOIN videos v ON p.video_id = v.id
-                WHERE p.user_id = ?
-                  AND COALESCE(p.is_completed, 0) = 1
-                  AND strftime('%Y-%m', p.last_watched_at) = ?
-                  AND COALESCE(v.is_deleted, 0) = 0
-            """, (user_id, year_month_str))
-            row = cursor.fetchone()
-            conn.close()
-            if not row:
-                return 0
-            try:
-                return int(row[0] or 0)
-            except Exception:
-                try:
-                    return int(row['COUNT(*)'] or 0)
-                except Exception:
-                    return 0
-
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM user_progress p
-            JOIN books b ON p.book_id = b.id
-            JOIN user_category_permissions ucp ON b.library_id = ucp.library_id AND ucp.user_id = p.user_id AND ucp.has_access = 1
-            WHERE p.user_id = ? AND (p.is_completed = 1 OR p.last_epub_percent >= 99)
-              AND strftime('%Y-%m', p.last_read_at) = ? AND COALESCE(b.is_deleted, 0) = 0
-        """, (user_id, year_month_str))
-        row = cursor.fetchone()
-        conn.close()
-        if not row:
-            return 0
-        try:
-            return int(row[0] or 0)
-        except Exception:
-            try:
-                return int(row['COUNT(*)'] or 0)
-            except Exception:
-                return 0
 
     @staticmethod
     def batch_flush_progress_items(db_type, items):

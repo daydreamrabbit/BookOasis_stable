@@ -192,10 +192,10 @@ Lightweight setup running a single container without a separate database server.
 
 **① Copy Configuration Template**
 ```bash
-cp docker-compose.override.example.yml docker-compose.override.yml
+cp .env.example .env
 ```
 
-**② Modify Volume Binding Path (`docker-compose.override.yml`)**
+**② Modify Volume Binding Path (`docker-compose.yml`)**
 Modify the host path to point to your actual book/comic library directory.
 ```yaml
 services:
@@ -207,15 +207,15 @@ services:
 **③ Run Service (GHCR Official Image Based)**
 ```bash
 # Run container (uses GHCR image, no local build required)
-docker compose -f docker-compose.ghcr.yml -f docker-compose.override.yml up -d
+docker compose up -d --build
 
 # For updates
-docker compose -f docker-compose.ghcr.yml -f docker-compose.override.yml pull
-docker compose -f docker-compose.ghcr.yml -f docker-compose.override.yml up -d
+git pull
+docker compose up -d --build
 ```
-> **Building from source instead?** Use `docker-compose.build.yml`, which builds the local `Dockerfile` instead of pulling the GHCR image:
+> This independent distribution always builds the local `Dockerfile`:
 > ```bash
-> docker compose -f docker-compose.build.yml -f docker-compose.override.yml up -d --build
+> docker compose up -d --build
 > ```
 
 ---
@@ -226,26 +226,25 @@ Recommended mode running MariaDB and Redis containers together to eliminate data
 **① Run MariaDB Combo Compose**
 ```bash
 # GHCR official image, no local build required (recommended)
-docker compose -f docker-compose.mariadb.ghcr.yml up -d
+docker compose up -d --build
 
 # To build from source instead
-docker compose -f docker-compose.mariadb.yml up -d
+docker compose up -d --build
 ```
 * Spawns `mariadb:10.11` and `redis:7-alpine` alongside `bookoasis`.
 * Data is stored persistently in `./mariadb_data`.
 
 **② (Optional) MariaDB buffer pool tuning override**
-`docker-compose.mariadb.yml` already sets `innodb_buffer_pool_size=2G` instead of the image's 128MB default. For very large libraries (hundreds of thousands of items), even 2G may not be enough. Keep any further tuning in an override file so it survives `git pull`:
+`docker-compose.yml` sets `innodb_buffer_pool_size=2G` instead of the image's 128MB default. For very large libraries, adjust that value for the server's available memory.
 ```bash
-cp docker-compose.override.mariadb.example.yml docker-compose.override.yml
-# edit --innodb-buffer-pool-size in the file to match your available RAM
-docker compose -f docker-compose.mariadb.yml -f docker-compose.override.yml up -d
+# edit --innodb-buffer-pool-size in docker-compose.yml, then rebuild
+docker compose up -d --build
 ```
 
 ---
 
 #### 💡 Docker Users with Existing External MariaDB / Redis
-If you already run a separate MariaDB server (e.g. Synology MariaDB package), you don't need to run `docker-compose.mariadb.yml`. Simply add database credentials under `environment:` in your **`docker-compose.override.yml`**:
+If you already run a separate MariaDB server, edit the `bookoasis` database environment in `docker-compose.yml` and remove the bundled `mariadb` and `mariadb-grant-repair` dependencies.
 
 ```yaml
 services:
@@ -257,11 +256,9 @@ services:
       - DB_USER=bookoasis
       - DB_PASSWORD=your_password
 ```
-* 💡 Specifying credentials in `docker-compose.override.yml` ensures your personal DB settings are preserved across `git pull` updates without conflicts.
-* The container's internal port `5930` is bound to the host's `5930` port. If you wish to change the host port, modify the left-side port number in `docker-compose.ghcr.yml` like `ports: - "8080:5930"`.
+* The container's internal port `5930` is bound to the host's `5930` port. To change it, modify the left-side port in `docker-compose.yml`, for example `8080:5930`.
 * The database (`db/`), cover cache (`covers/`), and cache folder (`cache/`) are mapped as persistent volumes in the project root directory.
 * In Docker mode, the entrypoint starts both the web service and scanner worker together.
-* 💡 Since `docker-compose.override.yml` is listed in `.gitignore`, your local path configuration won't be overwritten or cause conflicts when you pull updates (`git pull`) from the remote repository.
 
 > Security policy: operator-only deployment and release automation procedures are maintained in private internal documentation.
 

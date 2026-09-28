@@ -3,6 +3,8 @@
 book_scan_repository.py – MariaDB 전용 도서(books) 및 오프셋(book_offsets) 백그라운드 스캔 데이터 액세스 레이어
 """
 import database
+from embedded_metadata_version import CURRENT_EMBEDDED_METADATA_VERSION
+from repositories.book_metadata_fill import empty_guard_sql, is_empty_value, sanitize_fill_candidates
 
 class BookScanRepository:
     @staticmethod
@@ -11,8 +13,11 @@ class BookScanRepository:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, library_id, title, series_name, file_path, file_format, cover_image
-            FROM books WHERE id = %s
+            SELECT b.id, b.library_id, b.title, b.series_name, b.file_path, b.file_format,
+                   b.cover_image, COALESCE(l.is_remote, 0) AS library_is_remote
+            FROM books b
+            LEFT JOIN libraries l ON l.id = b.library_id
+            WHERE b.id = %s
             """,
             (book_id,)
         )
@@ -29,6 +34,7 @@ class BookScanRepository:
                 """
                 UPDATE books SET 
                     series_name  = COALESCE(NULLIF(%s, ''), series_name),
+                    metadata_title = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), metadata_title) ELSE metadata_title END,
                     cover_image  = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND %s IS NOT NULL AND %s != '' THEN %s ELSE cover_image END,
                     cover_updated_at = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND %s != '' AND %s IS NOT NULL THEN CURRENT_TIMESTAMP ELSE cover_updated_at END,
                     author       = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), author) ELSE author END,
@@ -37,11 +43,24 @@ class BookScanRepository:
                     link         = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), link) ELSE link END,
                     score        = CASE WHEN COALESCE(metadata_locked, 0) = 0 AND %s != 0 THEN %s ELSE score END,
                     summary      = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), summary) ELSE summary END,
-                    release_date = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), release_date) ELSE release_date END
+                    release_date = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), release_date) ELSE release_date END,
+                    genre        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), genre) ELSE genre END,
+                    tags         = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), tags) ELSE tags END,
+                    books_lv     = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), books_lv) ELSE books_lv END,
+                    cover_artist = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), cover_artist) ELSE cover_artist END,
+                    teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), teams) ELSE teams END,
+                    locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), locations) ELSE locations END,
+                    characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), characters) ELSE characters END,
+                    localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), localized_series) ELSE localized_series END,
+                    document_series_name = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(%s, ''), document_series_name) ELSE document_series_name END,
+                    document_volume_index = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(%s, document_volume_index) ELSE document_volume_index END,
+                    document_volume_count = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(%s, document_volume_count) ELSE document_volume_count END,
+                    embedded_metadata_version = CASE WHEN %s = 1 THEN %s ELSE embedded_metadata_version END
                 WHERE id = %s
                 """,
                 (
                     series_name,
+                    meta.get('title', ''),
                     cover_image, cover_image, cover_image,
                     cover_image, cover_image,
                     meta['author'],
@@ -51,6 +70,19 @@ class BookScanRepository:
                     meta['score'], meta['score'],
                     meta['summary'],
                     meta['release_date'],
+                    meta.get('genre', ''),
+                    meta.get('tags', ''),
+                    meta.get('books_lv', ''),
+                    meta.get('cover_artist', ''),
+                    meta.get('teams', ''),
+                    meta.get('locations', ''),
+                    meta.get('characters', ''),
+                    meta.get('localized_series', ''),
+                    meta.get('document_series_name', ''),
+                    meta.get('document_volume_index'),
+                    meta.get('document_volume_count'),
+                    1 if meta.get('_embedded_metadata_checked') else 0,
+                    CURRENT_EMBEDDED_METADATA_VERSION,
                     book_id
                 )
             )
@@ -78,6 +110,44 @@ class BookScanRepository:
         except Exception as e:
             conn.rollback()
             raise e
+        finally:
+            conn.close()
+
+    @staticmethod
+    def fill_empty_book_metadata(db_type, book_id, fields):
+        """파일 내장 메타데이터로 도서의 "비어 있는" 컬럼만 채운다(덮어쓰지 않음, 잠긴 도서는 무변경).
+        채운 컬럼 이름 목록을 반환한다."""
+        candidates = sanitize_fill_candidates(fields)
+        if not candidates:
+            return []
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            columns = list(candidates)
+            cursor.execute(
+                f"SELECT COALESCE(metadata_locked, 0) AS is_locked, {', '.join(columns)} FROM books WHERE id = %s",
+                (book_id,)
+            )
+            row = cursor.fetchone()
+            if not row or int(row['is_locked'] or 0) == 1:
+                return []
+            to_fill = [column for column in columns if is_empty_value(column, row[column])]
+            if not to_fill:
+                return []
+            # SELECT와 UPDATE 사이에 다른 쓰기가 끼어들어도 덮어쓰지 않도록 UPDATE에도 같은 조건을 둔다.
+            assignments = ', '.join(
+                f"{column} = CASE WHEN {empty_guard_sql(column)} THEN %s ELSE {column} END"
+                for column in to_fill
+            )
+            cursor.execute(
+                f"UPDATE books SET {assignments} WHERE id = %s AND COALESCE(metadata_locked, 0) = 0",
+                tuple(candidates[column] for column in to_fill) + (book_id,)
+            )
+            conn.commit()
+            return to_fill
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

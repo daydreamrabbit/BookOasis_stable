@@ -1,11 +1,51 @@
+import { openListen } from '../tts_launcher.js';
+
 export function bindDetailInteractions() {
   if (window.__detailRenderDelegationBound) {
     return;
   }
 
+  let pointerStart = null;
+  let pointerMoved = false;
+  let suppressDetailClickUntil = 0;
+
+  const getDetailActionTarget = (event) => event?.target?.closest?.(
+    '[data-role="detail-volume-open-reader"], [data-role="detail-continue"], [data-role="detail-download-link"], .volume-card, .vol-grid-card'
+  );
+
+  document.addEventListener('pointerdown', (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    if (!getDetailActionTarget(event)) return;
+    pointerStart = { x: event.clientX, y: event.clientY };
+    pointerMoved = false;
+  }, true);
+
+  document.addEventListener('pointermove', (event) => {
+    if (!pointerStart) return;
+    const dx = event.clientX - pointerStart.x;
+    const dy = event.clientY - pointerStart.y;
+    if (Math.hypot(dx, dy) >= 8) pointerMoved = true;
+  }, true);
+
+  const finishDetailPointer = () => {
+    if (pointerMoved) suppressDetailClickUntil = Date.now() + 450;
+    pointerStart = null;
+    pointerMoved = false;
+  };
+  document.addEventListener('pointerup', finishDetailPointer, true);
+  document.addEventListener('pointercancel', finishDetailPointer, true);
+
   document.addEventListener('click', (event) => {
+    if (Date.now() < suppressDetailClickUntil) {
+      const draggedTarget = getDetailActionTarget(event);
+      if (draggedTarget) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
     const target = event && event.target && typeof event.target.closest === 'function'
-      ? event.target.closest('[data-role="detail-genre-filter"], [data-role="detail-tag-filter"], [data-role="detail-collapse-toggle"], [data-role="detail-rescan-missing"], [data-role="detail-unlock-metadata"], [data-role="detail-cover-upload"], [data-role="detail-series-favorite"], [data-role="detail-edit-toggle"], [data-role="detail-plugin-meta-search"], [data-role="detail-rescan-series"], [data-role="detail-mark-series-complete"], [data-role="detail-save-meta"], [data-role="detail-cancel-meta"], [data-role="detail-volume-filter"], [data-role="detail-volume-sort"], [data-role="detail-summary-toggle"], [data-role="detail-continue"], [data-role="detail-book-favorite"], [data-role="detail-rescan-book"], [data-role="detail-audio-open"], [data-role="detail-audio-play"], [data-role="detail-audio-tab"], [data-role="detail-video-open"], [data-role="detail-video-play"], [data-role="detail-volume-open-reader"], [data-role="detail-download-link"]')
+      ? event.target.closest('[data-role="detail-listen"], [data-role="detail-genre-filter"], [data-role="detail-tag-filter"], [data-role="detail-collapse-toggle"], [data-role="detail-rescan-missing"], [data-role="detail-unlock-metadata"], [data-role="detail-cover-upload"], [data-role="detail-series-favorite"], [data-role="detail-edit-toggle"], [data-role="detail-plugin-meta-search"], [data-role="detail-rescan-series"], [data-role="detail-mark-series-complete"], [data-role="detail-save-meta"], [data-role="detail-cancel-meta"], [data-role="detail-volume-filter"], [data-role="detail-volume-sort"], [data-role="detail-summary-toggle"], [data-role="detail-continue"], [data-role="detail-book-favorite"], [data-role="detail-rescan-book"], [data-role="detail-audio-open"], [data-role="detail-audio-play"], [data-role="detail-audio-tab"], [data-role="detail-video-open"], [data-role="detail-video-play"], [data-role="detail-volume-open-reader"], [data-role="detail-download-link"]')
       : null;
     if (!target) return;
 
@@ -20,6 +60,12 @@ export function bindDetailInteractions() {
     }
 
     event.preventDefault();
+
+    if (role === 'detail-listen') {
+      event.stopPropagation();
+      openListen(target.getAttribute('data-book-id'), target.getAttribute('data-db-type') || 'general');
+      return;
+    }
 
     if (role === 'detail-genre-filter') {
       return window.quickFilterByGenre?.(target.getAttribute('data-genre') || '');
@@ -181,11 +227,14 @@ export function bindDetailInteractions() {
     const bookId = Number.parseInt(card.getAttribute('data-book-id') || '', 10);
     const coverAlign = card.getAttribute('data-cover-align') || 'center';
     const fileFormat = (card.getAttribute('data-file-format') || '').toLowerCase();
+    const isCompleted = card.getAttribute('data-is-completed') === '1';
+    const pagesRead = Number(card.getAttribute('data-pages-read') || 0);
+    const hasProgress = isCompleted || pagesRead > 0;
     if (!Number.isFinite(bookId) || bookId <= 0) return;
     if (typeof window.handleLongPressTouchStart === 'function') {
       window.handleLongPressTouchStart(event, (x, y) => {
         if (typeof window.showBookContextMenu === 'function') {
-          window.showBookContextMenu(x, y, bookId, title, true, { coverAlign, fileFormat });
+          window.showBookContextMenu(x, y, bookId, title, true, { coverAlign, fileFormat, hasProgress });
         }
       });
     }

@@ -91,6 +91,7 @@ class HomeDashboardService:
                 'provider': widget.get('provider') or p.get('name'),
                 'icon': widget.get('icon') or 'fa-solid fa-puzzle-piece',
                 'limit': int(widget.get('limit') or 10),
+                'initial_data': bool(widget.get('initial_data')),
                 'order': order_val,
                 'layout': layout_val,
                 'size': size_val,

@@ -13,6 +13,8 @@
 
 북 오아시스는 ZIP/CBZ 압축 파일 형태의 도서 및 만화책을 웹 환경에서 지연 없이 감상할 수 있도록 설계된 초경량, 고성능 개인 미디어 서버입니다.
 
+이 저장소는 필요한 upstream 변경만 선별 반영하는 독립 유지보수 버전입니다. Docker 배포는 공식 GHCR 이미지를 덮어쓰지 않고 현재 저장소의 `Dockerfile`을 직접 빌드합니다.
+
 서드파티 종속성을 극도로 최소화하고 파이썬 표준 라이브러리의 잠재력을 활용하여 가볍고 빠른 구동 환경을 제공합니다.
 
 ---
@@ -74,33 +76,30 @@ BookOasis가 대용량(10만 권 이상) 환경에서도 버벅임 없이 초광
 
 ### 간편 구동 (Docker)
 
-1. **설정 템플릿 복사**
-   로컬 환경 고유 설정을 위해 제공되는 오버라이드 템플릿 파일을 복사합니다.
+1. **환경 설정 생성**
    ```bash
-   cp docker-compose.override.example.yml docker-compose.override.yml
+   # 신규 설치 시에만 복사합니다. 기존 .env는 덮어쓰지 마세요.
+   cp .env.example .env
    ```
 
-2. **볼륨 경로 수정**
-   생성된 `docker-compose.override.yml` 파일을 열어 본인의 실제 책/만화책 라이브러리 디렉토리 경로로 수정합니다.
-   ```yaml
-   services:
-     bookoasis:
-       volumes:
-         - /실제/책/저장/경로:/data/comics:ro
+2. **로컬 경로와 권한 설정**
+   공개 Compose의 기본 DB는 SQLite입니다. 실제 책 경로와 권한은 `.env`의 `BOOKS_DIR`, `COMICS_DIR`, `RCLONE_CONFIG_DIR`, `PUID`, `PGID`로 지정합니다. 컨테이너 내부 경로는 각각 `/book`, `/data/comics`, `/app/rclone`입니다.
+   상대경로 기본값으로 신규 설치한다면 필요한 폴더를 먼저 만듭니다.
+   ```bash
+   mkdir -p db covers cache plugins logs custom_fonts rclone books comics
    ```
+   외부 마운트를 사용할 때는 위 기본 폴더 대신 실제 연결된 경로를 설정하세요. 연결되지 않은 마운트 위치에 빈 폴더를 만들어 검사를 우회하지 마세요.
 
 3. **컨테이너 실행**
    ```bash
-   docker compose up -d
+   docker compose up -d --build
    ```
-   기본 `docker-compose.yml`은 로컬 빌드 없이 GHCR(`ghcr.io/leeyj/bookoasis:stable`)에 미리 빌드되어 배포된 공식 이미지를 그대로 받아옵니다. Synology/Unraid 등 저사양 NAS에서도 빠르게 기동됩니다.
 
-> **Tip:** `docker-compose.override.yml`은 `.gitignore`에 등록되어 있으므로 향후 프로젝트 소스가 업데이트되어 `git pull`을 받아도 사용자의 개인 경로 설정 파일이 충돌을 일으키거나 유실되지 않습니다.
+   시작 전에 앱의 bind 경로가 읽히는지 검사합니다. 하나라도 없거나 읽을 수 없으면 시작을 막고, 누락된 경로를 빈 디렉터리로 자동 생성하지 않습니다.
 
-> **소스를 직접 수정하는 개발자라면**: 로컬 `Dockerfile`을 빌드해서 쓰는 `docker-compose.build.yml`을 대신 사용하세요.
-> ```bash
-> docker compose -f docker-compose.build.yml -f docker-compose.override.yml up -d --build
-> ```
+업데이트할 때도 `git pull` 후 같은 명령을 실행하면 변경된 소스를 다시 빌드합니다. 기본 Compose에는 앱과 Redis, 경로 검사 서비스가 포함됩니다. GPU 장치, 추가 DB 서비스, 서버별 튜닝은 Git에서 제외되는 `docker-compose.override.yml`에 둡니다.
+
+**기존 MariaDB 사용자는 기본 Compose만으로 전환하지 마세요.** 기존 DB 연결·서비스·볼륨·비밀번호 설정을 로컬 override에 유지해야 합니다. 기존 공식 설치에서 전환할 때는 기존 Compose를 유지하고 앱 이미지만 교체하는 방법을 권장합니다.
 
 > 보안 정책에 따라 운영자용 배포/업데이트 절차는 비공개 내부 문서로 관리합니다.
 
@@ -142,7 +141,7 @@ BookOasis는 실시간 독서 진행도 저장 시 SQLite 파일에 바로 접�
 
 ### 🐳 Docker 사용자의 경우 (완전 자동)
 - `docker-compose.yml` 템플릿에 `redis:7-alpine` 이미지 연동이 내장되어 있습니다.
-- `.env` 파일을 수정할 필요 없이 `docker compose up -d` 명령어 하나로 전용 레디스가 켜지고 격리 네트워크 상에서 완전히 자동으로 통합 연동됩니다.
+- 기본 `docker compose up -d --build`는 앱과 Redis를 실행합니다. MariaDB는 기존 로컬 Compose/override 설정을 유지하여 사용합니다.
 - 컨테이너 종료 시 캐시가 유실되지 않도록 `stop_grace_period`이 `1m`(1분)으로 상향 지정되어 있습니다.
 
 ### 🖥️ Native Python (Linux / Windows) 사용자의 경우
@@ -170,12 +169,8 @@ BookOasis는 기본 파일 기반 **SQLite** 엔진 외에도, 10만 권 이상�
 
 ### 🚀 MariaDB 모드로 전환하기
 1. **Docker 사용자 (자동/원클릭)**
-   - `docker-compose.override.yml`에 `DB_ENGINE=mariadb` 및 접속 정보를 추가한 뒤 컨테이너를 실행하면 필요한 데이터베이스(`media_general`, `media_adult`, `media_audiobook`) 및 스키마가 자동 구축됩니다.
-   - GHCR 공식 이미지로 로컬 빌드 없이 바로 기동하려면 `docker-compose.mariadb.ghcr.yml`을 사용하세요.
-     ```bash
-     docker compose -f docker-compose.mariadb.ghcr.yml -f docker-compose.override.yml up -d
-     ```
-     소스를 직접 빌드하려면 기존 `docker-compose.mariadb.yml`(로컬 `Dockerfile` 빌드)을 그대로 사용하시면 됩니다.
+   - 기본 `docker-compose.yml`이 MariaDB, Redis, 4개 미디어 DB 권한 복구를 모두 구성합니다.
+   - 비밀번호를 바꾸려면 `.env`에 `MARIADB_ROOT_PASSWORD`와 `MARIADB_PASSWORD`를 추가하고 최초 실행 전 Compose를 기동합니다.
    - 상세 이관 안내: [Docker 사용자용 MariaDB 마이그레이션 가이드 (docs/move_to_mariadb.md)](./docs/move_to_mariadb.md)
 
 2. **1-Click 데이터 마이그레이션 (SQLite ➔ MariaDB)**

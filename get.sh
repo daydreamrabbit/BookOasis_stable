@@ -3,7 +3,7 @@
 #  BookOasis — Remote Bootstrap Installer
 #  지원 환경: Linux / macOS (bash/zsh)
 #  사용법:
-#    curl -fsSL https://raw.githubusercontent.com/leeyj/BookOasis/main/get.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/daydreamrabbit/BookOasis_stable/main/get.sh | bash
 #
 #  이 스크립트는 install.sh 를 대체하지 않습니다.
 #  소스를 내려받아 기존 install.sh(대화형 설치 마법사)에게 실행을
@@ -33,7 +33,7 @@ warn()    { echo -e "  ${YELLOW}⚠ ${RESET}$*"; }
 error()   { echo -e "  ${RED}✖ ${RESET}$*"; }
 
 # ── 설정 (환경변수로 재정의 가능) ───────────────────────────────
-REPO_URL="${BOOKOASIS_REPO_URL:-https://github.com/leeyj/BookOasis_stable.git}"
+REPO_URL="${BOOKOASIS_REPO_URL:-https://github.com/daydreamrabbit/BookOasis_stable.git}"
 REPO_BRANCH="${BOOKOASIS_REPO_BRANCH:-main}"
 SRC_DIR="${BOOKOASIS_SRC_DIR:-$HOME/.bookoasis/src}"
 

@@ -18,6 +18,8 @@ db/*.db
 db/*.db-wal
 db/*.db-shm
 db/*.db-journal
+db/*.sqlite
+db/*.sqlite-*
 bo_relay_ss/*.db
 bo_relay_ss/*.db-wal
 bo_relay_ss/*.db-shm
@@ -50,6 +52,15 @@ docker-compose.override.yml
 logs/*
 !logs/.gitkeep
 
+# 로컬 Docker 실행 데이터와 설치 플러그인
+mariadb_data/
+custom_fonts/
+backups/
+plugin_data_relay/
+plugins/cache/
+plugins/data/
+plugins/metadata/*/
+
 # Private operator docs (local only, not published)
 docs/operator_deployment_private.md
 
@@ -66,4 +77,12 @@ thesis_data/
 sample_plugins/metadata/reading_review/reading_reviews.sqlite3*
 plugins/metadata/reading_review/reading_reviews.sqlite3*
 
+# Runtime state and local-only voice samples (not distribution assets).
+db/*.lock
+plugins/metadata/*.sqlite3*
+example/ttsvoice/
 
+# Portable Compose mount defaults: local media and rclone credentials.
+rclone/
+books/
+comics/

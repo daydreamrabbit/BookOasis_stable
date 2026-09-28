@@ -15,3 +15,9 @@ def canonical_path(path: str) -> str:
 
 def join_canonical(root: str, *parts: str) -> str:
     return canonical_path(os.path.join(root, *parts))
+
+
+def descendant_like_pattern(root: str) -> str:
+    """Literal folder boundary, including names containing SQL LIKE wildcards."""
+    normalized = canonical_path(root).rstrip('/')
+    return normalized.replace('!', '!!').replace('%', '!%').replace('_', '!_') + '/%'

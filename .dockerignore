@@ -11,6 +11,11 @@ __pycache__/
 
 # Local Environments
 .env
+docker-compose.override.yml
+rclone/
+books/
+comics/
+example/ttsvoice/
 .venv/
 venv/
 
@@ -21,12 +26,24 @@ covers/
 cache/
 logs/
 bo_relay_ss/
+mariadb_data/
+custom_fonts/
+backups/
+plugin_data_relay/
 docs/archive
 docs/bug
 docs/history
 
+# 설치된 플러그인은 런타임 볼륨으로 유지한다. 이미지에는 코어 플러그인 계약 파일만 포함한다.
+plugins/*
+!plugins/metadata/
+plugins/metadata/*
+!plugins/metadata/__init__.py
+!plugins/metadata/base.py
+!plugins/metadata/__template_add_plugin_gate.py
+!plugins/metadata/__template_dashboard_plugin.py
+!plugins/metadata/plugin_README.md
+
 # Ad-hoc local test data directories (not part of the repo, may have
 # container-internal ownership that breaks the build context transfer)
 *_test_data/
-
-

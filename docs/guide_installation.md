@@ -191,86 +191,28 @@ BOOKOASIS_ENABLE_EMBEDDED_WORKER=true gunicorn --workers 1 --bind 0.0.0.0:5930 -
 
 ### 3) Docker 기반 실행 가이드 (Docker Compose)
 
-도커 사용자분들은 설치 방식 및 목적에 따라 **[SQLite 기본 모드]** 또는 **[MariaDB + Redis 올인원 콤보 모드]** 중 원하는 방식을 자유롭게 선택하여 가동하실 수 있습니다.
+공개 `docker-compose.yml`은 현재 소스를 로컬에서 빌드하고 SQLite, Redis 7을 기본으로 사용합니다. 서버 전용 경로·GPU·DB 서비스·메모리 튜닝은 `.env` 또는 Git에서 제외되는 `docker-compose.override.yml`로 분리합니다.
 
----
+1. `.env`가 없다면 생성합니다.
+   ```bash
+   cp .env.example .env
+   ```
+2. `.env`에서 `BOOKS_DIR`, `COMICS_DIR`, `RCLONE_CONFIG_DIR`, `PUID`, `PGID`를 환경에 맞게 설정합니다. 경로 기본값은 `./books`, `./comics`, `./rclone`입니다. 신규 설치에서 상대경로 기본값을 사용한다면 `mkdir -p db covers cache plugins logs custom_fonts rclone books comics`로 준비합니다. 외부 마운트는 실제 연결 여부를 먼저 확인하세요.
+3. 실행합니다.
+   ```bash
+   docker compose up -d --build
+   ```
+   기본 Compose는 앱의 bind 경로가 실제로 읽히는지 검사한 뒤 앱을 시작합니다. 경로가 없거나 읽을 수 없으면 시작을 막으며, 누락된 경로를 빈 폴더로 자동 생성하지 않습니다. 추가 서비스·경로를 로컬 override에 정의할 때는 경로 검사 대상에도 함께 반영하세요.
+4. 업데이트할 때는 소스를 받은 뒤 같은 명령을 사용합니다.
+   ```bash
+   git pull
+   docker compose up -d --build
+   ```
 
-#### 🅰️ 옵션 A: SQLite 기본 모드 (단독 컨테이너)
-별도의 데이터베이스 서버 없이 단일 컨테이너로 가볍게 기동하는 기본 방식입니다.
-
-**① 설정 템플릿 복사**
-```bash
-cp docker-compose.override.example.yml docker-compose.override.yml
-```
-
-**② 볼륨 바인딩 경로 수정 (`docker-compose.override.yml`)**
-본인의 실제 책/만화책 라이브러리 디렉토리 경로로 수정합니다.
-```yaml
-services:
-  bookoasis:
-    volumes:
-      - /실제/책/저장/경로:/data/comics:ro
-```
-
-**③ 서비스 실행 (GHCR 공식 이미지 기반)**
-```bash
-# 컨테이너 실행 (로컬 빌드 없이 GHCR 이미지 사용)
-docker compose -f docker-compose.ghcr.yml -f docker-compose.override.yml up -d
-
-# 이미지 업데이트 시
-docker compose -f docker-compose.ghcr.yml -f docker-compose.override.yml pull
-docker compose -f docker-compose.ghcr.yml -f docker-compose.override.yml up -d
-```
-> **소스를 직접 빌드하고 싶다면**: GHCR 이미지 대신 로컬 `Dockerfile`을 빌드하는 `docker-compose.build.yml`을 사용하세요.
-> ```bash
-> docker compose -f docker-compose.build.yml -f docker-compose.override.yml up -d --build
-> ```
-
----
-
-#### 🅱️ 옵션 B: MariaDB + Redis 올인원 콤보 모드 (엔터프라이즈 권장)
-MariaDB 및 Redis 컨테이너를 함께 띄워, 수만~수십만 권 대용량 도서 스캔 및 다중 동시 접속 락 병목을 전면 제거하는 추천 구동 방식입니다.
-
-**① MariaDB 올인원 Compose 실행**
-```bash
-# 로컬 빌드 없이 GHCR 공식 이미지로 바로 기동 (권장)
-docker compose -f docker-compose.mariadb.ghcr.yml up -d
-
-# 소스를 직접 빌드해서 쓰려면
-docker compose -f docker-compose.mariadb.yml up -d
-```
-* `mariadb:10.11` 및 `redis:7-alpine` 이미지가 함께 띄워지며, 헬스체크 완료 후 BookOasis 컨테이너가 자동으로 연동 가동됩니다.
-* 데이터는 로컬 `./mariadb_data` 볼륨에 영구 저장됩니다.
-
-**② (옵션) MariaDB 버퍼풀 등 튜닝 오버라이드**
-`docker-compose.mariadb.yml`은 MariaDB 이미지 기본값(128MB)이 아닌 `innodb_buffer_pool_size=2G`로 명시되어 있습니다. 다만 도서 수가 훨씬 많은 대용량 라이브러리(수십만 권 이상)에서는 이 2G도 부족할 수 있습니다. Git 소스 업데이트 시 초기화되지 않도록, 값을 더 올려야 한다면 오버라이드 파일로 분리해 조정하세요.
-```bash
-cp docker-compose.override.mariadb.example.yml docker-compose.override.yml
-# 파일 내 --innodb-buffer-pool-size 값을 보유 RAM에 맞게 수정 후
-docker compose -f docker-compose.mariadb.yml -f docker-compose.override.yml up -d
-```
-
----
-
-#### 💡 기존에 외부 MariaDB / Redis를 보유 중인 도커 사용자
-이미 별도의 MariaDB나 Synology DB 패키지 등을 운용 중이신 경우, `docker-compose.mariadb.yml`을 띄우실 필요 없이 **`docker-compose.override.yml`** 파일의 `environment:` 섹션에 접속 정보만 작성해 주시면 컨테이너가 자동으로 외부 MariaDB로 접속합니다.
-
-```yaml
-services:
-  bookoasis:
-    environment:
-      - DB_ENGINE=mariadb
-      - DB_HOST=192.168.0.100  # 외부 MariaDB 서버 IP
-      - DB_PORT=3306
-      - DB_USER=bookoasis
-      - DB_PASSWORD=your_password
-```
-* 💡 `docker-compose.override.yml`에 작성해 두면 Git 소스 업데이트(`git pull`) 시에도 개인 DB 접속 정보가 초기화되거나 충돌하지 않는 최고의 장점이 있습니다.
-
----
-
-* 기본 바인딩 포트: 컨테이너 내부 `5930` ➔ 호스트 `5930` (호스트 포트 변경 시 `ports: - "8080:5930"`으로 수정)
-* 데이터 및 캐시: `db/`, `covers/`, `cache/`, `plugins/` 디렉터리가 로컬 볼륨으로 매핑되어 컨테이너 재기동 후에도 데이터가 온전히 보존됩니다.
+* 기본 외부 포트는 `5930`이며 `.env`의 `BOOKOASIS_PORT`로 바꿀 수 있습니다. DB 외부 포트와 GPU 장치는 기본으로 공개/연결하지 않습니다.
+* SQLite 데이터는 `db/`, 표지와 캐시는 `covers/`, `cache/`, 플러그인은 `plugins/`, 로그는 `logs/`에 유지됩니다.
+* **기존 MariaDB 설치는 DB 엔진을 변경하지 마세요.** 기존 DB 서비스·연결정보·데이터 볼륨을 로컬 override에 유지하거나 기존 Compose에서 앱 이미지만 교체하세요. DB_ENGINE만 바꿔도 DB 데이터가 자동 이전되는 것은 아닙니다.
+* 기존 `.env`를 예시 파일로 덮어쓰지 마세요. 최초 설치에서만 예시를 복사하고 보안 키를 새로 설정하세요.
 
 > 보안 정책: 운영자 전용 배포/릴리스 자동화 절차는 비공개 내부 문서로 관리합니다.
 

@@ -3,7 +3,7 @@
 plugin_webview_routes.py – 플러그인용 외부 도메인 웹뷰/다운로드 API
 
 화이트리스트는 관리자가 관리하는 전역 단일 목록이다(도메인 추가/삭제는 admin_required).
-웹뷰/다운로드/프록시 자체는 로그인한 모든 사용자가 사용할 수 있으므로(login_required)
+웹뷰/다운로드/프록시는 로그인 및 콘텐츠 등급 제한 검사를 거친다.
 admin_bp가 아니라 api_bp에 직접 등록한다 (api/__init__.py 참고).
 
 앱은 어떤 외부 도메인도 기본 제공/추천하지 않는다 — 관리자가 직접 등록한 도메인에
@@ -20,6 +20,7 @@ from flask import Blueprint, request, jsonify, session, Response, stream_with_co
 from api.auth import login_required, admin_required
 from repositories.category_repository import CategoryRepository
 from services.domain_whitelist_service import DomainWhitelistService, extract_host_from_url
+from services.content_rating_service import LEVEL_PORN
 from services.ssrf_guard import (
     SSRFBlockedError,
     fetch_with_redirect_revalidation,
@@ -29,6 +30,21 @@ from services.ssrf_guard import (
 from utils.drive_helper import is_gdrive_url
 
 plugin_webview_bp = Blueprint('plugin_webview', __name__)
+
+
+@plugin_webview_bp.before_request
+def enforce_external_content_rating():
+    # External pages have no per-work rating metadata. A domain whitelist is
+    # not an age approval; restricted accounts cannot use this proxy as a bypass.
+    if request.path == '/api/webview/whitelist' or not session.get('user_id'):
+        return None
+    try:
+        unrestricted = int(session.get('content_rating_max', 18)) >= LEVEL_PORN
+    except (TypeError, ValueError):
+        unrestricted = False
+    if not unrestricted:
+        return jsonify(success=False, error='content_rating_restricted',
+                       message='외부 콘텐츠의 연령등급을 확인할 수 없어 이용이 제한됩니다.'), 403
 
 WEBVIEW_MAX_BYTES = 15 * 1024 * 1024       # 15MB — 웹뷰로 표시할 페이지 캡
 DOWNLOAD_MAX_BYTES = 500 * 1024 * 1024     # 500MB — 도서 다운로드 캡
@@ -103,10 +119,21 @@ def _relay_post_body(url, patterns):
 # ─────────────────────────────── 화이트리스트 CRUD ───────────────────────────────
 
 @plugin_webview_bp.route('/api/webview/whitelist', methods=['GET'])
-@login_required
+@admin_required
 def get_whitelist():
     domains = DomainWhitelistService.get_whitelist()
     return jsonify({'success': True, 'domains': domains})
+
+
+@plugin_webview_bp.route('/api/webview/check', methods=['GET'])
+@login_required
+def check_external_url():
+    host = extract_host_from_url(request.args.get('url', ''))
+    if not host:
+        return _error_response('invalid_url', 400)
+    response = jsonify(success=True, allowed=DomainWhitelistService.is_host_whitelisted(host))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @plugin_webview_bp.route('/api/webview/whitelist', methods=['POST'])

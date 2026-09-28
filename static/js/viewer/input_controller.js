@@ -1,6 +1,5 @@
 // input_controller.js - keyboard/wheel/hotspot/click input handlers for viewer
 import { state } from '../state.js';
-import { shouldUseAndroidHotspotTouchFallback } from './platform_profile.js';
 
 let _deps = {
   toggleFullscreenViewer: null,
@@ -9,11 +8,17 @@ let _deps = {
   nextPage: null,
   prevPage: null,
   toggleComicOverlay: null,
+  toggleViewerChrome: null,
   shiftSpreadByOne: null,
+  movePageByOne: null,
 };
 
 let keyboardListenerInitialized = false;
 let wheelLock = false;
+let wheelRepeatCount = 0;
+let wheelLastDirection = 0;
+let wheelLastTurnAt = 0;
+let wheelDeltaAccumulator = 0;
 let viewerClickToggleInited = false;
 
 export function configureInputController(deps = {}) {
@@ -28,6 +33,27 @@ function callDep(name, ...args) {
   return undefined;
 }
 
+function isPointOnSelectableText(clientX, clientY) {
+  // Caret APIs can snap to clipped text in an adjacent CSS column even when
+  // the user clicked the reader margin. Only the actually hit text is selectable.
+  const hitChunk = document.elementFromPoint(clientX, clientY)
+    ?.closest?.('.txt-chunk[data-idx], .txt-scroll-chunk[data-idx]');
+  if (!hitChunk) return false;
+  const caret = document.caretRangeFromPoint?.(clientX, clientY)
+    || document.caretPositionFromPoint?.(clientX, clientY);
+  const node = caret?.startContainer || caret?.offsetNode;
+  if (!node) return false;
+  const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+  if (element?.closest?.('.txt-chunk[data-idx], .txt-scroll-chunk[data-idx]') !== hitChunk) return false;
+  if (node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim()) return false;
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  return Array.from(range.getClientRects()).some((rect) => (
+    clientX >= rect.left - 2 && clientX <= rect.right + 2
+    && clientY >= rect.top - 2 && clientY <= rect.bottom + 2
+  ));
+}
+
 // 만화 뷰어에서 RTL(우->좌) 읽기 방향이 활성화되어 있는지 여부.
 // 화면 좌/우 핫스팟 클릭처럼 물리적 화면 위치에 반응하는 조작에서만 사용한다.
 function isComicRtlActive() {
@@ -36,6 +62,41 @@ function isComicRtlActive() {
   return (typeof window.Settings !== 'undefined' && typeof window.Settings.getComicReadingDirection === 'function')
     ? window.Settings.getComicReadingDirection() === 'rtl'
     : localStorage.getItem('comic_reading_direction') === 'rtl';
+}
+
+function isViewerRtlFlowActive() {
+  const modal = document.getElementById('media-viewer-modal');
+  if (modal?.dataset.displayMode === 'two-one') return true;
+  return isComicRtlActive();
+}
+
+// 높이맞춤 + 1장 보기에서 너비가 화면보다 커져(좌우가 가려짐) 롱프레스+드래그로 팬이 가능한
+// 상태인지 확인한다. 팬 대상이 없으면(너비맞춤 모드, 스크롤 모드, 페이지가 이미 화면 안에
+// 다 들어오는 경우 등) null을 반환해 롱프레스가 그냥 평범한 탭/스와이프로 흘러가게 둔다.
+function getPannableComicImage() {
+  const isComicFormat = ['zip', 'cbz', 'imgdir'].includes((state.currentViewerFormat || '').toLowerCase());
+  if (!isComicFormat) return null;
+
+  const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
+  if (scrollMode !== 'page') return null;
+
+  const fitMode = (typeof window.Settings !== 'undefined' && typeof window.Settings.getFitMode === 'function')
+    ? window.Settings.getFitMode()
+    : 'height';
+  if (fitMode !== 'height') return null;
+
+  const pair = document.querySelector('.comic-image-wrapper .comic-page-pair.single-page');
+  if (!pair) return null;
+  const img = pair.querySelector('img');
+  const wrapper = document.querySelector('.comic-image-wrapper');
+  if (!img || !wrapper || !img.naturalWidth) return null;
+
+  const renderedWidth = img.getBoundingClientRect().width;
+  const wrapperWidth = wrapper.getBoundingClientRect().width;
+  const maxPan = (renderedWidth - wrapperWidth) / 2;
+  if (maxPan <= 1) return null; // 이미 화면 안에 다 들어와 있어 팬 할 여지가 없음
+
+  return { img, maxPan };
 }
 
 function handleViewerKeydown(e) {
@@ -54,6 +115,22 @@ function handleViewerKeydown(e) {
 
   const rawKey = (e.key || '').toLowerCase();
   const codeKey = (e.code || '').toLowerCase();
+  // Explicit bindings win over built-in arrows, F/H and Escape. Keep literal Space.
+  if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+    for (const [setting, action] of [['next', 'nextPage'], ['prev', 'prevPage'],
+      ['close', 'closeMediaViewer'], ['dashboard', 'closeMediaViewer']]) {
+      const saved = localStorage.getItem(`custom_key_${setting}`);
+      if (saved !== null && saved.split(',').some(key => {
+        const normalized = key === ' ' ? 'space' : key.trim().toLowerCase();
+        return normalized === rawKey || normalized === codeKey || (normalized === 'space' && rawKey === ' ');
+      })) {
+        e.preventDefault();
+        callDep(action);
+        if (setting === 'dashboard') window.showDashboardView?.();
+        return;
+      }
+    }
+  }
 
   // 스페이스바, 화살표, 페이지키, 엔터 등 이중 교차 검증
   const isSpaceKey = rawKey === ' ' || rawKey === 'space' || codeKey === 'space';
@@ -132,7 +209,7 @@ function handleViewerKeydown(e) {
     return;
   }
 
-  const isRtl = isComicRtlActive();
+  const isRtl = isViewerRtlFlowActive();
 
   // 화살표 키는 아래 3번에서 읽는 방향(RTL/LTR)에 따라 별도로 분기 처리하므로,
   // 커스텀 Next/Prev 키 기본값에 포함된 ArrowRight/ArrowLeft는 여기서 매칭 대상에서 제외한다.
@@ -215,44 +292,8 @@ export function initKeyboardListener() {
 
 export function initWheelListener() {
   const hotspot = document.getElementById('common-viewer-hotspot');
-  if (!hotspot) return;
-
-  if (shouldUseAndroidHotspotTouchFallback() && !hotspot.dataset.androidTapBound) {
-    hotspot.dataset.androidTapBound = '1';
-
-    hotspot.addEventListener(
-      'touchend',
-      (e) => {
-        const viewerModal = document.getElementById('media-viewer-modal');
-        if (!viewerModal || viewerModal.style.display !== 'flex') return;
-
-        const target = e.target;
-        if (!target || typeof target.closest !== 'function') return;
-
-        // Android 일부 환경에서 onclick/click 합성이 누락되는 케이스를 우회한다.
-        if (target.closest('.center-zone')) {
-          e.preventDefault();
-          e.stopPropagation();
-          callDep('toggleComicOverlay');
-          return;
-        }
-
-        if (target.closest('.left-zone')) {
-          e.preventDefault();
-          e.stopPropagation();
-          callDep(isComicRtlActive() ? 'nextPage' : 'prevPage');
-          return;
-        }
-
-        if (target.closest('.right-zone')) {
-          e.preventDefault();
-          e.stopPropagation();
-          callDep(isComicRtlActive() ? 'prevPage' : 'nextPage');
-        }
-      },
-      { passive: false }
-    );
-  }
+  const viewerBody = document.getElementById('viewer-body-container');
+  if (!hotspot || !viewerBody) return;
 
   hotspot.addEventListener(
     'contextmenu',
@@ -263,16 +304,18 @@ export function initWheelListener() {
       const fmt = (state.currentViewerFormat || '').toLowerCase();
       const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
       if (fmt === 'epub' && scrollMode === 'page') {
-        e.preventDefault();
+        if (e.cancelable) e.preventDefault();
         e.stopPropagation();
       }
     },
     true
   );
 
-  hotspot.addEventListener(
-    'wheel',
-    (e) => {
+  if (!viewerBody.dataset.viewerWheelBound) {
+    viewerBody.dataset.viewerWheelBound = '1';
+    viewerBody.addEventListener(
+      'wheel',
+      (e) => {
       const viewerModal = document.getElementById('media-viewer-modal');
       if (!viewerModal || viewerModal.style.display !== 'flex') return;
 
@@ -284,47 +327,55 @@ export function initWheelListener() {
       const isTxt = document.getElementById('txt-viewer-container').style.display !== 'none';
       const isPdf = document.getElementById('pdf-viewer-container').style.display !== 'none';
 
-      // 1. Scroll-capable mode delegates wheel to native container scrolling.
+      // 1. 연속 스크롤/폭맞춤은 브라우저의 네이티브 휠 관성에 맡긴다. 여기서
+      // scrollBy(auto)로 다시 실행하면 OS/브라우저의 부드러운 스크롤 곡선이 사라져
+      // 한 칸씩 끊기는 느낌이 생긴다.
       if (isComicScroll || isComicWidth || (isTxt && scrollMode === 'scroll')) {
-        let targetScrollEl = null;
-        if (isComicScroll || isComicWidth) {
-          targetScrollEl = comicImageWrapper;
-        } else if (isTxt) {
-          targetScrollEl = document.getElementById('txt-scroll-wrapper');
-        }
-
-        if (targetScrollEl) {
-          targetScrollEl.scrollBy({
-            top: e.deltaY,
-            behavior: 'auto',
-          });
-          e.preventDefault();
-          return;
-        }
+        return;
       }
 
       // 3. Page-turn mode routes wheel events to prev/next actions.
       if (scrollMode === 'page' || (isComic && !isComicWidth)) {
-        e.preventDefault();
+        if (e.cancelable) e.preventDefault();
         if (wheelLock) return;
+        const rawDirection = Math.sign(e.deltaY);
+        if (!rawDirection) return;
+        const now = performance.now();
+        if (rawDirection !== Math.sign(wheelDeltaAccumulator) || now - wheelLastTurnAt > 180) {
+          wheelDeltaAccumulator = 0;
+        }
+        wheelDeltaAccumulator += e.deltaY;
+        // 일반 휠(delta가 큼)은 첫 이벤트에서 즉시 반응하고, 트랙패드의 작은
+        // delta만 짧게 누적한다. 기존 36px 문턱은 저속 휠에서 체감 지연을 만들었다.
+        const threshold = e.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? 14 : 1;
+        const direction = wheelDeltaAccumulator >= threshold ? 1 : (wheelDeltaAccumulator <= -threshold ? -1 : 0);
+        if (!direction) return;
+        wheelDeltaAccumulator = 0;
+        wheelRepeatCount = direction === wheelLastDirection && now - wheelLastTurnAt < 900
+          ? Math.min(5, wheelRepeatCount + 1)
+          : 0;
+        wheelLastDirection = direction;
+        wheelLastTurnAt = now;
+        const cooldown = Math.max(145, 220 - wheelRepeatCount * 15);
 
-        if (e.deltaY > 30) {
+        if (direction > 0) {
           wheelLock = true;
           callDep('nextPage');
           setTimeout(() => {
             wheelLock = false;
-          }, 600);
-        } else if (e.deltaY < -30) {
+          }, cooldown);
+        } else {
           wheelLock = true;
           callDep('prevPage');
           setTimeout(() => {
             wheelLock = false;
-          }, 600);
+          }, cooldown);
         }
       }
-    },
-    { passive: false }
-  );
+      },
+      { passive: false, capture: true }
+    );
+  }
 }
 
 export function syncHotspotPointerEvents() {
@@ -372,6 +423,10 @@ export function syncHotspotPointerEvents() {
     console.log('[syncHotspotPointerEvents] 핫스팟 비활성화(none) 적용됨.');
   } else {
     hotspot.style.display = 'flex';
+    // EPUB/TXT 본문은 드래그 선택과 컨텍스트 메뉴가 콘텐츠에 직접 닿아야 한다.
+    // 페이지 이동은 아래 viewerBody 좌표 클릭 처리로 대신한다.
+    const isSelectableText = ['epub', 'txt'].includes(String(state.currentViewerFormat || '').toLowerCase());
+    hotspot.style.pointerEvents = isSelectableText ? 'none' : 'auto';
     console.log('[syncHotspotPointerEvents] 핫스팟 활성화(flex) 적용됨.');
   }
 }
@@ -394,21 +449,50 @@ export function initViewerClickToggle() {
     const isInteractive = !!target.closest(OVERLAY_INTERACTIVE_SELECTOR);
     if (!isInteractive) {
       callDep('toggleComicOverlay', { source: 'overlay-blank-tap' });
+      // 설정 바깥의 본문을 누르는 동작은 설정 시트와 상·하단 도구 모음을 함께 닫는다.
+      callDep('toggleViewerChrome');
     }
 
     // 오버레이 내부 터치는 여기서 모두 소비해 하단 핫스팟 토글과 중복되지 않게 한다.
     return true;
   }
 
-  const TAP_THRESHOLD = 15;
-  const SWIPE_MIN_DISTANCE = 40;
-  const SWIPE_MAX_TIME = 600;
+  const TAP_THRESHOLD = 18;
+  const SWIPE_MIN_DISTANCE = 18;
+  const SWIPE_MAX_TIME = 900;
+  const EDGE_ZONE_RATIO = 0.35;
+  const LONG_PRESS_MS = 280;
+  const LONG_PRESS_JITTER = 10; // 이 문턱값을 넘게 움직이면 롱프레스 팬이 아니라 그냥 스와이프로 간주
 
   let touchStartX = null;
   let touchStartY = null;
   let touchStartTime = 0;
   let isMultiTouch = false;
+  let touchStartedInSelectableText = false;
+  let touchStartedOnControl = false;
   let lastTouchEndTime = 0;
+  let mouseStartX = null;
+  let mouseStartY = null;
+  let mouseMoved = false;
+  let mouseStartedOnSelectableText = false;
+
+  // 높이맞춤 + 1장 보기에서 좌우로 가려진 부분을 롱프레스+드래그로 살짝씩 이동해서 보는 팬 상태
+  let longPressTimer = null;
+  let isPanning = false;
+  let panImg = null;
+  let panMaxOffset = 0;
+  let panStartClientX = 0;
+  let panStartOffset = 0;
+  let panMovedDuringGesture = false;
+
+  function cancelLongPressPan() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    isPanning = false;
+    panImg = null;
+  }
 
   document.addEventListener(
     'touchstart',
@@ -418,13 +502,69 @@ export function initViewerClickToggle() {
         touchStartY = e.touches[0].clientY;
         touchStartTime = Date.now();
         isMultiTouch = false;
+        panMovedDuringGesture = false;
+        touchStartedInSelectableText = ['epub', 'txt'].includes(String(state.currentViewerFormat || '').toLowerCase())
+          && !!e.target?.closest?.('.txt-chunk[data-idx], .txt-scroll-chunk[data-idx]');
+
+        cancelLongPressPan();
+
+        // 슬라이더/버튼/오버레이 컨트롤 위에서의 롱프레스는 팬으로 가로채지 않는다
+        // (예: 하단 페이지 슬라이더를 느리게 드래그하는 도중 280ms가 지나가는 경우).
+        const touchTarget = e.target;
+        const onControl = touchTarget && typeof touchTarget.closest === 'function' && (
+          touchTarget.closest('button') ||
+          touchTarget.closest('input') ||
+          touchTarget.closest('select') ||
+          touchTarget.closest('.viewer-controls') ||
+          touchTarget.closest('.floating-close-btn') ||
+          touchTarget.closest('#comic-fit-controls') ||
+          touchTarget.closest('#comic-overlay-menu') ||
+          touchTarget.closest('#epub-toc-container') ||
+          touchTarget.closest('.viewer-side-panel')
+        );
+        touchStartedOnControl = !!onControl;
+
+        if (!onControl) {
+          const startX = touchStartX;
+          longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            const pannable = getPannableComicImage();
+            if (!pannable) return;
+            isPanning = true;
+            panImg = pannable.img;
+            panMaxOffset = pannable.maxPan;
+            panStartClientX = startX;
+            const existing = parseFloat(panImg.style.getPropertyValue('--comic-pan-x'));
+            panStartOffset = Number.isFinite(existing) ? existing : 0;
+          }, LONG_PRESS_MS);
+        }
       } else {
         isMultiTouch = true;
+        touchStartedInSelectableText = false;
+        touchStartedOnControl = false;
         touchStartX = null;
         touchStartY = null;
+        cancelLongPressPan();
       }
     },
     { passive: true }
+  );
+
+  // 팬이 실제로 시작된 뒤의 좌우 이동 처리 - preventDefault로 페이지 넘김/브라우저 스크롤을
+  // 막아야 해서 별도의 non-passive 리스너로 분리한다(기존 touchmove 리스너는 passive 유지).
+  document.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!isPanning || !panImg || e.touches.length !== 1) return;
+      panMovedDuringGesture = true;
+      const deltaX = e.touches[0].clientX - panStartClientX;
+      let next = panStartOffset + deltaX;
+      if (next > panMaxOffset) next = panMaxOffset;
+      if (next < -panMaxOffset) next = -panMaxOffset;
+      panImg.style.setProperty('--comic-pan-x', `${next}px`);
+      e.preventDefault();
+    },
+    { passive: false }
   );
 
   document.addEventListener(
@@ -432,6 +572,19 @@ export function initViewerClickToggle() {
     (e) => {
       if (e.touches.length > 1) {
         isMultiTouch = true;
+        cancelLongPressPan();
+        return;
+      }
+
+      // 롱프레스 타이머가 아직 대기 중인데 손가락이 문턱값 이상 움직이면 일반 스와이프로 간주하고
+      // 팬 진입을 취소한다(롱프레스로 "가만히 누르고" 있어야 팬 모드로 들어간다는 설계 의도).
+      if (longPressTimer && touchStartX !== null && touchStartY !== null) {
+        const dx = Math.abs(e.touches[0].clientX - touchStartX);
+        const dy = Math.abs(e.touches[0].clientY - touchStartY);
+        if (dx > LONG_PRESS_JITTER || dy > LONG_PRESS_JITTER) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
       }
     },
     { passive: true }
@@ -440,6 +593,28 @@ export function initViewerClickToggle() {
   document.addEventListener(
     'touchend',
     (e) => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+
+      if (isPanning) {
+        isPanning = false;
+        panImg = null;
+        const hadMoved = panMovedDuringGesture;
+        panMovedDuringGesture = false;
+        if (hadMoved) {
+          // 실제로 팬 이동이 있었다면 아래의 스와이프(페이지 넘김)/탭(오버레이 토글) 로직으로
+          // 이어지지 않게 여기서 끝낸다.
+          touchStartX = null;
+          touchStartY = null;
+          lastTouchEndTime = Date.now();
+          return;
+        }
+        // 팬 모드로 들어갔지만 실제로는 움직이지 않은 롱프레스는 그냥 탭으로 취급해
+        // 아래 일반 로직(중앙 탭 시 오버레이 토글 등)으로 흘러가게 둔다.
+      }
+
       if (touchStartX === null || isMultiTouch) return;
       if (!e.changedTouches || e.changedTouches.length === 0) return;
 
@@ -452,14 +627,37 @@ export function initViewerClickToggle() {
 
       const startX = touchStartX;
       const startY = touchStartY;
+      const startedInSelectableText = touchStartedInSelectableText;
+      const startedOnControl = touchStartedOnControl;
 
       touchStartX = null;
       touchStartY = null;
+      touchStartedInSelectableText = false;
+      touchStartedOnControl = false;
 
       const target = e.target || document.elementFromPoint(endX, window.innerHeight / 2);
       if (!target) return;
 
-      if (handleOverlayBlankTap(target)) {
+      const absX = Math.abs(diffX);
+      const absY = Math.abs(diffY);
+
+      // EPUB/TXT의 텍스트에서 시작한 가로·세로 드래그는 페이지 제스처가
+      // 아니라 네이티브 텍스트 선택이다. 선택 중 손가락을 옆으로 길게 밀어도
+      // 페이지가 함께 넘어가면 선택 범위가 끊기고, 손을 뗀 순간 엉뚱한 페이지로
+      // 이동한다. 텍스트 제스처는 방향과 속도와 관계없이 페이지 넘김보다 우선한다.
+      if (startedInSelectableText && Math.max(absX, absY) >= TAP_THRESHOLD) {
+        lastTouchEndTime = Date.now();
+        return;
+      }
+
+      // 메뉴, 패널, 시크바에서 시작한 드래그는 손가락이 바깥에서 끝나더라도
+      // 뷰어 페이지 제스처로 다시 해석하지 않는다.
+      if (startedOnControl) {
+        lastTouchEndTime = Date.now();
+        return;
+      }
+
+      if (absX < TAP_THRESHOLD && absY < TAP_THRESHOLD && handleOverlayBlankTap(target)) {
         lastTouchEndTime = Date.now();
         return;
       }
@@ -467,6 +665,7 @@ export function initViewerClickToggle() {
       if (
         target.closest('#epub-toc-container') ||
         target.closest('#epub-toc-btn') ||
+        target.closest('.viewer-side-panel') ||
         target.closest('.viewer-controls') ||
         target.closest('.floating-close-btn') ||
         target.closest('button') ||
@@ -480,31 +679,37 @@ export function initViewerClickToggle() {
       if (!viewerModal || viewerModal.style.display !== 'flex') return;
 
       const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
-      const absX = Math.abs(diffX);
-      const absY = Math.abs(diffY);
+      const tapDirection = localStorage.getItem('viewer_tap_zone_direction') === 'vertical' ? 'vertical' : 'horizontal';
 
-      // 📱 1) 스와이프 제스처 처리 (페이지 모드일 때 수평 스와이프)
-      if (scrollMode === 'page' && absX >= SWIPE_MIN_DISTANCE && absX > absY * 1.2 && duration <= SWIPE_MAX_TIME) {
-        const isComic = state.currentViewerFormat === 'zip' || state.currentViewerFormat === 'cbz';
-        const isRtl = isComic && (localStorage.getItem('comic_reading_direction') === 'rtl');
+      // 모바일 네이티브 텍스트 선택은 롱프레스 후 드래그로 확정된다. 긴 텍스트
+      // 제스처를 먼저 선택기에 넘겨야 touchend가 페이지 스와이프로 소비하지 않는다.
+      if (startedInSelectableText && duration >= 350) return;
 
+      // 모바일은 휠 가속도와 무관하게 한 제스처당 정확히 한 번만 이동한다.
+      // 텍스트가 아닌 본문 영역에서 시작한 짧고 명확한 스와이프만 페이지 이동으로 해석한다.
+      if (scrollMode === 'page' && tapDirection === 'horizontal'
+          && absX >= SWIPE_MIN_DISTANCE && absX >= absY * 1.05 && duration <= SWIPE_MAX_TIME) {
+        const isRtl = isViewerRtlFlowActive();
+
+        if (e.cancelable) e.preventDefault();
         lastTouchEndTime = Date.now();
+        window.__viewerSuppressClickUntil = Date.now() + 700;
 
         if (diffX > 0) {
           // 👈 Swipe Left (오른쪽에서 왼쪽으로 쓸어넘김)
           console.log(`[Viewer-Touch-Swipe] Swipe Left detected (diffX=${diffX}, isRtl=${isRtl})`);
           if (isRtl) {
-            callDep('prevPage');
+            callDep('movePageByOne', 'prev');
           } else {
-            callDep('nextPage');
+            callDep('movePageByOne', 'next');
           }
         } else {
           // 👉 Swipe Right (왼쪽에서 오른쪽으로 쓸어넘김)
           console.log(`[Viewer-Touch-Swipe] Swipe Right detected (diffX=${diffX}, isRtl=${isRtl})`);
           if (isRtl) {
-            callDep('nextPage');
+            callDep('movePageByOne', 'next');
           } else {
-            callDep('prevPage');
+            callDep('movePageByOne', 'prev');
           }
         }
         return;
@@ -512,33 +717,97 @@ export function initViewerClickToggle() {
 
       // 📱 1-1) 스와이프 제스처 처리 (페이지 모드일 때 수직 스와이프, RTL 무관 상:다음 / 하:이전)
       // 다른 앱(틱톡/릴스/웹툰 세로보기)과 동일하게 "콘텐츠를 끌어올리는" 자연스러운 스크롤 방향을 따름.
-      if (scrollMode === 'page' && absY >= SWIPE_MIN_DISTANCE && absY > absX * 1.2 && duration <= SWIPE_MAX_TIME) {
+      if (scrollMode === 'page' && tapDirection === 'vertical'
+          && absY >= SWIPE_MIN_DISTANCE && absY > absX * 1.05 && duration <= SWIPE_MAX_TIME) {
+        if (e.cancelable) e.preventDefault();
         lastTouchEndTime = Date.now();
+        window.__viewerSuppressClickUntil = Date.now() + 700;
 
         if (diffY > 0) {
           // 👆 Swipe Up (아래에서 위로 쓸어올림) → 다음 페이지
           console.log(`[Viewer-Touch-Swipe] Swipe Up detected (diffY=${diffY})`);
-          callDep('nextPage');
+          callDep('movePageByOne', 'next');
         } else {
           // 👇 Swipe Down (위에서 아래로 쓸어내림) → 이전 페이지
           console.log(`[Viewer-Touch-Swipe] Swipe Down detected (diffY=${diffY})`);
-          callDep('prevPage');
+          callDep('movePageByOne', 'prev');
         }
         return;
       }
 
-      // 📱 2) 단순 탭(Tap) 오버레이 토글 처리
-      if (absX < TAP_THRESHOLD && absY < TAP_THRESHOLD) {
-        const width = window.innerWidth;
-        if (endX >= width * 0.3 && endX <= width * 0.7) {
-          console.log('[Viewer-Touch-Toggle] Triggering toggleComicOverlay() from touchend tap');
-          lastTouchEndTime = Date.now();
-          callDep('toggleComicOverlay');
-        }
+      // 선택하지 않은 축의 스와이프는 페이지 이동이나 중앙 탭으로 재해석하지 않는다.
+      if (scrollMode === 'page' && duration <= SWIPE_MAX_TIME
+          && Math.max(absX, absY) >= SWIPE_MIN_DISTANCE) {
+        if (e.cancelable) e.preventDefault();
+        lastTouchEndTime = Date.now();
+        window.__viewerSuppressClickUntil = Date.now() + 700;
+        return;
       }
+
+      // 📱 2) 짧은 탭: 설정한 좌우/상하 끝 영역은 페이지 이동, 중앙은 도구 모음 토글.
+      // 핫스팟 DOM과 텍스트 선택 가능 여부에 의존하지 않고 같은 좌표 규칙을 쓴다.
+      if (absX < TAP_THRESHOLD && absY < TAP_THRESHOLD && duration <= 380) {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const direction = localStorage.getItem('viewer_tap_zone_direction') === 'vertical' ? 'vertical' : 'horizontal';
+        const isRtl = isViewerRtlFlowActive();
+        let action = null;
+        if (direction === 'vertical') {
+          if (endY <= height * EDGE_ZONE_RATIO) action = 'prevPage';
+          else if (endY >= height * (1 - EDGE_ZONE_RATIO)) action = 'nextPage';
+        } else {
+          if (endX <= width * EDGE_ZONE_RATIO) action = isRtl ? 'nextPage' : 'prevPage';
+          else if (endX >= width * (1 - EDGE_ZONE_RATIO)) action = isRtl ? 'prevPage' : 'nextPage';
+        }
+        if (e.cancelable) e.preventDefault();
+        lastTouchEndTime = Date.now();
+        if (action) callDep('movePageByOne', action === 'prevPage' ? 'prev' : 'next');
+        else callDep('toggleViewerChrome');
+        return;
+      }
+
+      // 길게 누르거나 천천히 움직인 텍스트 제스처만 네이티브 선택에 맡긴다.
+      if (startedInSelectableText) return;
     },
-    { passive: true }
+    { passive: false }
   );
+
+  viewerBody.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest?.('input, textarea, select, button, a, [contenteditable="true"], .viewer-side-panel')) return;
+    mouseStartX = e.clientX;
+    mouseStartY = e.clientY;
+    mouseMoved = false;
+    const format = String(state.currentViewerFormat || '').toLowerCase();
+    mouseStartedOnSelectableText = (format === 'epub' || format === 'txt')
+      && isPointOnSelectableText(e.clientX, e.clientY);
+    if ((format === 'epub' || format === 'txt') && !mouseStartedOnSelectableText) {
+      window.getSelection?.()?.removeAllRanges?.();
+      e.preventDefault();
+    }
+  });
+  viewerBody.addEventListener('mousemove', (e) => {
+    if (!(e.buttons & 1)) {
+      mouseStartX = null;
+      mouseMoved = false;
+      return;
+    }
+    if (mouseStartX === null) return;
+    if (Math.hypot(e.clientX - mouseStartX, e.clientY - mouseStartY) > 8) {
+      mouseMoved = true;
+      // 공통 핫스팟의 document-capture 클릭 디스패처도 같은 드래그를 클릭으로
+      // 처리하지 않도록 짧은 전역 억제 시간을 공유한다.
+      window.__viewerMouseDraggedUntil = Date.now() + 350;
+    }
+  });
+  window.addEventListener('mouseup', () => {
+    window.setTimeout(() => {
+      mouseStartX = null;
+      mouseStartY = null;
+      mouseMoved = false;
+      mouseStartedOnSelectableText = false;
+    }, 0);
+  });
 
   viewerBody.addEventListener('click', (e) => {
     if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
@@ -565,12 +834,31 @@ export function initViewerClickToggle() {
     }
 
     const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
+    const format = String(state.currentViewerFormat || '').toLowerCase();
+    const isSelectableText = format === 'epub' || format === 'txt';
+    if (scrollMode === 'page' && isSelectableText) {
+      if (mouseMoved || mouseStartedOnSelectableText || isPointOnSelectableText(e.clientX, e.clientY)) return;
+      const direction = localStorage.getItem('viewer_tap_zone_direction') === 'vertical' ? 'vertical' : 'horizontal';
+      if (direction === 'vertical') {
+        const ratio = e.clientY / Math.max(1, window.innerHeight);
+        if (ratio < EDGE_ZONE_RATIO) callDep('prevPage');
+        else if (ratio > 1 - EDGE_ZONE_RATIO) callDep('nextPage');
+        else callDep('toggleViewerChrome');
+      } else {
+        const ratio = e.clientX / Math.max(1, window.innerWidth);
+        const isRtl = isViewerRtlFlowActive();
+        if (ratio < EDGE_ZONE_RATIO) callDep(isRtl ? 'nextPage' : 'prevPage');
+        else if (ratio > 1 - EDGE_ZONE_RATIO) callDep(isRtl ? 'prevPage' : 'nextPage');
+        else callDep('toggleViewerChrome');
+      }
+      return;
+    }
     if (scrollMode === 'scroll') {
       const clickX = e.clientX;
       const width = window.innerWidth;
       if (clickX >= width * 0.3 && clickX <= width * 0.7) {
         console.log('[Viewer-Click-Toggle] Triggering toggleComicOverlay() from mouse click');
-        callDep('toggleComicOverlay');
+        callDep('toggleViewerChrome');
       }
     }
   });

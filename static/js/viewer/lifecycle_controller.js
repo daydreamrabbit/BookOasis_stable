@@ -1,12 +1,12 @@
 // lifecycle_controller.js - open/close orchestration for viewer modal
 import { state } from '../state.js';
 import { ComicViewer, clearComicViewer } from '../viewer_comic.js';
-import { TxtViewer } from '../viewer_txt.js';
+import { TxtViewer } from '../viewer_txt.js?rev=20260927-tts-session-v8';
 import { PdfViewer, clearPdfViewer } from '../viewer_pdf.js';
 import { tryAutoFullscreenOnOpen, exitFullscreenIfNeeded } from './fullscreen_controller.js';
 import { shouldAutoFullscreenForFormat } from './platform_profile.js';
-import { flushProgress, resetPreloadState } from '../viewer_progress.js';
-import { setAnnotationUiEnabled } from './annotation_ui.js';
+import { flushProgress, resetPreloadState, setProgressSnapshotProvider } from '../viewer_progress.js?rev=20260927-tts-session-v8';
+import { setAnnotationUiEnabled } from './annotation_ui.js?rev=20260922-reader-session-v45';
 
 let deps = {
   initViewerSeekBar: () => {},
@@ -15,6 +15,22 @@ let deps = {
 };
 
 let activeViewerInstance = null;
+setProgressSnapshotProvider(() => activeViewerInstance?.prepareForClose?.());
+
+function resetViewerSeekbarForOpen() {
+  const slider = document.getElementById('viewer-page-slider');
+  const label = document.getElementById('seekbar-start-label');
+  const tooltip = document.getElementById('seekbar-tooltip');
+  if (slider) {
+    slider.min = '1';
+    slider.max = '1';
+    slider.value = '1';
+    slider.style.setProperty('--seek-progress', '0%');
+    slider.dataset.seekMode = 'page';
+  }
+  if (label) label.textContent = '– / –';
+  if (tooltip) tooltip.classList.remove('visible');
+}
 
 export function configureLifecycleController(nextDeps = {}) {
   deps = { ...deps, ...nextDeps };
@@ -25,6 +41,8 @@ export function getActiveViewerInstance() {
 }
 
 export function openReader(bookId, format, title, pagesRead, totalPages) {
+  const existingModal = document.getElementById('media-viewer-modal');
+  if (existingModal?.style.display === 'flex' && String(state.activeBookId) === String(bookId)) return;
   console.log(`[Viewer-Core] openReader 시작 - Book ID: ${bookId}, Format: ${format}, Title: ${title}`);
 
   const fmt = String(format || '').toLowerCase();
@@ -56,13 +74,23 @@ export function openReader(bookId, format, title, pagesRead, totalPages) {
   state.activeBookId = bookId;
   const viewerModal = document.getElementById('media-viewer-modal');
   if (!viewerModal) return;
+  // 텍스트 뷰어는 도구 모음 표시 여부와 무관하게 첫 입력부터 본문이 직접 포인터를 받는다.
+  viewerModal.dataset.viewerFormat = fmt;
 
   if (viewerModal.parentNode !== document.body) {
     document.body.appendChild(viewerModal);
   }
 
   viewerModal.style.display = 'flex';
-  document.getElementById('viewer-title-text').textContent = title;
+  const viewerTitle = document.getElementById('viewer-title-text');
+  if (viewerTitle) {
+    // 실제 작품명을 넣은 뒤 전역 i18n 재적용이 기본 문구("독서 중…")로 다시
+    // 덮어쓰지 않도록 번역 마커를 제거한다.
+    viewerTitle.removeAttribute('data-i18n');
+    viewerTitle.textContent = title;
+  }
+  window.syncViewerDisplayModeUI?.();
+  window.resetViewerChrome?.();
 
   // 플랫폼/포맷 정책 기반 자동 전체화면 분기 (수동 전체화면 버튼은 별도로 유지)
   if (shouldAutoFullscreenForFormat(fmt)) {
@@ -130,6 +158,11 @@ export function openReader(bookId, format, title, pagesRead, totalPages) {
   if (widthLabel) widthLabel.textContent = `${savedScrollWidth}px`;
 
   state.currentViewerFormat = fmt;
+  // 이전 책의 4/17 같은 값이 새 책의 실제 페이지 수를 가져오기 전 잠깐 보이지 않게 한다.
+  resetViewerSeekbarForOpen();
+  if (typeof window.syncViewerControlsForFormat === 'function') {
+    window.syncViewerControlsForFormat(fmt);
+  }
   setAnnotationUiEnabled(fmt === 'txt' || fmt === 'epub');
 
   if (activeViewerInstance && typeof activeViewerInstance.destroy === 'function') {
@@ -170,11 +203,22 @@ export function openReader(bookId, format, title, pagesRead, totalPages) {
   }
 
   deps.syncHotspotPointerEvents();
+  document.dispatchEvent(new CustomEvent('viewer-book-opened', {
+    detail: { bookId, format: fmt }
+  }));
 }
 
 export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
+  const closingBookId = state.activeBookId;
+  const closingLibraryType = state.currentLibraryType;
   const viewerModal = document.getElementById('media-viewer-modal');
   if (!viewerModal) return Promise.resolve();
+  if (viewerModal.style.display === 'none' && !activeViewerInstance) return Promise.resolve();
+  // The close button hides the modal before popstate fires. Retain that fact so
+  // routing can restore the underlying view just as it does for browser Back.
+  if (triggerBack && !isTransitioning && window.location.hash === '#viewer') {
+    viewerModal.dataset.pendingHistoryClose = 'true';
+  }
 
   if (activeViewerInstance && typeof activeViewerInstance.prepareForClose === 'function') {
     try {
@@ -185,11 +229,6 @@ export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
   }
 
   const fullscreenExitPromise = exitFullscreenIfNeeded();
-
-  const padPanel = document.getElementById('viewer-padding-overlay-panel');
-  if (padPanel) {
-    padPanel.style.display = 'none';
-  }
 
   if (!isTransitioning) {
     const menu = document.getElementById('comic-overlay-menu');
@@ -203,6 +242,7 @@ export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
 
     viewerModal.classList.remove('fullscreen-mode');
     viewerModal.style.display = 'none';
+    document.dispatchEvent(new CustomEvent('viewer-closed'));
     const fullscreenIcon = document.getElementById('fullscreen-icon');
     if (fullscreenIcon) fullscreenIcon.className = 'fa-solid fa-expand';
 
@@ -280,25 +320,19 @@ export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
     }
     console.log('[Viewer-Core] DB Progress flush 완료. 화면 데이터 갱신을 실행합니다.');
     if (state.currentLibraryId === 'home') {
-      import('../dashboard.js').then((d) => d.loadDashboardData());
+      import('../dashboard.js?v=20260926-home-layout-type-cache-v1').then((d) => d.loadDashboardData({ force: true }));
     } else if (state.currentLibraryId === 'history') {
-      import('../book_list.js').then((b) => b.loadReadingHistory());
+      import('../book_list.js?rev=20260920-mobile-request-cancel-v4').then((b) => b.loadReadingHistory());
     }
 
     const detailView = document.getElementById('book-detail-view');
-    if (detailView && detailView.style.display !== 'none') {
-      const seriesName = String(state.detailSeriesName || '').trim();
-      if (seriesName) {
-        import('../modal.js').then((mod) => {
-          mod.openBookDetail(
-            null,
-            seriesName,
-            state.detailLibraryId || state.currentLibraryId,
-            state.detailRepresentativeBookId || null,
-            state.detailDisplayTitle || ''
-          );
-        });
-      }
+    if (detailView) {
+      // 상세 DOM을 통째로 다시 열면 먼저 목록이 보였다가 상세로 바뀌고, 상세 플러그인의
+      // 추천 로딩 문구도 다시 나타난다. 보존된 상세 화면은 그대로 두고 필요한 위젯만
+      // 선택적으로 갱신할 수 있도록 완료 이벤트만 전달한다.
+      document.dispatchEvent(new CustomEvent('viewer-progress-flushed', {
+        detail: { bookId: closingBookId, type: closingLibraryType, seriesName: state.detailSeriesName || '' }
+      }));
     }
   };
 

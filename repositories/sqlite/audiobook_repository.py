@@ -30,37 +30,34 @@ class AudiobookRepository:
 
     @staticmethod
     def get_audiobook_by_id(audiobook_id):
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM audiobooks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
-            (int(audiobook_id),)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM audiobooks WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                (int(audiobook_id),)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_audiobook_by_series_or_folder_name(series_name):
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM audiobooks WHERE (title = ? OR folder_name = ?) AND COALESCE(is_deleted, 0) = 0",
-            (series_name, series_name)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM audiobooks WHERE (title = ? OR folder_name = ?) AND COALESCE(is_deleted, 0) = 0",
+                (series_name, series_name)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_first_audiobook():
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM audiobooks WHERE COALESCE(is_deleted, 0) = 0 ORDER BY id ASC LIMIT 1"
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM audiobooks WHERE COALESCE(is_deleted, 0) = 0 ORDER BY id ASC LIMIT 1"
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -84,13 +81,12 @@ class AudiobookRepository:
     @staticmethod
     def get_all_authors_with_ids():
         """작가별 모음(정규화 매칭) 일괄 즐겨찾기를 위해 전체 오디오북의 id/author만 가져온다."""
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, author FROM audiobooks WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(author, '') != ''"
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, author FROM audiobooks WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(author, '') != ''"
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -117,26 +113,24 @@ class AudiobookRepository:
 
     @staticmethod
     def get_audiobook_progress(audiobook_id, user_id):
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM audiobook_progress WHERE audiobook_id = ? AND user_id = ?",
-            (audiobook_id, user_id)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM audiobook_progress WHERE audiobook_id = ? AND user_id = ?",
+                (audiobook_id, user_id)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
     def get_audiobook_tracks(audiobook_id):
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM audiobook_tracks WHERE audiobook_id = ? ORDER BY track_number ASC",
-            (audiobook_id,)
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM audiobook_tracks WHERE audiobook_id = ? ORDER BY track_number ASC",
+                (audiobook_id,)
+            )
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -199,14 +193,13 @@ class AudiobookRepository:
     @staticmethod
     def get_track_by_id_and_audiobook_id(track_id, audiobook_id):
         """특정 트랙 ID 및 오디오북 ID 매칭 조회"""
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM audiobook_tracks WHERE id = ? AND audiobook_id = ?",
-            (track_id, audiobook_id)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM audiobook_tracks WHERE id = ? AND audiobook_id = ?",
+                (track_id, audiobook_id)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -279,14 +272,13 @@ class AudiobookRepository:
     @staticmethod
     def get_folder_paths(library_id=None):
         """저장된 오디오북 폴더 경로 목록 조회"""
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        if library_id is not None:
-            cursor.execute("SELECT folder_path FROM audiobooks WHERE library_id = ?", (library_id,))
-        else:
-            cursor.execute("SELECT folder_path FROM audiobooks")
-        rows = cursor.fetchall()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            if library_id is not None:
+                cursor.execute("SELECT folder_path FROM audiobooks WHERE library_id = ?", (library_id,))
+            else:
+                cursor.execute("SELECT folder_path FROM audiobooks")
+            rows = cursor.fetchall()
         return [r['folder_path'] for r in rows if r and r['folder_path']]
 
     @staticmethod
@@ -506,18 +498,17 @@ class AudiobookRepository:
     @staticmethod
     def get_by_folder_path(folder_path):
         """폴더 경로 기반 오디오북 상세 메타 조회"""
-        conn = database.get_connection('audiobook')
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, library_id, title, web_id, author, publisher, code, poster,
-                   premiered, ratings, author_intro, description,
-                   folder_name, total_duration, total_tracks, file_type
-            FROM audiobooks
-            WHERE folder_path = ?
-            """,
-            (folder_path,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection('audiobook') as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, library_id, title, web_id, author, publisher, code, poster,
+                       premiered, ratings, author_intro, description,
+                       folder_name, total_duration, total_tracks, file_type
+                FROM audiobooks
+                WHERE folder_path = ?
+                """,
+                (folder_path,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None

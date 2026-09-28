@@ -394,7 +394,7 @@ def scan_and_save_video_folder(folder_path, library_id=None):
         return None
 
 
-def scan_video_library(library_path, library_id=None, force=False):
+def scan_video_library(library_path, library_id=None, force=False, cancel_event=None):
     """
     상위 비디오 라이브러리 디렉토리를 순회하며 모든 강좌(코스) 폴더를 스캔합니다.
     오디오북과 동일하게 "폴더 하나 = 강좌 하나" 규칙을 적용합니다
@@ -414,6 +414,16 @@ def scan_video_library(library_path, library_id=None, force=False):
     raw_paths = VideoRepository.get_folder_paths(library_id)
     existing_folder_paths = {os.path.normpath(str(p)) for p in raw_paths if p}
 
+    def cancellation_requested():
+        if cancel_event is None:
+            return False
+        try:
+            return bool(cancel_event.is_set())
+        except Exception as cancel_error:
+            # 취소 상태 확인 실패가 정상적인 영상 스캔을 실패시키지 않도록 한다.
+            print(f"[VideoScanner][CANCEL_CHECK_WARNING] {cancel_error}")
+            return False
+
     print(
         "[VideoScanner][LIBRARY_SCAN_START] "
         f"library_id={library_id} "
@@ -423,6 +433,12 @@ def scan_video_library(library_path, library_id=None, force=False):
     )
 
     for root, dirs, files in os.walk(library_path):
+        if cancellation_requested():
+            print(
+                "[VideoScanner][CANCELLED] "
+                f"library_id={library_id} processed={count} path={library_path}"
+            )
+            return count
         has_video_files = any(f.lower().endswith(VIDEO_EXTENSIONS) for f in files)
 
         if has_video_files:

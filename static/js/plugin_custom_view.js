@@ -1,6 +1,6 @@
 // static/js/plugin_custom_view.js – 카테고리 레벨 플러그인 전용 풀페이지 뷰포트 마운트 오케스트레이터
 import { state } from './state.js';
-import { switchActiveView } from './view_manager.js';
+import { switchActiveView } from './view_manager.js?rev=20260921-theme-mobile-v3';
 import { updateCurrentCategoryIndicator } from './category_indicator.js';
 
 function escapeHtml(str) {
@@ -23,7 +23,7 @@ export async function mountCategoryPluginUI(pluginId) {
   if (!container) return;
   const requestToken = ++pluginViewLoadToken;
 
-  // 1. 뷰 전환: plugin_custom 뷰 활성화 (플러그인 데스크 탭바 및 공통 헤더 컨트롤 전면 숨김)
+  // 1. 플러그인 전용 본문으로 전환하되 공통 검색창과 세션 탭은 유지한다.
   switchActiveView('plugin_custom');
   updateCurrentCategoryIndicator(`plugin_${pluginId}`);
 

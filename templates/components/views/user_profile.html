@@ -1,0 +1,79 @@
+<section id="user-profile-view" class="user-profile-view" style="display: none;">
+    <div class="user-profile-hero">
+        <div class="user-profile-hero-glow" aria-hidden="true"></div>
+        <button id="profile-avatar-edit" class="user-profile-avatar-button" type="button" title="프로필 이미지 변경">
+            <span class="user-avatar user-avatar--profile" data-role="profile-avatar" data-avatar="oasis"><i class="fa-solid fa-book-open"></i></span>
+            <span class="user-profile-avatar-edit-badge"><i class="fa-solid fa-pen"></i></span>
+        </button>
+        <div class="user-profile-identity">
+            <div class="user-profile-name-row">
+                <h2 id="profile-display-name">-</h2>
+                <span id="profile-role-badge" class="user-profile-role-badge">사용자</span>
+            </div>
+            <p id="profile-username">@-</p>
+            <p id="profile-joined-at" class="user-profile-joined"></p>
+        </div>
+        <button id="profile-edit-button" class="user-profile-edit-button" type="button">
+            <i class="fa-solid fa-pen"></i><span>프로필 편집</span>
+        </button>
+    </div>
+
+    <nav class="user-profile-tabs" aria-label="프로필 보기">
+        <button class="active" type="button" data-profile-tab="overview">개요</button>
+        <button type="button" data-profile-tab="statistics">통계</button>
+        <button type="button" data-profile-tab="activity">활동</button>
+    </nav>
+
+    <div id="profile-loading" class="user-profile-loading">
+        <i class="fa-solid fa-circle-notch fa-spin"></i><span>프로필을 불러오는 중...</span>
+    </div>
+    <div id="profile-error" class="user-profile-error" hidden></div>
+
+    <div class="user-profile-tab-panel" data-profile-panel="overview" hidden>
+        <div class="user-profile-stats" id="profile-summary-stats"></div>
+        <section class="user-profile-section">
+            <div class="user-profile-section-heading">
+                <div><span>최근 기록</span><small>최근 읽은 도서와 진행 상태입니다.</small></div>
+            </div>
+            <div id="profile-recent-overview" class="user-profile-recent-grid"></div>
+        </section>
+    </div>
+
+    <div class="user-profile-tab-panel" data-profile-panel="statistics" hidden>
+        <section class="user-profile-section">
+            <div class="user-profile-section-heading user-profile-section-heading--row">
+                <div><span id="profile-heatmap-title">독서 활동</span><small>실제로 저장된 일별 읽기 기록을 표시합니다.</small></div>
+                <select id="profile-year-select" aria-label="통계 연도"></select>
+            </div>
+            <div class="profile-heatmap-scroll">
+                <div id="profile-heatmap" class="profile-heatmap"></div>
+            </div>
+            <div class="profile-heatmap-legend"><span>적음</span><i data-level="0"></i><i data-level="1"></i><i data-level="2"></i><i data-level="3"></i><i data-level="4"></i><span>많음</span></div>
+        </section>
+    </div>
+
+    <div class="user-profile-tab-panel" data-profile-panel="activity" hidden>
+        <section class="user-profile-section">
+            <div class="user-profile-section-heading"><div><span>최근 독서 활동</span><small>계정별 진행 기록입니다.</small></div></div>
+            <div id="profile-activity-list" class="user-profile-activity-list"></div>
+        </section>
+    </div>
+
+    <div id="profile-edit-dialog" class="profile-edit-dialog" hidden>
+        <button class="profile-edit-backdrop" type="button" data-profile-edit-close aria-label="닫기"></button>
+        <form id="profile-edit-form" class="profile-edit-card">
+            <header><div><strong>프로필 편집</strong><small>선택한 이미지는 계정에 저장되어 다른 기기에도 적용됩니다.</small></div><button type="button" data-profile-edit-close aria-label="닫기"><i class="fa-solid fa-xmark"></i></button></header>
+            <label class="profile-edit-name-label" for="profile-display-name-input">표시 이름</label>
+            <input id="profile-display-name-input" type="text" maxlength="40" autocomplete="nickname">
+            <span class="profile-edit-avatar-label">프로필 이미지</span>
+            <div id="profile-avatar-options" class="profile-avatar-options"></div>
+            <div class="profile-avatar-upload-row">
+                <input id="profile-avatar-file" type="file" accept="image/jpeg,image/png,image/webp,image/avif,image/gif" hidden>
+                <button id="profile-avatar-upload-button" type="button"><i class="fa-solid fa-camera"></i><span>내 이미지 선택</span></button>
+                <small>JPG, PNG, WebP, AVIF · 최대 5MB</small>
+            </div>
+            <p id="profile-edit-message" class="profile-edit-message" hidden></p>
+            <footer><button type="button" class="profile-edit-cancel" data-profile-edit-close>취소</button><button type="submit" class="profile-edit-save"><i class="fa-regular fa-floppy-disk"></i> 저장</button></footer>
+        </form>
+    </div>
+</section>

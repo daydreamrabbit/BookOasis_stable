@@ -5,6 +5,18 @@ set -e
 PUID=${PUID:-0}
 PGID=${PGID:-0}
 
+# Validate every BookOasis bind target on each container start. Compose's
+# volume-check service performs the same check before initial startup; this
+# second layer also protects direct container restarts.
+echo "[Entrypoint] Checking configured bind-mounted paths..."
+if ! python3 /app/tools/check_volume_paths.py \
+    /app/db /app/covers /app/cache /app/plugins /app/rclone /app/logs \
+    /app/static/fonts/custom /book /data/comics; then
+    echo "[Entrypoint] ERROR: one or more bind-mounted paths are unavailable; startup is blocked." >&2
+    exit 1
+fi
+echo "[Entrypoint] Bind-mounted paths are accessible. Continuing startup."
+
 # ─────────────────────────────────────────────────────────
 # [공통] 데이터 디렉토리 권한 및 쓰기 가능 여부 사전 검증
 # NAS(Synology, QNAP 등) 환경에서 bind mount 시
@@ -364,4 +376,3 @@ fi
 
 # 시그널을 받을 수 있도록 wait 명령으로 대기
 wait "$WEB_PID"
-

@@ -1,6 +1,6 @@
 // viewer_next_episode.js – 다음 편 이어서 보기 제어 모듈
 import { state } from './state.js';
-import { closeMediaViewer } from './viewer.js';
+import { closeMediaViewer } from './viewer.js?rev=20260927-tts-session-v8';
 
 let nextEpisodeBusy = false;
 let nextEpisodeModalOpen = false;
@@ -225,7 +225,7 @@ function triggerOpenNextBook(nextBook) {
 
   // 2. 순환 참조 회피를 위해 viewer.js를 동적으로 임포트하여 다음 책 로드
   return Promise.resolve(closePromise)
-    .then(() => import('./viewer.js'))
+    .then(() => import('./viewer.js?rev=20260927-tts-session-v8'))
     .then(m => {
       m.openReader(
         nextBook.id,

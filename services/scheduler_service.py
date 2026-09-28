@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import re
+from datetime import datetime, timezone
 import database
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -73,6 +74,16 @@ def normalize_cron_expression(cron_expression):
 # 싱글톤 백그라운드 스케줄러 인스턴스 (동적으로 타임존을 재설정하여 가동)
 scheduler = BackgroundScheduler()
 
+def register_generated_images_cleanup():
+    """Run once on startup, then hourly; reloads must not postpone the job."""
+    from services.generated_media_service import cleanup_generated_images
+    if not scheduler.get_job('generated_images_cleanup'):
+        scheduler.add_job(
+            cleanup_generated_images, 'interval', hours=1,
+            id='generated_images_cleanup', max_instances=1, coalesce=True,
+            next_run_time=datetime.now(timezone.utc), misfire_grace_time=None,
+        )
+
 class SchedulerService:
     @staticmethod
     def start_scheduler():
@@ -86,6 +97,8 @@ class SchedulerService:
             SchedulerService.reload_all_jobs()
             
         # ── [Redis 캐시 동기화 백그라운드 Job 등록] ──
+        register_generated_images_cleanup()
+
         from services.reading_progress_service import (
             ReadingProgressService,
             get_progress_flush_interval_seconds,
@@ -189,7 +202,8 @@ class SchedulerService:
         # 기존 모든 job 제거
         try:
             for job in list(scheduler.get_jobs()):
-                scheduler.remove_job(job.id)
+                if job.id.startswith('scan_') or job.id == 'lazy_scan_covers_job':
+                    scheduler.remove_job(job.id)
             print("[Scheduler] All existing scan jobs removed.")
         except Exception as e:
             print(f"[Scheduler] Error removing job: {e}")
@@ -272,7 +286,7 @@ class SchedulerService:
             print(f"[Scheduler] Job removal failed: ID={job_id}, Error: {e}")
 
 
-def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initial_add_scan=False, trigger_type='manual', is_cron=False, **kwargs):
+def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initial_add_scan=False, trigger_type='manual', is_cron=False, task_id=None, **kwargs):
     """실제 스케줄에 맞춰 구동될 래핑 헬퍼 함수 (진행 및 내역 상세 로깅 보강)"""
     import database
     from tools.scanner import scan_library
@@ -294,7 +308,50 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
 
     # DB가 현재 최적화(VACUUM 등) 튜닝 진행 중인 경우, 완료될 때까지 안전하게 대기
     from services.db_tuning_service import is_db_tuning
+    from services.scan_cancellation import ScanCancelledError
     import time
+    import threading
+    from utils.library_scan_progress import ThrottledStageReporter
+
+    # 스캔 활동창에 "폴더 탐색 중 · N개 방문" → "도서 파일 done/total (P%)"를 2초 간격으로 보여준다.
+    scan_task_key = f'library_scan_{db_type}_{library_id}'
+    scan_progress_reporter = ThrottledStageReporter(lambda text: _update_task_stage(scan_task_key, text))
+    cancel_event = threading.Event()
+    cancel_monitor_stop = threading.Event()
+
+    def is_scan_cancel_requested():
+        """Read the queue flag first, with library status as a compatibility fallback."""
+        try:
+            if task_id is not None:
+                from repositories.scanner_queue_repository import ScannerQueueRepository
+                if ScannerQueueRepository.is_cancel_requested(task_id):
+                    return True
+        except Exception as queue_cancel_error:
+            print(f"[Scanner-Trigger WARNING] Queue cancel flag check failed; using library status fallback: {queue_cancel_error}")
+
+        try:
+            from repositories.scheduler_repository import SchedulerRepository
+            return SchedulerRepository.get_library_scan_status(db_type, library_id) == 'cancelling'
+        except Exception as status_error:
+            print(f"[Scanner-Trigger WARNING] Library cancel status check failed: {status_error}")
+            return False
+
+    def monitor_scan_cancellation():
+        while not cancel_monitor_stop.wait(0.5):
+            try:
+                if is_scan_cancel_requested():
+                    cancel_event.set()
+                    print(f"[Scanner-Trigger] 🛑 Cancellation event set for {scan_task_key}")
+                    return
+            except Exception as monitor_error:
+                # A transient status-read failure must not cancel a healthy scan.
+                print(f"[Scanner-Trigger WARNING] Cancellation monitor probe failed: {monitor_error}")
+
+    cancel_monitor = threading.Thread(
+        target=monitor_scan_cancellation,
+        name=f"scan-cancel-monitor-{db_type}-{library_id}",
+        daemon=True,
+    )
 
     def is_connection_refused_error(err):
         reason = getattr(err, 'reason', err)
@@ -344,6 +401,10 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
     
     wait_count = 0
     while is_db_tuning(db_type):
+        if is_scan_cancel_requested():
+            cancel_event.set()
+            print("[Scanner-Trigger] 🛑 Scan cancellation detected while waiting for DB tuning to finish.")
+            break
         print(f"[Scanner-Trigger] ⚠️ DB Tuning ({db_type}) in progress. Waiting 3 seconds... (elapsed: {wait_count * 3}s)")
         write_scan_log("⚠️ 데이터베이스 최적화(튜닝) 작업이 진행 중입니다. 완료 시까지 일시 대기합니다.")
         time.sleep(10.0)
@@ -572,8 +633,15 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
     except Exception as db_err:
         print(f"[Scanner-Trigger] VFS 옵션 DB 조회 Error: {db_err}")
     
-    # 큐 세부 진행 단계를 도서 스캔 중으로 기록
-    _update_task_stage(f"library_scan_{db_type}_{library_id}", 'book_scan')
+    # VFS 준비가 끝난 뒤에도 작업 전체 수명 동안 취소 상태를 감시한다.
+    # 기존처럼 완료된 폴더 3개마다만 확인하면 긴 폴더/원격 I/O 중에는
+    # 중단 요청이 늦게 반영될 수 있다.
+    cancel_monitor.start()
+    if is_scan_cancel_requested():
+        cancel_event.set()
+
+    # 내부 enum('book_scan') 대신 사용자에게 의미 있는 현재 단계를 먼저 표시한다.
+    scan_progress_reporter('discover', count=0)
 
     try:
         # 로컬(비원격) 경로는 스캔이 매우 빠르게 끝나 flush 타이밍 경합이 발생하기 쉬워
@@ -597,9 +665,20 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
 
         for attempt in range(1, max_scan_attempts + 1):
             try:
-                scan_library(db_path, library_id, physical_path, force=force, skip_vfs_refresh=vfs_refreshed_in_wrapper)
+                # 재시도는 스캔을 처음부터 다시 시작하므로 이전 시도의 진행 표시 상태를 비운다.
+                scan_progress_reporter.reset()
+                scan_library(
+                    db_path, library_id, physical_path, force=force,
+                    skip_vfs_refresh=vfs_refreshed_in_wrapper,
+                    progress_callback=scan_progress_reporter,
+                    cancel_event=cancel_event,
+                )
+                if cancel_event.is_set():
+                    raise ScanCancelledError('사용자 요청으로 라이브러리 스캔이 중단되었습니다.')
                 break
             except Exception as scan_err:
+                if isinstance(scan_err, ScanCancelledError) or cancel_event.is_set():
+                    raise ScanCancelledError('사용자 요청으로 라이브러리 스캔이 중단되었습니다.') from scan_err
                 if attempt < max_scan_attempts and is_transient_scan_error(scan_err):
                     wait_sec = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
                     next_attempt = attempt + 1
@@ -629,6 +708,18 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
         msg = f"스캔 성공 완료 - DB={db_type}, LibraryID={library_id}, 소요시간={duration:.2f}초"
         print(f"[Scanner-Trigger] ✅ {msg}")
         write_scan_log(msg)
+    except ScanCancelledError:
+        duration, _ = scan_elapsed(start_time)
+        try:
+            from repositories.scheduler_repository import SchedulerRepository
+            SchedulerRepository.update_library_scan_status(db_type, library_id, 'ready')
+        except Exception:
+            pass
+
+        msg = f"스캔 취소 완료 - DB={db_type}, LibraryID={library_id}, 소요시간={duration:.2f}초"
+        print(f"[Scanner-Trigger] 🛑 {msg}")
+        write_scan_log(msg)
+        raise
     except Exception as e:
         # 3. 실패 시 'failed' 기록
         duration, _ = scan_elapsed(start_time)
@@ -642,6 +733,12 @@ def run_scan_job(db_type, db_path, library_id, physical_path, force=False, initi
         print(f"[Scanner-Trigger] ❌ {msg}")
         write_scan_log(msg)
         raise
+    finally:
+        cancel_monitor_stop.set()
+        try:
+            cancel_monitor.join(timeout=2.0)
+        except Exception as monitor_cleanup_error:
+            print(f"[Scanner-Trigger WARNING] Cancellation monitor cleanup failed: {monitor_cleanup_error}")
 
 
 def enqueue_scan_job(db_type, db_path, library_id, physical_path, force=False, force_requeue=False, trigger_type='cron'):
@@ -661,9 +758,5 @@ def enqueue_scan_job(db_type, db_path, library_id, physical_path, force=False, f
 def run_lazy_scanner_job():
     """백그라운드 스캐너 작업을 큐에 적재"""
     from services.scanner_queue import scanner_queue
-    print("[Scheduler] Lazy cover scanner job scheduled -> Enqueuing (force_requeue)...")
-    scanner_queue.enqueue('lazy_scan', force_requeue=True)
-
-
-
-
+    print("[Scheduler] Lazy cover scanner job scheduled -> Enqueuing if no Lazy-Scanner is active...")
+    scanner_queue.enqueue('lazy_scan')

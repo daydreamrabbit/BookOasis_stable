@@ -1,3 +1,10 @@
+export function isEpubImageOnlyHtml(html) {
+  if (typeof html !== 'string' || !html.includes('<img')) return false;
+  const probe = document.createElement('div');
+  probe.innerHTML = html;
+  return !!probe.querySelector('img') && !probe.textContent.trim();
+}
+
 export function renderTxtChunkView({
   contentArea,
   txtChunks,
@@ -7,6 +14,8 @@ export function renderTxtChunkView({
   initMode,
   formatTxtToHtml,
   emptyText,
+  pageStep = 1,
+  coverAlone = false,
 }) {
   if (!contentArea) return false;
 
@@ -25,12 +34,41 @@ export function renderTxtChunkView({
 
   if (scrollMode === 'page') {
     if (isEpub) {
-      contentArea.innerHTML = `<div class="txt-chunk epub-chunk" data-idx="${currentChunkIdx}" style="height: 100%; box-sizing: border-box;">${txtChunks[currentChunkIdx]}</div>`;
+      const currentHtml = txtChunks[currentChunkIdx];
+      const nextHtml = txtChunks[currentChunkIdx + 1];
+      const pairImageChapters = pageStep === 2
+        && !(coverAlone && currentChunkIdx === 0)
+        && isEpubImageOnlyHtml(currentHtml)
+        && isEpubImageOnlyHtml(nextHtml);
+      contentArea.classList.toggle('epub-image-spread', pairImageChapters);
+      contentArea.dataset.renderedChunkSpan = pairImageChapters ? '2' : '1';
+      contentArea.innerHTML = pairImageChapters
+        ? `<div class="txt-chunk epub-chunk epub-image-only-chunk" data-idx="${currentChunkIdx}">${currentHtml}</div><div class="txt-chunk epub-chunk epub-image-only-chunk" data-idx="${currentChunkIdx + 1}">${nextHtml}</div>`
+        : `<div class="txt-chunk epub-chunk" data-idx="${currentChunkIdx}" style="height: 100%; box-sizing: border-box;">${currentHtml}</div>`;
+      // 표지·속표지처럼 이미지밖에 없는 EPUB 챕터는 래퍼 자체를 컬럼 높이(100%)로
+      // 고정하면 Chromium의 multi-column 레이아웃이 래퍼 뒤에 빈 컬럼을 하나 더
+      // 만든다. 그 결과 첫 페이지 넘김은 빈 컬럼만 통과하고 두 번째 넘김에서야
+      // 다음 spine 항목으로 이동한다. 이미지 크기 제한은 별도로 적용되므로 이 경우에만
+      // 래퍼 높이를 내용 기준으로 풀어 실제 이미지 한 장을 한 페이지로 계산한다.
+      const epubChunk = contentArea.querySelector('.epub-chunk');
+      if (epubChunk && !epubChunk.textContent.trim() && epubChunk.querySelector('img')) {
+        epubChunk.style.height = 'auto';
+        epubChunk.classList.add('epub-image-only-chunk');
+      }
     } else {
-      const htmlContent = formatTxtToHtml(txtChunks[currentChunkIdx]);
-      contentArea.innerHTML = `<div class="txt-chunk" data-idx="${currentChunkIdx}" style="height: 100%; box-sizing: border-box;">${htmlContent}</div>`;
+      contentArea.classList.remove('epub-image-spread');
+      contentArea.dataset.renderedChunkSpan = '1';
+      // Keep stable chunk IDs for existing annotations, but let columns flow
+      // through their boundaries instead of ending a page every 4000 chars.
+      if (contentArea.__txtFlowChunks !== txtChunks || !contentArea.querySelector('.txt-flow-chunk')) {
+        contentArea.innerHTML = txtChunks.map((text, idx) =>
+          `<div class="txt-chunk txt-flow-chunk" data-idx="${idx}" style="height:auto;break-inside:auto;box-sizing:border-box">${formatTxtToHtml(text)}</div>`).join('');
+        contentArea.__txtFlowChunks = txtChunks;
+      }
     }
   } else if (initMode || !contentArea.querySelector('.txt-full-content')) {
+    contentArea.classList.remove('epub-image-spread');
+    contentArea.dataset.renderedChunkSpan = '1';
     if (isEpub) {
       const wrapped = txtChunks
         .map((ch, idx) => {
@@ -41,7 +79,7 @@ export function renderTxtChunkView({
       contentArea.innerHTML = `<div class="txt-full-content epub-full-content">${wrapped}</div>`;
     } else {
       const wrapped = txtChunks
-        .map((ch, idx) => `<div class="txt-scroll-chunk" data-idx="${idx}" style="margin-bottom: 3rem;">${formatTxtToHtml(ch)}</div>`)
+        .map((ch, idx) => `<div class="txt-scroll-chunk" data-idx="${idx}">${formatTxtToHtml(ch)}</div>`)
         .join('');
       contentArea.innerHTML = `<div class="txt-full-content">${wrapped}</div>`;
     }

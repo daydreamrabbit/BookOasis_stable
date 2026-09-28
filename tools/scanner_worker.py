@@ -33,4 +33,6 @@ if __name__ == '__main__':
     except Exception as clean_err:
         print(f"[Scanner-Worker] 부팅 시점 유령 태스크 정화 실패: {clean_err}")
 
+    from services.folder_watch_service import start_watch_thread
+    start_watch_thread()
     run_scanner_worker_loop()

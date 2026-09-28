@@ -1,14 +1,18 @@
 // renderer.js — 이미지 삽입 및 렌더링 로직
 import { state } from '../state.js';
 import { showViewerLoading, hideViewerLoading, showViewerError } from '../view_manager.js';
-import { saveProgress } from '../viewer_progress.js';
+import { saveProgress } from '../viewer_progress.js?rev=20260927-tts-session-v8';
 import * as Settings from './reader_settings.js';
 import * as FileLoader from './fileloader.js';
+import { getTxtViewportPageInfo } from './txt_page_utils.js';
+import { getSpreadPageSlots } from './spread_layout.js';
 
 export let comicCurrentPage = 0;
 export let comicTotalPages = 0;
 let comicLoadingTimer = null;
 let comicLoadTraceSeq = 0;
+let comicRenderSeq = 0;
+let rendererSessionSeq = 0;
 let observer = null;
 let isScrollingToTarget = false;
 let scrollProgressHandler = null;
@@ -257,6 +261,12 @@ function fetchImageWithWorker(url) {
 let isInitializingProgress = false;
 
 export async function initRenderer(bookId, pagesRead, totalPages) {
+  const sessionSeq = ++rendererSessionSeq;
+  const isCurrentSession = () => (
+    sessionSeq === rendererSessionSeq
+    && state.activeBookId === bookId
+    && ['zip', 'cbz', 'imgdir'].includes(String(state.currentViewerFormat || '').toLowerCase())
+  );
   isInitializingProgress = true;
 
   // 이전 도서 캐시 및 DOM 상태 완전 초기화 (도서간 이미지 교차 오염 방지)
@@ -267,15 +277,17 @@ export async function initRenderer(bookId, pagesRead, totalPages) {
   showViewerLoading('Loading...', 'Preparing pages');
 
   document.getElementById('comic-viewer-container').style.display = 'flex';
-  document.getElementById('comic-fit-controls').style.display = 'flex';
+  document.getElementById('comic-fit-controls').style.display = 'none';
 
   let initialPage = pagesRead > 0 ? pagesRead - 1 : 0;
 
   // 크로스 디바이스(모바일-PC) 동기화: 서버의 최신 진행도 상태(progress-state)를 비동기 조회하여 최신 위치 복원
   try {
     const res = await fetch(`/api/media/progress-state?db_type=${state.currentLibraryType}&book_id=${bookId}`);
+    if (!isCurrentSession()) return;
     if (res.ok) {
       const data = await res.json();
+      if (!isCurrentSession()) return;
       if (data.success && data.state && typeof data.state.pages_read === 'number' && data.state.pages_read > 0) {
         const serverPageIdx = data.state.pages_read - 1;
         console.log(`[Viewer-Comic] Server progress-state fetched: page ${data.state.pages_read} (local fallback: ${pagesRead})`);
@@ -286,13 +298,15 @@ export async function initRenderer(bookId, pagesRead, totalPages) {
     console.warn('[Viewer-Comic] Failed to fetch server progress-state, fallback to client params:', err);
   }
 
+  if (!isCurrentSession()) return;
   comicCurrentPage = initialPage;
   comicTotalPages = await FileLoader.fetchTotalPagesIfNeeded(bookId, totalPages);
+  if (!isCurrentSession()) return;
   splitModeActive = false; // 책마다 항상 물리 페이지 공간에서 시작
 
   Settings.initReadingDirection();
   Settings.initPageStep();
-  Settings.initSplitSpread();
+  Settings.disableLegacySplitSpread();
   // 저장된 분할 설정이 켜져 있어도, 스크롤 모드가 기본값으로 저장돼 있으면 분할 보기는
   // 적용하지 않는다(스크롤 모드는 분할 보기 미지원) — 그렇지 않으면 스크롤 모드의 페이지
   // 순회 루프가 가상(절반-페이지) 총 페이지 수를 물리 인덱스로 오인해 범위를 벗어난다.
@@ -318,6 +332,9 @@ export function getIsScrollingToTarget() { return isScrollingToTarget; }
 export function setComicFitMode(mode) {
   Settings.setFitMode(mode);
   applyComicFitMode();
+  if (String(state.currentViewerFormat || '').toLowerCase() === 'pdf') {
+    window.applyPdfFitMode?.();
+  }
 }
 
 export function applyComicFitMode() {
@@ -326,15 +343,12 @@ export function applyComicFitMode() {
 
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
 
-  wrapper.classList.remove('fit-height', 'fit-width', 'scroll-mode');
-  wrapper.classList.add(Settings.getFitMode() === 'width' ? 'fit-width' : 'fit-height');
+  wrapper.classList.remove('fit-original', 'fit-contain', 'fit-height', 'fit-width', 'scroll-mode');
 
   if (scrollMode === 'scroll') {
     wrapper.classList.add('scroll-mode');
   }
-
-  // 스크롤 너비 CSS 변수 적용
-  Settings.applyScrollWidth();
+  wrapper.classList.add(`fit-${Settings.getFitMode()}`);
 }
 
 export function updatePageInfo() {
@@ -345,7 +359,13 @@ export function updatePageInfo() {
     if (slider && overlayInfoEl) {
       const maxVal = slider.max || '1';
       const curVal = slider.value || '1';
-      overlayInfoEl.textContent = `${curVal} / ${maxVal}`;
+      const mode = localStorage.getItem('viewer_scroll_mode') || 'page';
+      if (mode === 'page') {
+        const inner = getTxtViewportPageInfo(document.getElementById('txt-scroll-wrapper'));
+        overlayInfoEl.textContent = `${curVal} / ${maxVal} · 화면 ${inner.current} / ${inner.total}`;
+      } else {
+        overlayInfoEl.textContent = `${curVal} / ${maxVal}`;
+      }
     }
     const overlayTitleEl = document.getElementById('overlay-title-text');
     if (overlayTitleEl) overlayTitleEl.textContent = document.getElementById('viewer-title-text').textContent;
@@ -364,8 +384,8 @@ export function updatePageInfo() {
 
   const indices = getComicPageIndices();
   const totalPages = comicTotalPages || '?';
-  const startPage = indices[0] + 1;
-  const endPage = indices[indices.length - 1] + 1;
+  const startPage = Math.min(...indices) + 1;
+  const endPage = Math.max(...indices) + 1;
   const textInfo = indices.length === 2
     ? `${startPage}-${endPage} / ${totalPages}`
     : `${startPage} / ${totalPages}`;
@@ -378,51 +398,28 @@ export function updatePageInfo() {
   syncSeekBar();
 }
 
-function getComicDisplayPageIndex(basePage) {
-  const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
-  const isTwoPage = scrollMode !== 'scroll' && Settings.getComicPageStep() === 2;
-  // "한 장 밀기" 보정 - 스프레드 짝의 기준(basePage)만 화면 표시용으로 밀어준다.
-  // 진행률 저장에 쓰이는 실제 comicCurrentPage는 건드리지 않는다.
-  const shiftedBase = isTwoPage
-    ? Math.min(basePage + Settings.getSpreadShiftOffset(), Math.max(0, comicTotalPages - 1))
-    : basePage;
-  const displayPage = !isTwoPage
-    ? shiftedBase
-    : (Settings.getComicReadingDirection() === 'rtl'
-      ? Math.min(shiftedBase + 1, Math.max(0, comicTotalPages - 1))
-      : shiftedBase);
-  return displayPage;
+function getComicPageIndices() {
+  return getComicPageSlots().filter(index => index !== null);
 }
 
-function getComicPageIndices() {
+function getComicPageSlots() {
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
-  const displayPageIndex = getComicDisplayPageIndex(comicCurrentPage);
-  if (scrollMode === 'scroll' || Settings.getComicPageStep() !== 2) {
-    return [displayPageIndex];
-  }
-
-  if (Settings.getComicReadingDirection() === 'rtl') {
-    // basePage(comicCurrentPage) 다음 페이지가 없어서 getComicDisplayPageIndex가
-    // basePage 그대로 clamp한 경우 = 짝이 없는 마지막 홀수 페이지.
-    // 이 경우 직전 스프레드에서 이미 보여준 (basePage - 1) 페이지와 재조합하면
-    // 마지막 전 페이지가 두 번 반복 노출되므로, 짝 없이 단독 표시한다.
-    if (displayPageIndex === comicCurrentPage) {
-      return [comicCurrentPage];
-    }
-    const prevPage = displayPageIndex - 1;
-    const indices = prevPage >= 0 ? [displayPageIndex, prevPage] : [displayPageIndex];
-    return indices;
-  }
-
-  const nextPage = displayPageIndex + 1;
-  const indices = nextPage < comicTotalPages ? [displayPageIndex, nextPage] : [displayPageIndex];
-  return indices;
+  return getSpreadPageSlots({
+    page: comicCurrentPage,
+    totalPages: comicTotalPages,
+    twoPage: scrollMode !== 'scroll' && Settings.getComicPageStep() === 2,
+    coverAlone: Settings.getSpreadShiftOffset() === 1,
+    readingDirection: Settings.getComicReadingDirection(),
+  });
 }
 
 export function loadComicPage() {
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   const wrapper = document.querySelector('.comic-image-wrapper');
   if (!wrapper) return;
+  const renderSeq = ++comicRenderSeq;
+  const renderBookId = state.activeBookId;
+  const isCurrentRender = () => renderSeq === comicRenderSeq && state.activeBookId === renderBookId;
 
   const loadTrace = createComicLoadTrace({
     activeBookId: state.activeBookId,
@@ -521,6 +518,7 @@ export function loadComicPage() {
     };
 
     observer = new IntersectionObserver((entries) => {
+      if (!isCurrentRender()) return;
       if (isScrollingToTarget) return;
 
       let bestEntry = null;
@@ -552,6 +550,7 @@ export function loadComicPage() {
     });
 
     const progressHandler = () => {
+      if (!isCurrentRender()) return;
       if (scrollPreloadTriggered || !state.activeBookId || comicTotalPages <= 1) return;
 
       const maxScrollTop = Math.max(1, wrapper.scrollHeight - wrapper.clientHeight);
@@ -569,6 +568,7 @@ export function loadComicPage() {
     let bottomReachedTime = 0;
 
     const handleScrollWheelNextEpisode = (e) => {
+      if (!isCurrentRender()) return;
       if (scrollNextEpisodeTriggered || !state.activeBookId || comicTotalPages <= 0) return;
       if (comicCurrentPage < comicTotalPages - 1) return;
 
@@ -607,6 +607,7 @@ export function loadComicPage() {
     };
 
     const handleScrollTouchEnd = (e) => {
+      if (!isCurrentRender()) return;
       if (scrollNextEpisodeTriggered || !state.activeBookId || comicTotalPages <= 0) return;
       if (comicCurrentPage < comicTotalPages - 1) return;
       if (!e.changedTouches || !e.changedTouches[0]) return;
@@ -657,6 +658,7 @@ export function loadComicPage() {
 
     isScrollingToTarget = true;
     setTimeout(() => {
+      if (!isCurrentRender()) return;
       const targetImg = imgElements[comicCurrentPage];
       if (targetImg) {
         loadScrollImage(targetImg);
@@ -671,8 +673,18 @@ export function loadComicPage() {
     updatePageInfo();
 
   } else {
-    const pageIndices = getComicPageIndices();
-    loadTrace.log('page-mode render start', { pageIndices });
+    const pageSlots = getComicPageSlots();
+    const pageIndices = pageSlots.filter(index => index !== null);
+    loadTrace.log('page-mode render start', { pageIndices, pageSlots });
+
+    // 새 페이지가 준비될 때까지 이전 펼침면을 계속 노출하면 스와이프 직후
+    // 이전 페이지가 잔상처럼 한 번 더 보인다. 이전 DOM은 즉시 숨기고, 새 이미지가
+    // 모두 로드된 뒤 아래의 더블 버퍼 커밋에서 다시 표시한다.
+    const previousPair = wrapper.querySelector('.comic-page-pair');
+    if (previousPair) {
+      previousPair.style.visibility = 'hidden';
+      previousPair.setAttribute('aria-hidden', 'true');
+    }
 
     // 현재 페이지(들) 자체의 fetch를 기다리지 않고 다음 페이지 프리페치를 바로 같이 출발시킨다.
     // 예전엔 현재 페이지 이미지가 로드 완료된 뒤(onload)에야 preloadNextPages()가 시작돼서,
@@ -692,11 +704,7 @@ export function loadComicPage() {
 
     let loadedCount = 0;
     const expectedLoads = pageIndices.length;
-    // 2쪽 보기 모드에서 전체 페이지가 홀수라 마지막 한 장만 남는 경우.
-    // (전체 1페이지짜리 도서에서 첫 장을 단독 표시하는 경우는 제외 — 그건 화면 꽉 채움이 맞다)
-    const isTwoPageTailSingle = (scrollMode !== 'scroll') && Settings.getComicPageStep() === 2
-      && expectedLoads === 1 && comicCurrentPage > 0;
-    const imageElements = [];
+    const imageElements = new Map();
 
     // 기존 페이지 페어 요소가 이미 렌더링되어 떠 있는지 확인합니다.
     const hasExistingPair = !!wrapper.querySelector('.comic-page-pair');
@@ -731,8 +739,9 @@ export function loadComicPage() {
       let _errorFired = false;
 
       imgEl.onload = () => {
+        if (!isCurrentRender()) return;
         loadedCount += 1;
-        imageElements[index] = imgEl;
+        imageElements.set(pageIndex, imgEl);
         loadTrace.log('page image loaded', {
           pageIndex,
           loadedCount,
@@ -748,24 +757,24 @@ export function loadComicPage() {
           const removeCenterGap = (localStorage.getItem('remove_2page_center_gap') === '1');
           wrapper.innerHTML = `<div class="comic-page-pair ${removeCenterGap ? 'no-center-gap' : ''}" style="visibility: hidden;"></div>`;
           const pairContainer = wrapper.querySelector('.comic-page-pair');
-          if (expectedLoads === 1 && pairContainer && !isTwoPageTailSingle) {
+          if (pageSlots.length === 1 && pairContainer) {
             pairContainer.classList.add('single-page');
           }
 
-          imageElements.forEach((loadedImg) => {
+          pageSlots.forEach((slot) => {
+            if (slot === null) {
+              const blank = document.createElement('div');
+              blank.className = 'comic-page-blank';
+              blank.setAttribute('aria-hidden', 'true');
+              pairContainer.appendChild(blank);
+              return;
+            }
+            const loadedImg = imageElements.get(slot);
             if (loadedImg) {
               loadedImg.style.opacity = '1';
-              if (isTwoPageTailSingle) {
-                loadedImg.classList.add('comic-page-img-left');
-              }
               pairContainer.appendChild(loadedImg);
             }
           });
-          if (isTwoPageTailSingle) {
-            const blankSlot = document.createElement('div');
-            blankSlot.className = 'comic-page-blank-slot';
-            pairContainer.appendChild(blankSlot);
-          }
           pairContainer.style.visibility = 'visible';
           loadTrace.log('page images committed to DOM', {
             pageIndices,
@@ -776,7 +785,8 @@ export function loadComicPage() {
 
 
           if (comicCurrentPage === 0 && expectedLoads === 1) {
-            const aspectRatio = imageElements[0].naturalWidth / imageElements[0].naturalHeight;
+            const firstImage = imageElements.get(pageIndices[0]);
+            const aspectRatio = firstImage.naturalWidth / firstImage.naturalHeight;
             if (aspectRatio < 0.7) {
               setComicFitMode('width');
             } else {
@@ -787,6 +797,7 @@ export function loadComicPage() {
       };
 
       imgEl.onerror = () => {
+        if (!isCurrentRender()) return;
         if (_errorFired) return; // Worker fallback 재시도 시 중복 onerror 방지
         _errorFired = true;
         loadTrace.log('page image load failed', { pageIndex });
@@ -803,8 +814,9 @@ export function loadComicPage() {
       if (splitModeActive) {
         const { physical, side } = splitVirtualIndex(pageIndex);
         loadTrace.log('page image (split) fetch start', { pageIndex, physical, side });
-        getSplitCroppedImageUrl(currentBookId, pageIndex, physical, side)
+          getSplitCroppedImageUrl(currentBookId, pageIndex, physical, side)
           .then((url) => {
+            if (!isCurrentRender()) return;
             const activeBookId = state.activeBookId;
             if (activeBookId !== currentBookId) return;
             loadTrace.log('page image (split) crop ready', { pageIndex, physical, side });
@@ -822,6 +834,7 @@ export function loadComicPage() {
         } else {
           loadTrace.log('page image fetch start', { pageIndex, cacheKey });
           getWholePageObjectUrl(currentBookId, pageIndex).then((url) => {
+            if (!isCurrentRender()) return;
             const activeBookId = state.activeBookId;
             if (activeBookId !== currentBookId) return;
             loadTrace.log('page image blob ready', { pageIndex });
@@ -831,8 +844,8 @@ export function loadComicPage() {
       }
     });
 
-    updatePageInfo();
-    if (!isInitializingProgress) {
+    if (isCurrentRender()) updatePageInfo();
+    if (isCurrentRender() && !isInitializingProgress) {
       const { page: physicalPage, total: physicalTotal } = getPhysicalProgress();
       saveProgress(state.activeBookId, physicalPage, physicalTotal);
     }
@@ -844,9 +857,15 @@ function syncSeekBar() {
   const slider = document.getElementById('viewer-page-slider');
   if (!slider) return;
   slider.max = comicTotalPages || 1;
-  slider.value = comicCurrentPage + 1;
-  const endLabel = document.getElementById('seekbar-end-label');
-  if (endLabel) endLabel.textContent = comicTotalPages || '?';
+  const visiblePages = getComicPageIndices();
+  slider.value = visiblePages.length ? Math.max(...visiblePages) + 1 : comicCurrentPage + 1;
+  const first = visiblePages.length ? Math.min(...visiblePages) + 1 : comicCurrentPage + 1;
+  const last = visiblePages.length ? Math.max(...visiblePages) + 1 : first;
+  const startLabel = document.getElementById('seekbar-start-label');
+  if (startLabel) startLabel.textContent = `${first === last ? first : `${first}-${last}`} / ${comicTotalPages || 1}`;
+  const ratio = (Number(slider.value) - Number(slider.min || 1)) / Math.max(1, Number(slider.max) - Number(slider.min || 1));
+  slider.style.setProperty('--seek-progress', `${Math.max(0, Math.min(100, ratio * 100))}%`);
+  slider.dispatchEvent(new CustomEvent('viewer-position-sync', { bubbles: true }));
 }
 
 export function showSeekbarTooltip(slider, page) {
@@ -942,7 +961,8 @@ function preloadNextPages() {
   activePreloadSet.clear();
 
   const preloadCount = 10;
-  const basePage = getComicDisplayPageIndex(comicCurrentPage);
+  const visiblePages = getComicPageIndices();
+  const basePage = visiblePages.length ? Math.max(...visiblePages) : comicCurrentPage;
   // 분할 모드에서는 양쪽 절반이 같은 물리 이미지를 공유하므로 물리 페이지 기준으로만 프리로드한다.
   const basePhysical = splitModeActive ? splitVirtualIndex(basePage).physical : basePage;
   const physicalTotal = getPhysicalTotalPages();
@@ -960,6 +980,8 @@ function preloadNextPages() {
 }
 
 export function clearComicViewer() {
+  // 이전 이미지 요청의 onload가 늦게 도착해 새 책/새 페이지 DOM을 덮어쓰지 못하게 한다.
+  comicRenderSeq += 1;
   const wrapper = document.querySelector('.comic-image-wrapper');
   if (wrapper) {
     if (scrollProgressHandler) {

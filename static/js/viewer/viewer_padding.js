@@ -1,34 +1,15 @@
 // viewer_padding.js – 뷰어 내부 실시간 여백 조절 및 동적 패딩 적용 모듈
 import { state } from '../state.js';
+import { applyMobileTextInsets } from './text_mobile_insets.js';
 
 // 여백 상세 설정 패널 토글
 export function toggleViewerPaddingPanel() {
-  console.log('[Viewer-Padding] toggleViewerPaddingPanel called. Current Format:', state.currentViewerFormat);
-  const panel = document.getElementById('viewer-padding-overlay-panel');
   const overlayMenu = document.getElementById('comic-overlay-menu');
-  if (!panel) {
-    console.error('[Viewer-Padding] #viewer-padding-overlay-panel not found in DOM');
-    return;
+  if (overlayMenu && overlayMenu.style.display === 'none' && typeof window.toggleComicOverlay === 'function') {
+    window.toggleComicOverlay();
   }
-
-  if (panel.style.display === 'none') {
-    panel.style.display = 'block';
-    console.log('[Viewer-Padding] Panel display set to block');
-    // 모바일 겹침 방지: 여백 조절판이 열릴 때 오버레이 제어 메뉴를 일단 숨김
-    if (overlayMenu) {
-      overlayMenu.style.display = 'none';
-    }
-    initViewerPaddingPanel();
-  } else {
-    panel.style.display = 'none';
-    console.log('[Viewer-Padding] Panel display set to none. Re-rendering viewer.');
-    // 여백 조절판을 닫았을 때, 오버레이 메뉴를 복원
-    if (overlayMenu) {
-      overlayMenu.style.display = 'flex';
-    }
-    // 최종 닫히는 시점에 1회 완벽 리렌더링하여 좌표 찢어짐 원천 봉쇄!
-    commitViewerPadding();
-  }
+  if (typeof window.switchViewerOverlayTab === 'function') window.switchViewerOverlayTab('margin');
+  initViewerPaddingPanel();
 }
 
 // 뷰어 포맷에 따라 슬라이더 값 동기화 및 폼 그룹 노출
@@ -36,11 +17,8 @@ export function initViewerPaddingPanel() {
   console.log('[Viewer-Padding] initViewerPaddingPanel executing...');
   const isTxtOrEpub = (state.currentViewerFormat === 'epub' || state.currentViewerFormat === 'txt');
   
-  const novelGroup = document.getElementById('quick-padding-novel-group');
-
   if (isTxtOrEpub) {
     console.log('[Viewer-Padding] Detected TXT/EPUB novel mode.');
-    if (novelGroup) novelGroup.style.display = 'flex';
     
     // 4방향 개별 소설 값 복원
     const padTop = localStorage.getItem('viewer_padding_top') || '40';
@@ -76,7 +54,6 @@ export function initViewerPaddingPanel() {
     }
   } else {
     console.log('[Viewer-Padding] Detected Non-novel mode (Comic/PDF). Hiding groups.');
-    if (novelGroup) novelGroup.style.display = 'none';
   }
 
   // 동적 슬라이더 이벤트 프로그램 바인딩
@@ -179,8 +156,9 @@ export function commitViewerPadding() {
     contentArea.style.paddingRight = `${padRight}px`;
   }
 
+  applyMobileTextInsets(wrapper, contentArea, localStorage);
   // 뷰어 설정 강제 갱신 리로딩 호출
-  import('../viewer_txt.js').then(m => {
+  import('../viewer_txt.js?rev=20260927-tts-session-v8').then(m => {
     m.applyTxtSettings();
   }).catch(e => {
     console.error('[Viewer-Padding] Failed to load viewer_txt.js:', e);

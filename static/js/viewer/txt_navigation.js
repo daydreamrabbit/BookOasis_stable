@@ -1,3 +1,5 @@
+import { getTxtPageScrollLeft, setTxtPageScrollLeft } from './txt_page_utils.js?rev=20260922-reader-session-v45';
+
 export function prevTxtPageAction(ctx) {
   const scrollWrapper = ctx.getScrollWrapper();
   if (!scrollWrapper) return;
@@ -15,61 +17,41 @@ export function prevTxtPageAction(ctx) {
     if (ctx.getTxtPageSnapInProgress && ctx.getTxtPageSnapInProgress()) return;
     ctx.setTxtPageSnapInProgress(true);
     ctx.snapTxtPageScrollLeft(scrollWrapper);
-    if (scrollWrapper.scrollLeft <= 10) {
+    if (getTxtPageScrollLeft(scrollWrapper) <= 10) {
       if (ctx.getCurrentChunkIdx() > 0) {
-        ctx.setCurrentChunkIdx(ctx.getCurrentChunkIdx() - 1);
+        const previousIdx = ctx.getPreviousChunkIdx
+          ? ctx.getPreviousChunkIdx(ctx.getCurrentChunkIdx())
+          : ctx.getCurrentChunkIdx() - 1;
+        ctx.setCurrentChunkIdx(previousIdx);
         scrollWrapper.style.scrollBehavior = 'auto';
-        ctx.renderCurrentChunk();
-
-        // 이미지가 많은 챕터는 20ms 안에 로딩/레이아웃이 끝나지 않을 수 있다.
-        // 그 시점의 scrollWidth로 끝 페이지를 잡으면, 나중에 이미지이 마저
-        // 로드되며 실제 콘텐츠가 더 넓어져도 스크롤 위치는 이미 고정되어
-        // 진짜 마지막 페이지보다 훨씬 앞쪽에 멈추게 된다(이미지 로드 전 폭 기준).
+        scrollWrapper.style.visibility = 'hidden';
         let chapterEndJumpDone = false;
         const finishJumpToChapterEnd = () => {
           if (chapterEndJumpDone) return;
           chapterEndJumpDone = true;
-          scrollWrapper.scrollLeft = scrollWrapper.scrollWidth;
+          setTxtPageScrollLeft(scrollWrapper, Math.max(0, scrollWrapper.scrollWidth - scrollWrapper.clientWidth));
+          ctx.snapTxtPageScrollLeft(scrollWrapper);
           scrollWrapper.style.scrollBehavior = '';
           ctx.saveDetailPosition();
           ctx.setTxtPageSnapInProgress(false);
+          ctx.updatePageInfo?.();
+          scrollWrapper.style.visibility = '';
         };
-
-        setTimeout(() => {
-          const contentArea = ctx.getContentArea ? ctx.getContentArea() : null;
-          const pendingImages = contentArea
-            ? Array.from(contentArea.querySelectorAll('img')).filter(img => !img.complete)
-            : [];
-          if (!pendingImages.length) {
-            finishJumpToChapterEnd();
-            return;
-          }
-          let remaining = pendingImages.length;
-          const onImageSettled = () => {
-            remaining -= 1;
-            if (remaining <= 0) finishJumpToChapterEnd();
-          };
-          pendingImages.forEach(img => {
-            img.addEventListener('load', onImageSettled, { once: true });
-            img.addEventListener('error', onImageSettled, { once: true });
-          });
-          // 이미지 로드가 끝내 완료 이벤트를 못 보내는 경우를 대비한 안전장치.
-          setTimeout(finishJumpToChapterEnd, 3000);
-        }, 20);
+        ctx.renderCurrentChunk(false, finishJumpToChapterEnd);
       } else {
         ctx.setTxtPageSnapInProgress(false);
+        ctx.showBoundaryNotice?.('start');
       }
     } else {
       const pageStepWidth = ctx.getTxtPageAdvanceWidth(scrollWrapper);
-      const currentPageIdx = Math.round(scrollWrapper.scrollLeft / pageStepWidth);
+      const currentPageIdx = Math.round(getTxtPageScrollLeft(scrollWrapper) / pageStepWidth);
       const targetScrollLeft = Math.max(0, (currentPageIdx - 1) * pageStepWidth);
-      scrollWrapper.scrollTo({ left: targetScrollLeft, behavior: 'auto' });
-      setTimeout(() => {
-        ctx.snapTxtPageScrollLeft(scrollWrapper);
-        ctx.logActiveViewportText();
-        ctx.saveDetailPosition();
-        ctx.setTxtPageSnapInProgress(false);
-      }, 150);
+      setTxtPageScrollLeft(scrollWrapper, targetScrollLeft);
+      ctx.snapTxtPageScrollLeft(scrollWrapper);
+      ctx.logActiveViewportText();
+      ctx.saveDetailPosition();
+      ctx.updatePageInfo?.();
+      ctx.setTxtPageSnapInProgress(false);
     }
     return;
   }
@@ -89,6 +71,8 @@ export function prevTxtPageAction(ctx) {
         ctx.logActiveViewportText();
         ctx.saveDetailPosition();
       }, 80);
+    } else {
+      ctx.showBoundaryNotice?.('start');
     }
   } else {
     scrollWrapper.scrollBy({ top: -scrollWrapper.clientHeight * 0.9, behavior: 'smooth' });
@@ -114,36 +98,38 @@ export function nextTxtPageAction(ctx) {
     const maxScrollLeft = Math.max(0, scrollWrapper.scrollWidth - scrollWrapper.clientWidth);
     const snapTolerance = Math.max(30, pageStepWidth * 0.4);
 
-    if (scrollWrapper.scrollLeft + snapTolerance >= maxScrollLeft) {
+    if (getTxtPageScrollLeft(scrollWrapper) + snapTolerance >= maxScrollLeft) {
       if (ctx.getCurrentChunkIdx() < ctx.getChunkCount() - 1) {
-        ctx.setCurrentChunkIdx(ctx.getCurrentChunkIdx() + 1);
+        const advance = ctx.getChunkAdvance ? ctx.getChunkAdvance(ctx.getCurrentChunkIdx()) : 1;
+        ctx.setCurrentChunkIdx(Math.min(ctx.getChunkCount() - 1, ctx.getCurrentChunkIdx() + advance));
         scrollWrapper.style.scrollBehavior = 'auto';
-        ctx.renderCurrentChunk();
-
-        setTimeout(() => {
-          scrollWrapper.scrollLeft = 0;
+        scrollWrapper.style.visibility = 'hidden';
+        let transitionDone = false;
+        const finishChapterTransition = () => {
+          if (transitionDone) return;
+          transitionDone = true;
+          setTxtPageScrollLeft(scrollWrapper, 0);
           scrollWrapper.scrollTop = 0;
-        }, 20);
-
-        setTimeout(() => {
           scrollWrapper.style.scrollBehavior = '';
           ctx.saveDetailPosition();
           ctx.setTxtPageSnapInProgress(false);
-        }, 80);
+          ctx.updatePageInfo?.();
+          scrollWrapper.style.visibility = '';
+        };
+        ctx.renderCurrentChunk(false, finishChapterTransition);
       } else {
         ctx.setTxtPageSnapInProgress(false);
         ctx.handleNextEpisode();
       }
     } else {
-      const currentPageIdx = Math.round(scrollWrapper.scrollLeft / pageStepWidth);
+      const currentPageIdx = Math.round(getTxtPageScrollLeft(scrollWrapper) / pageStepWidth);
       const targetScrollLeft = Math.min(maxScrollLeft, (currentPageIdx + 1) * pageStepWidth);
-      scrollWrapper.scrollTo({ left: targetScrollLeft, behavior: 'auto' });
-      setTimeout(() => {
-        ctx.snapTxtPageScrollLeft(scrollWrapper);
-        ctx.logActiveViewportText();
-        ctx.saveDetailPosition();
-        ctx.setTxtPageSnapInProgress(false);
-      }, 150);
+      setTxtPageScrollLeft(scrollWrapper, targetScrollLeft);
+      ctx.snapTxtPageScrollLeft(scrollWrapper);
+      ctx.logActiveViewportText();
+      ctx.saveDetailPosition();
+      ctx.updatePageInfo?.();
+      ctx.setTxtPageSnapInProgress(false);
     }
     return;
   }
@@ -157,7 +143,7 @@ export function nextTxtPageAction(ctx) {
 
       setTimeout(() => {
         scrollWrapper.scrollTop = 0;
-        scrollWrapper.scrollLeft = 0;
+        setTxtPageScrollLeft(scrollWrapper, 0);
       }, 20);
 
       setTimeout(() => {
@@ -191,8 +177,9 @@ export function txtJumpToFirstPageAction(ctx) {
   // Even if already on chunk 0, reset the in-chapter scroll position.
   if (scrollWrapper) {
     scrollWrapper.scrollTop = 0;
-    scrollWrapper.scrollLeft = 0;
+    setTxtPageScrollLeft(scrollWrapper, 0);
   }
+  ctx.updateSeekBar?.();
 }
 
 export function txtJumpToLastPageAction(ctx) {
@@ -205,49 +192,47 @@ export function txtJumpToLastPageAction(ctx) {
     const scrollWrapper = ctx.getScrollWrapper();
     if (scrollWrapper) {
       scrollWrapper.scrollTop = 0;
-      scrollWrapper.scrollLeft = 0;
+      setTxtPageScrollLeft(scrollWrapper, 0);
     }
   }
+  ctx.updateSeekBar?.();
 }
 
-export function txtSliderInputAction({ val, chunkCount }) {
+export function txtSliderInputAction({ val, chunkCount, scrollMode = 'page' }) {
   const tooltip = document.getElementById('seekbar-tooltip');
   if (tooltip) {
-    tooltip.textContent = val;
+    tooltip.textContent = scrollMode === 'scroll' ? `${val}%` : val;
     tooltip.style.display = 'block';
   }
   const pageInfo = document.getElementById('comic-overlay-page-info');
   if (pageInfo) {
-    pageInfo.textContent = `${val} / ${chunkCount}`;
+    pageInfo.textContent = scrollMode === 'scroll' ? `${val}%` : `${val} / ${chunkCount}`;
   }
 }
 
 export function txtSliderChangeAction(ctx, val) {
   ctx.cancelPendingRestore();
+  const scrollMode = ctx.getScrollMode();
+  const scrollWrapper = ctx.getScrollWrapper();
+  if (scrollMode === 'scroll') {
+    if (scrollWrapper) {
+      const percent = Math.max(0, Math.min(100, Number(val) || 0));
+      const maxScroll = Math.max(0, scrollWrapper.scrollHeight - scrollWrapper.clientHeight);
+      scrollWrapper.scrollTop = maxScroll * (percent / 100);
+      setTimeout(ctx.saveDetailPosition, 50);
+    }
+    return;
+  }
+
   const targetIdx = Math.max(0, Math.min(ctx.getChunkCount() - 1, val - 1));
   if (ctx.getCurrentChunkIdx() !== targetIdx) {
     ctx.setCurrentChunkIdx(targetIdx);
 
-    const scrollMode = ctx.getScrollMode();
-    const scrollWrapper = ctx.getScrollWrapper();
-    if (scrollMode === 'scroll') {
-      const overlayMenu = document.getElementById('comic-overlay-menu');
-      if (overlayMenu) {
-        overlayMenu.dataset.skipInnerScrollRestore = 'true';
-      }
-      if (scrollWrapper) {
-        const maxScroll = scrollWrapper.scrollHeight - scrollWrapper.clientHeight;
-        const targetPercent = targetIdx / Math.max(1, ctx.getChunkCount() - 1);
-        scrollWrapper.scrollTop = maxScroll * targetPercent;
-        setTimeout(ctx.saveDetailPosition, 50);
-      }
-    } else {
-      if (scrollWrapper) {
-        scrollWrapper.scrollLeft = 0;
-      }
-      ctx.renderCurrentChunk();
-      ctx.logActiveViewportText();
-      ctx.saveDetailPosition();
+    if (scrollWrapper) {
+      setTxtPageScrollLeft(scrollWrapper, 0);
     }
+    ctx.renderCurrentChunk();
+    ctx.logActiveViewportText();
+    ctx.saveDetailPosition();
   }
 }

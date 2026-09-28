@@ -1,5 +1,6 @@
 // sidebar_manager.js – 모바일/데스크톱 사이드바 토글 및 상태 유지 관리
 let lastToggleTime = 0;
+let mobileNavigationToken = 0;
 const MOBILE_BREAKPOINT = 1200;
 
 function isMobileLayout() {
@@ -9,16 +10,19 @@ function isMobileLayout() {
 function getSidebarElements() {
   const content = document.getElementById('sidebar-collapsible-content');
   const btn = document.getElementById('btn-sidebar-toggle');
+  const mobileHeaderBtn = document.getElementById('btn-mobile-sidebar-toggle');
+  const mobileCloseBtn = document.getElementById('btn-mobile-sidebar-close');
+  const mobileBackdrop = document.getElementById('mobile-sidebar-backdrop');
   const desktopBtn = document.getElementById('btn-sidebar-toggle-desktop');
   const infoBtnMobile = document.getElementById('btn-category-info-mobile');
   const infoBtnDesktop = document.getElementById('btn-category-info');
   const brandHome = document.querySelector('[data-role="mobile-brand-home"]');
   const btnIcon = btn ? btn.querySelector('i') : null;
-  return { content, btn, desktopBtn, infoBtnMobile, infoBtnDesktop, brandHome, btnIcon };
+  return { content, btn, mobileHeaderBtn, mobileCloseBtn, mobileBackdrop, desktopBtn, infoBtnMobile, infoBtnDesktop, brandHome, btnIcon };
 }
 
 export function syncSidebarResponsiveControls() {
-  const { btn, desktopBtn, infoBtnMobile, infoBtnDesktop, brandHome } = getSidebarElements();
+  const { content, btn, mobileHeaderBtn, mobileBackdrop, desktopBtn, infoBtnMobile, infoBtnDesktop, brandHome } = getSidebarElements();
   const mobile = isMobileLayout();
 
   if (btn) {
@@ -26,6 +30,9 @@ export function syncSidebarResponsiveControls() {
   }
   if (desktopBtn) {
     desktopBtn.style.setProperty('display', mobile ? 'none' : 'flex', 'important');
+  }
+  if (mobileHeaderBtn) {
+    mobileHeaderBtn.style.setProperty('display', mobile ? 'inline-flex' : 'none', 'important');
   }
   if (infoBtnMobile) {
     infoBtnMobile.style.setProperty('display', mobile ? 'inline-flex' : 'none', 'important');
@@ -38,6 +45,15 @@ export function syncSidebarResponsiveControls() {
     brandHome.setAttribute('tabindex', '0');
     brandHome.setAttribute('aria-label', 'BookOasis 홈으로 이동');
   }
+  if (!mobile) {
+    document.body?.classList?.remove('mobile-sidebar-open');
+    if (mobileBackdrop) mobileBackdrop.hidden = true;
+    if (content) {
+      content.hidden = false;
+      content.classList.remove('show');
+      content.dataset.open = '0';
+    }
+  }
 }
 
 function scheduleSidebarResponsiveSync() {
@@ -48,7 +64,7 @@ function scheduleSidebarResponsiveSync() {
 
 function setSidebarMenuOpen(isOpen, options = {}) {
   const { resetScrollTop = false } = options;
-  const { content, btn, btnIcon } = getSidebarElements();
+  const { content, btn, mobileHeaderBtn, mobileBackdrop, btnIcon } = getSidebarElements();
   if (!content) return false;
 
   if (isOpen) {
@@ -59,6 +75,13 @@ function setSidebarMenuOpen(isOpen, options = {}) {
     }
     if (btnIcon) btnIcon.className = 'fa-solid fa-xmark';
     if (btn) btn.setAttribute('aria-expanded', 'true');
+    if (mobileHeaderBtn) {
+      mobileHeaderBtn.setAttribute('aria-expanded', 'true');
+      mobileHeaderBtn.setAttribute('aria-label', '메뉴 닫기');
+      mobileHeaderBtn.querySelector('i')?.classList.replace('fa-bars', 'fa-xmark');
+    }
+    if (mobileBackdrop) mobileBackdrop.hidden = false;
+    document.body?.classList?.add('mobile-sidebar-open');
     content.dataset.open = '1';
     return true;
   }
@@ -67,6 +90,13 @@ function setSidebarMenuOpen(isOpen, options = {}) {
   content.hidden = true;
   if (btnIcon) btnIcon.className = 'fa-solid fa-bars';
   if (btn) btn.setAttribute('aria-expanded', 'false');
+  if (mobileHeaderBtn) {
+    mobileHeaderBtn.setAttribute('aria-expanded', 'false');
+    mobileHeaderBtn.setAttribute('aria-label', '메뉴 열기');
+    mobileHeaderBtn.querySelector('i')?.classList.replace('fa-xmark', 'fa-bars');
+  }
+  if (mobileBackdrop) mobileBackdrop.hidden = true;
+  document.body?.classList?.remove('mobile-sidebar-open');
   content.dataset.open = '0';
   return true;
 }
@@ -90,13 +120,55 @@ export function closeSidebarMenuForMobile() {
   setSidebarMenuOpen(false);
 }
 
+// 모바일에서 메뉴 항목을 누르면 데이터 조회나 기존 목록 정리보다 먼저 메뉴를 닫는다.
+// category/index.js의 동적 메뉴 delegation은 캡처 단계에서 이벤트 전파를 중단하므로 위의
+// sidebar 버블 리스너(initSidebarAutoClose)가 실행되지 않고, 홈/기록 이동은 selectCategory()가
+// 진행률 저장을 await한 뒤에야 끝의 닫기 이벤트에 도달한다. 또 같은 이벤트 작업 안에서 바로
+// 무거운 화면 전환을 시작하면 메뉴 닫힘이 다음 페인트까지 보이지 않아 메뉴가 멈춘 것처럼
+// 느껴진다. 한 프레임을 양보한 뒤 가장 최근 이동 요청만 실행한다(연속 탭 시 앞선 요청은 취소).
+export function runAfterMobileSidebarClose(callback) {
+  if (typeof callback !== 'function') return;
+  if (!isMobileLayout()) {
+    callback();
+    return;
+  }
+
+  const token = ++mobileNavigationToken;
+  closeSidebarMenuForMobile();
+  window.requestAnimationFrame(() => {
+    window.setTimeout(() => {
+      if (token !== mobileNavigationToken) return;
+      callback();
+    }, 0);
+  });
+}
+
 export function syncSidebarMenuState() {
-  const { content, btn, btnIcon } = getSidebarElements();
+  const { content, btn, mobileHeaderBtn, mobileBackdrop, btnIcon } = getSidebarElements();
   if (!content || !btn) return;
+
+  if (!isMobileLayout()) {
+    content.hidden = false;
+    content.classList.remove('show');
+    content.dataset.open = '0';
+    document.body?.classList?.remove('mobile-sidebar-open');
+    if (mobileBackdrop) mobileBackdrop.hidden = true;
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    if (mobileHeaderBtn) mobileHeaderBtn.setAttribute('aria-expanded', 'false');
+    return;
+  }
 
   const isOpen = content.classList.contains('show');
   btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
   if (btnIcon) btnIcon.className = isOpen ? 'fa-solid fa-xmark' : 'fa-solid fa-bars';
+  if (mobileHeaderBtn) {
+    mobileHeaderBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    mobileHeaderBtn.setAttribute('aria-label', isOpen ? '메뉴 닫기' : '메뉴 열기');
+    const icon = mobileHeaderBtn.querySelector('i');
+    if (icon) icon.className = isOpen ? 'fa-solid fa-xmark' : 'fa-solid fa-bars';
+  }
+  if (mobileBackdrop) mobileBackdrop.hidden = !isOpen;
+  document.body?.classList?.toggle('mobile-sidebar-open', isOpen && isMobileLayout());
   content.dataset.open = isOpen ? '1' : '0';
   content.hidden = !isOpen;
 }
@@ -159,13 +231,22 @@ export function initSidebarAutoClose() {
 }
 
 function initSidebarToggleButton() {
-  const { btn } = getSidebarElements();
-  if (!btn || btn.dataset.toggleBound === '1') return;
-
-  btn.dataset.toggleBound = '1';
-  btn.addEventListener('click', (e) => {
-    e.preventDefault();
-    toggleSidebarMenu();
+  const { btn, mobileHeaderBtn, mobileCloseBtn, mobileBackdrop } = getSidebarElements();
+  [btn, mobileHeaderBtn].forEach((toggleButton) => {
+    if (!toggleButton || toggleButton.dataset.toggleBound === '1') return;
+    toggleButton.dataset.toggleBound = '1';
+    toggleButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      toggleSidebarMenu();
+    });
+  });
+  [mobileCloseBtn, mobileBackdrop].forEach((closeButton) => {
+    if (!closeButton || closeButton.dataset.toggleBound === '1') return;
+    closeButton.dataset.toggleBound = '1';
+    closeButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      closeSidebarMenuForMobile();
+    });
   });
 }
 
@@ -225,20 +306,21 @@ function forceIosHeaderRepaint() {
 // 다른 트리거 경로에도 적용한다.
 function resetScrollIfHeaderHidden() {
   if (!isMobileLayout()) return;
-  const header = document.querySelector('.sidebar-header-wrapper');
+  const sidebarHeader = document.querySelector('.sidebar-header-wrapper');
+  const libraryHeader = document.querySelector('.library-header');
   const mainContent = document.querySelector('.library-main-content');
-  // .sidebar-header-wrapper(로고/햄버거)는 .library-sidebar 안에 있어 실제 스크롤
-  // 컨테이너인 .library-main-content 내부 스크롤과는 무관하다 - 그래서 이 rect
-  // 조건만으로는 안드로이드 Chrome에서 검색창(.library-header 첫 줄)이
-  // .library-main-content.scrollTop이 0이 아닌 채로 시작해 화면 밖으로 밀리는
-  // 케이스를 못 잡는다(로고는 제자리인데 검색창만 가려짐). 그래서 scrollTop을
-  // 별도로 항상 확인해 되돌린다.
-  if (mainContent && mainContent.scrollTop !== 0) {
-    mainContent.scrollTop = 0;
-  }
-  if (!header) return;
-  const rect = header.getBoundingClientRect();
-  if (rect.bottom <= 0 || rect.top < -4) {
+  const isOutOfView = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.bottom <= 0 || rect.top < -4;
+  };
+  const libraryScrollTop = Number(mainContent?.scrollTop || 0);
+  // .library-header는 목록 스크롤에 따라 정상적으로 화면 위로 사라진다. 이때
+  // 목록 자체를 0으로 되돌리면 라이브러리 전환이나 창 포커스 복귀 때마다 튄다.
+  // 목록이 맨 위인데도 헤더가 가려진 경우에만 문서 스크롤 위치를 복구한다.
+  const appShellOutOfView = isOutOfView(sidebarHeader)
+    || (libraryScrollTop === 0 && isOutOfView(libraryHeader));
+  if (appShellOutOfView) {
     // y=0 대신 y=1로 스크롤: iOS Safari는 스크롤 위치가 정확히 0일 때 주소창을
     // 완전히 펼치며 페이지 콘텐츠 위에 겹쳐 그리는 버그가 있다. 1px만 남겨두면
     // 주소창이 겹치지 않으면서도 사실상 맨 위와 동일하게 보인다.
@@ -250,6 +332,7 @@ function initSidebarViewportRecovery() {
   if (window.__sidebarViewportRecoveryBound) return;
 
   const mediaQuery = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
+  let lastLayoutWidth = Math.round(window.innerWidth);
   const recover = () => {
     scheduleSidebarResponsiveSync();
     forceIosHeaderRepaint();
@@ -258,8 +341,19 @@ function initSidebarViewportRecovery() {
 
   window.addEventListener('pageshow', recover);
   window.addEventListener('focus', recover);
-  window.addEventListener('resize', recover);
-  window.addEventListener('orientationchange', recover);
+  const recoverAfterWidthChange = () => {
+    const nextWidth = Math.round(window.innerWidth);
+    // 모바일 브라우저 주소창이 접히는 동안에는 높이 변화만으로 resize가 반복된다.
+    // 폭이 바뀐 경우에만 반응형 재계산과 강제 repaint를 수행한다.
+    if (Math.abs(nextWidth - lastLayoutWidth) < 2) return;
+    lastLayoutWidth = nextWidth;
+    recover();
+  };
+  window.addEventListener('resize', recoverAfterWidthChange, { passive: true });
+  window.addEventListener('orientationchange', () => {
+    lastLayoutWidth = Math.round(window.innerWidth);
+    recover();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') recover();
   });

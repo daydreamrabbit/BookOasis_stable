@@ -9,6 +9,9 @@ from html.parser import HTMLParser
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EPUB_IMAGE_CACHE_DIR = os.path.join(BASE_DIR, 'cache', 'epub_images')
 EPUB_IMAGE_MAX_SIDE = 1600  # 뷰어 실제 표시 폭(2페이지 모드 최대 1600px)을 넘는 원본은 리사이즈
+EPUB_META_CACHE_VERSION = 'v3'
+EPUB_SPINE_CACHE_VERSION = 'v2'
+EPUB_CHAPTER_CACHE_VERSION = 'v3'
 
 
 class _EPUBBodyHTMLParser(HTMLParser):
@@ -60,6 +63,15 @@ class _EPUBBodyHTMLParser(HTMLParser):
                     self.output.append(f'<{tag_lower} id="{safe_id}">')
                 else:
                     self.output.append(f'<{tag_lower}>')
+        elif self.recording:
+            # 허용되지 않는 태그(<a id="..."></a>, <span id>, <section id> 등)는 태그 자체는 버리되,
+            # 목차(NCX/nav)가 가리키는 앵커 id는 보존해야 하위 목차 항목이 정확한 위치로 이동한다.
+            # 빈 <a id="p26_t1"></a> 로 위치만 표시하는 EPUB이 흔해서, 이게 유실되면 하위 항목 클릭이
+            # 앵커를 못 찾고 챕터 시작으로만 이동한다.
+            attrs_dict = dict(attrs)
+            anchor_id = attrs_dict.get('id') or (attrs_dict.get('name') if tag_lower == 'a' else None)
+            if anchor_id:
+                self.output.append(f'<span id="{html.escape(str(anchor_id), quote=True)}"></span>')
 
     def handle_endtag(self, tag):
         tag_lower = tag.lower()
@@ -148,7 +160,9 @@ class TextEpubContentService:
         if not os.path.exists(file_path):
             return None, 'File not found'
 
-        redis_cache_key = f"cache:epub:meta:book:{db_type}:{book_id}" if book_id else None
+        # v3: OPF가 기본 네임스페이스가 아니라 ns0 같은 접두사를 쓰는 경우에도
+        # manifest/spine을 읽도록 고쳤다. 예전의 빈 spine 캐시를 재사용하지 않는다.
+        redis_cache_key = f"cache:epub:meta:book:{EPUB_META_CACHE_VERSION}:{db_type}:{book_id}" if book_id else None
         if redis_cache_key:
             try:
                 from utils.redis_helper import redis_get
@@ -172,18 +186,21 @@ class TextEpubContentService:
 
                 opf_path = rootfile.attrib.get('full-path')
                 opf_dir = os.path.dirname(opf_path)
-                opf_data = zf.read(opf_path)
-                opf_str = opf_data.decode('utf-8', errors='ignore')
-                opf_str_cleaned = re.sub(r'\sxmlns="[^"]+"', '', opf_str, count=1)
-                opf_root = ET.fromstring(opf_str_cleaned.encode('utf-8'))
+                opf_root = ET.fromstring(zf.read(opf_path))
 
-                title_elem = opf_root.find('.//title')
+                # EPUB OPF는 <package xmlns="...">뿐 아니라 <ns0:package xmlns:ns0="...">
+                # 형태도 모두 유효하다. 로컬 이름 와일드카드로 두 표현을 동일하게 처리한다.
+                title_elem = opf_root.find('.//{http://purl.org/dc/elements/1.1/}title')
+                if title_elem is None:
+                    title_elem = opf_root.find('.//{*}title')
                 title = title_elem.text if title_elem is not None else 'Untitled'
 
                 manifest_items = {}
                 ncx_href = None
                 nav_href = None
-                for item in opf_root.findall('.//manifest/item'):
+                manifest = opf_root.find('.//{*}manifest')
+                manifest_items_xml = manifest.findall('./{*}item') if manifest is not None else []
+                for item in manifest_items_xml:
                     item_id = item.attrib.get('id')
                     href = item.attrib.get('href')
                     media_type = item.attrib.get('media-type', '')
@@ -195,7 +212,7 @@ class TextEpubContentService:
                     if 'nav' in properties.split():
                         nav_href = href
 
-                spine = opf_root.find('.//spine')
+                spine = opf_root.find('.//{*}spine')
                 if not ncx_href and spine is not None:
                     toc_id = spine.attrib.get('toc')
                     if toc_id and toc_id in manifest_items:
@@ -213,7 +230,7 @@ class TextEpubContentService:
 
                 spine_itemrefs = []
                 if spine is not None:
-                    for itemref in spine.findall('./itemref'):
+                    for itemref in spine.findall('./{*}itemref'):
                         idref = itemref.attrib.get('idref')
                         if idref in manifest_items:
                             spine_itemrefs.append(manifest_items[idref])
@@ -250,9 +267,19 @@ class TextEpubContentService:
                             soup = BeautifulSoup(nav_data, 'xml')
                         except Exception:
                             soup = BeautifulSoup(nav_data, 'html.parser')
-                        for nav in soup.find_all('nav'):
-                            if nav.get('epub:type') == 'toc' or nav.get('type') == 'toc' or not toc_list:
-                                for a in nav.find_all('a'):
+
+                        # EPUB3 nav.xhtml의 목차는 <ol><li><a>...</a><ol>하위항목</ol></li></ol> 형태로
+                        # 중첩되어 "제2부 -> 강변에서" 같은 부모/자식 관계를 표현한다. 예전엔 nav.find_all('a')로
+                        # 평탄화해서 모든 항목에 level:1을 고정 부여했는데, 그러면 프런트(txt_toc.js)가
+                        # level<=1을 "최상위 챕터"로 오인해 하위 항목 클릭 시에도 앵커 이동 없이 그냥
+                        # 챕터 시작(부모 항목 위치)으로만 이동하는 버그가 있었다. NCX 분기(parse_navpoint)는
+                        # 이미 중첩 depth를 따라 level을 늘려가므로, 같은 방식을 nav.xhtml에도 적용한다.
+                        def parse_nav_list(ol_element, level):
+                            if not ol_element:
+                                return
+                            for li in ol_element.find_all('li', recursive=False):
+                                a = li.find('a', recursive=False) or li.find('a')
+                                if a is not None:
                                     href = a.get('href')
                                     text = a.get_text().strip()
                                     idx, anchor = resolve_toc_item(href, nav_href)
@@ -262,8 +289,16 @@ class TextEpubContentService:
                                         'title': title_text,
                                         'chapter_idx': idx,
                                         'anchor': anchor,
-                                        'level': 1
+                                        'level': level
                                     })
+                                nested_ol = li.find('ol', recursive=False)
+                                if nested_ol:
+                                    parse_nav_list(nested_ol, level + 1)
+
+                        for nav in soup.find_all('nav'):
+                            if nav.get('epub:type') == 'toc' or nav.get('type') == 'toc' or not toc_list:
+                                top_ol = nav.find('ol', recursive=False) or nav.find('ol')
+                                parse_nav_list(top_ol, 1)
                     if not toc_list and ncx_href:
                         ncx_full_path = posixpath.join(opf_dir, ncx_href) if opf_dir else ncx_href
                         ncx_data = zf.read(ncx_full_path).decode('utf-8', errors='ignore')
@@ -324,7 +359,7 @@ class TextEpubContentService:
 
     @staticmethod
     def _spine_cache_key(db_type, book_id):
-        return f"cache:epub:spine:book:{db_type}:{book_id}" if book_id else None
+        return f"cache:epub:spine:book:{EPUB_SPINE_CACHE_VERSION}:{db_type}:{book_id}" if book_id else None
 
     @staticmethod
     def _set_cached_spine(db_type, book_id, spine_itemrefs):
@@ -358,7 +393,8 @@ class TextEpubContentService:
 
     @staticmethod
     def _chapter_cache_key(db_type, book_id, chapter_idx):
-        return f"cache:epub:ch:book:{db_type}:{book_id}:{chapter_idx}" if book_id else None
+        # v3: 네임스페이스 OPF에서 잘못 계산된 spine 결과와 분리한다.
+        return f"cache:epub:ch:book:{EPUB_CHAPTER_CACHE_VERSION}:{db_type}:{book_id}:{chapter_idx}" if book_id else None
 
     @staticmethod
     def _get_cached_chapter(db_type, book_id, chapter_idx):

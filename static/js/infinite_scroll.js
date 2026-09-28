@@ -1,6 +1,6 @@
 // infinite_scroll.js – IntersectionObserver 기반 무한 스크롤 제어 모듈
 import { state } from './state.js';
-import { loadBooksList, loadPreviousBooksPage } from './book_list.js';
+import { loadBooksList, loadPreviousBooksPage } from './book_list.js?rev=20260920-mobile-request-cancel-v4';
 
 let infiniteScrollObserver = null;
 let infiniteScrollTopObserver = null;
@@ -65,4 +65,3 @@ export function initInfiniteScrollObserver() {
     infiniteScrollTopObserver.observe(spinnerTop);
   }
 }
-

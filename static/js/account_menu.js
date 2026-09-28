@@ -19,7 +19,21 @@ function initAccountMenuPopover() {
     event.stopPropagation();
     setAccountMenuOpen(popover.hidden);
   });
-  popover.addEventListener('click', event => event.stopPropagation());
+  popover.addEventListener('click', event => {
+    event.stopPropagation();
+    const profileButton = event.target.closest('[data-role="account-menu-profile"]');
+    if (profileButton) {
+      setAccountMenuOpen(false);
+      if (typeof window.selectCategory === 'function') window.selectCategory('profile');
+      return;
+    }
+    const settingsButton = event.target.closest('[data-role="account-menu-settings"]');
+    if (!settingsButton) return;
+    setAccountMenuOpen(false);
+    if (typeof window.selectCategory === 'function') {
+      window.selectCategory('settings');
+    }
+  });
   document.addEventListener('click', () => setAccountMenuOpen(false));
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') setAccountMenuOpen(false);

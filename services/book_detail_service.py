@@ -9,10 +9,26 @@ from utils.cover_helper import get_cover_image_with_t, resolve_series_cover, inv
 from utils.redis_helper import redis_delete_pattern
 from utils.permission_clause import build_library_permission_clause
 from services.cover_storage_service import get_covers_dir
+from repositories.series_metadata_utils import select_series_cover_row
+
+
+def _series_book_display_title(book):
+    title = (book.get('metadata_title') or '').strip()
+    if title:
+        return title
+
+    title = book['title']
+    file_path = book.get('file_path') or ''
+    if (book.get('file_format') or '').lower() == 'imgdir' and file_path:
+        return os.path.basename(os.path.dirname(file_path)) or title
+    if file_path:
+        return os.path.splitext(os.path.basename(file_path))[0]
+    return title
+
 
 class BookDetailService:
     @staticmethod
-    def get_media_detail(db_type, series_name, library_id='all', user_id=1, role=None, restrict_same_directory=True, representative_book_id=None):
+    def get_media_detail(db_type, series_name, library_id='all', user_id=1, role=None, restrict_same_directory=True, representative_book_id=None, content_rating_max=None):
         if db_type == 'audiobook':
             audiobook_row = None
             if representative_book_id:
@@ -248,6 +264,19 @@ class BookDetailService:
 
         # 2. 책 목록 조회
         books_rows = BookRepository.get_books_by_series_detail(db_type, series_name, library_id, user_id, perm_clause_b, perm_params)
+        if db_type in ('general', 'adult') and content_rating_max is not None:
+            from services.content_rating_service import ContentRatingService
+            try:
+                max_level = max(0, min(20, int(content_rating_max)))
+            except (TypeError, ValueError):
+                max_level = 18
+            adult_keywords = ContentRatingService.get_adult_keywords()
+            books_rows = [
+                row for row in books_rows
+                if ContentRatingService.compute_effective_level(
+                    row.get('books_lv'), row.get('genre'), row.get('tags'), adult_keywords
+                ) <= max_level
+            ]
 
         # 실제 covers 폴더 내 시리즈 이미지 갱신 타임스탬프 쿼리
         latest_updated = BookRepository.get_series_latest_updated(db_type, series_name, perm_clause, perm_params)
@@ -264,14 +293,17 @@ class BookDetailService:
                     lib_id = b['library_id']
                     break
 
+        # 대표 커버는 권 번호가 1인 책을 우선하고, 없으면 가장 앞선 권의 표지를 사용한다.
+        cover_row = select_series_cover_row(books_rows)
+
         # 대표 커버 이미지 매핑 및 실존 여부 확인 (Fallback 적용)
         final_cover = resolve_series_cover(
             series_name=series_name,
             lib_id=lib_id,
-            db_cover=books_rows[0]['cover_image'] if books_rows else None,
+            db_cover=cover_row.get('cover_image') if cover_row else None,
             covers_dir=covers_dir,
             conn=None,
-            candidates_rows=books_rows
+            candidates_rows=books_rows,
         )
 
         # 배너는 표지처럼 대체 후보를 뒤지지 않는다(공유 드라이브 도서관리 담당자 합의 범위 -
@@ -286,6 +318,7 @@ class BookDetailService:
         meta = {
             'series_name': series_name,
             'series_alias': _val(meta_row, 'series_alias', ''),
+            'localized_series': next((b.get('localized_series') for b in books_rows if b.get('localized_series')), ''),
             'author'   : _val(meta_row, 'author',    '-'),
             'isbn'     : _val(meta_row, 'isbn',      ''),
             'web_id'   : '',
@@ -306,10 +339,26 @@ class BookDetailService:
             'banner_image': get_cover_image_with_t(final_banner, banner_updated) if final_banner else ''
         }
 
+        # 그리드 카드 대신 상세화면 헤더에서만 "메타데이터 미연결"을 표시하기로 했으므로
+        # (그리드에서는 카드 개수가 많아 시각적 잡음이 컸음), 시리즈 목록 조회의
+        # book_metadata_exists_sql()과 동일한 판정 기준(제목/경로/커버/잠금 필드 제외)을
+        # 여기서도 그대로 따른다 - 이미 로드된 meta_row 하나만 보면 된다(대표 메타 행이
+        # summary 채워진 쪽을 우선 선택하므로, 그 행에 값이 하나도 없으면 시리즈 전체에
+        # 실제 메타데이터가 없다고 봐도 무방하다).
+        _metadata_fields = (
+            'author', 'isbn', 'publisher', 'link', 'summary', 'genre', 'tags',
+            'books_lv', 'publication_status', 'cover_artist', 'teams', 'locations',
+            'characters', 'series_alias',
+        )
+        meta['has_metadata'] = 1 if meta_row and (
+            any(str(meta_row.get(field) or '').strip() not in ('', '등록된 설명이 없습니다.') for field in _metadata_fields)
+            or float(meta_row.get('score') or 0) != 0
+        ) else 0
+
         from services.content_rating_service import ContentRatingService
         effective_level = ContentRatingService.compute_effective_level(meta['books_lv'], meta['genre'], meta['tags'])
         meta['content_rating_level'] = effective_level
-        meta['content_rating_label'] = {0: '전체이용가', 15: '15세이상', 18: '18세이상(성인)'}.get(effective_level, '18세이상(성인)')
+        meta['content_rating_label'] = ContentRatingService.get_level_label(effective_level)
 
         # publication_status(연재상태)는 원본 코드(0/1/2)로 저장되며(tools/scanner/metadata/kavita_yaml.py
         # 참고), 값이 없거나 인식되지 않는 코드(3 이상 등 향후 소스 추가분)는 "알 수 없음"으로 표시한다.
@@ -317,13 +366,8 @@ class BookDetailService:
 
         books_list = []
         for b in books_rows:
-            clean_title = b['title']
+            clean_title = _series_book_display_title(b)
             file_format = (b['file_format'] or '').lower()
-            if file_format == 'imgdir' and b['file_path']:
-                clean_title = os.path.basename(os.path.dirname(b['file_path'])) or clean_title
-            elif b['file_path']:
-                filename_with_ext = os.path.basename(b['file_path'])
-                clean_title, _ = os.path.splitext(filename_with_ext)
                 
             total_pages = b['total_pages'] or 0
             has_offsets_val = b.get('has_offsets', 0)

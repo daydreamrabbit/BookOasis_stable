@@ -255,17 +255,17 @@ def _stream_transcoded_video(file_path, video_id=None, episode_id=None):
     return rv
 
 
-def _has_video_library_access(vid):
+_COVER_ROW_UNSET = object()
+
+
+def _has_video_library_access(vid, row=_COVER_ROW_UNSET):
     user_id = session.get('user_id')
-    role = session.get('role')
-    if role == 'admin':
-        return True
     if not user_id:
         return False
 
     from repositories.video_repository import VideoRepository
     from repositories.category_repository import CategoryRepository
-    row = VideoRepository.get_video_by_id(vid)
+    row = VideoRepository.get_video_by_id(vid) if row is _COVER_ROW_UNSET else row
     if not row or not row.get('library_id'):
         return False
     return CategoryRepository.check_user_category_access('video', user_id, row['library_id'])
@@ -285,11 +285,9 @@ def list_videos_api():
         return jsonify({'success': False, 'error': 'Invalid library_id'}), 400
 
     user_id = session.get('user_id')
-    role = session.get('role')
-    if role != 'admin':
-        from repositories.category_repository import CategoryRepository
-        if not CategoryRepository.check_user_category_access('video', user_id, library_id_int):
-            return jsonify({'success': False, 'error': '영상 강좌 접근 권한이 없습니다.'}), 403
+    from repositories.category_repository import CategoryRepository
+    if not CategoryRepository.check_user_category_access('video', user_id, library_id_int):
+        return jsonify({'success': False, 'error': '영상 강좌 접근 권한이 없습니다.'}), 403
 
     from repositories.video_repository import VideoRepository
     rows = VideoRepository.list_videos_by_library(library_id_int)
@@ -300,11 +298,11 @@ def list_videos_api():
 @login_required
 def get_video_detail_api(vid):
     """강좌 상세(메타 + 에피소드 목록) 조회"""
-    if not _has_video_library_access(vid):
-        return jsonify({'success': False, 'error': '영상 강좌 접근 권한이 없습니다.'}), 403
-
     from repositories.video_repository import VideoRepository
     row = VideoRepository.get_video_by_id(vid)
+
+    if not _has_video_library_access(vid, row=row):
+        return jsonify({'success': False, 'error': '영상 강좌 접근 권한이 없습니다.'}), 403
     if not row:
         return jsonify({'success': False, 'error': 'Video not found'}), 404
 
@@ -315,11 +313,11 @@ def get_video_detail_api(vid):
 @video_bp.route('/api/media/videos/<int:vid>/cover', methods=['GET'])
 def get_video_cover(vid):
     """강좌 대표 포스터 이미지 서빙"""
-    if not _has_video_library_access(vid):
-        return jsonify({'success': False, 'error': '영상 강좌 접근 권한이 없습니다.'}), 403
-
     from repositories.video_repository import VideoRepository
     row = VideoRepository.get_video_by_id(vid)
+
+    if not _has_video_library_access(vid, row=row):
+        return jsonify({'success': False, 'error': '영상 강좌 접근 권한이 없습니다.'}), 403
 
     if row and row.get('poster'):
         from utils.cover_helper import get_or_cache_remote_poster_webp
@@ -330,9 +328,16 @@ def get_video_cover(vid):
 
     # Fallback SVG 생성
     title = row.get('title') if row else 'Video'
-    from api.stream import _build_fallback_svg
-    svg_data = _build_fallback_svg(title, file_format='video', seed=str(vid))
-    return Response(svg_data, mimetype='image/svg+xml')
+    from api.stream import _build_fallback_svg, _hash_string
+    res = Response(mimetype='image/svg+xml')
+    # Revalidate through the permission check on every reuse; never share
+    # authenticated covers between users through a proxy cache.
+    res.headers['Cache-Control'] = 'private, no-cache'
+    res.set_etag(str(_hash_string(f"{title}|video|{vid}")))
+    res.make_conditional(request)
+    if res.status_code != 304:
+        res.set_data(_build_fallback_svg(title, file_format='video', seed=str(vid)))
+    return res
 
 
 @video_bp.route('/api/media/videos/<int:vid>/episodes/<int:eid>/stream', methods=['GET'])

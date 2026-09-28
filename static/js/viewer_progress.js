@@ -1,8 +1,11 @@
 // viewer_progress.js – 독서 진행률 API 전송 디바운싱 및 동기화 모듈
 import { state } from './state.js';
+import { flushReadReport, noteReadActivity } from './viewer/tts_sync.js?rev=20260927-tts-session-v8';
 
 let progressTimeout = null;
 let pendingProgress = null;
+let snapshotProvider = null;
+export function setProgressSnapshotProvider(provider) { snapshotProvider = provider; }
 
 // 도서별 사전 로딩 중복 호출 방지 플래그 저장소
 const preloadedBooksSet = new Set();
@@ -18,6 +21,7 @@ export function resetPreloadState() {
  * @param {number} totalPages - 전체 페이지 수
  */
 export function saveProgress(bookId, pageIdx, totalPages, extraData = null) {
+  noteReadActivity();
   pendingProgress = {
     db_type: state.currentLibraryType,
     book_id: bookId,
@@ -92,6 +96,7 @@ function triggerPreloadNextBook(bookId) {
  * @param {boolean} flushImmediately - 응답 전에 해당 진행도를 DB에 즉시 반영할지 여부
  */
 export function flushProgress(useBeacon = false, flushImmediately = false) {
+  flushReadReport(useBeacon);
   if (!pendingProgress) return Promise.resolve(null);
 
   const data = { ...pendingProgress };
@@ -140,12 +145,7 @@ export function flushProgress(useBeacon = false, flushImmediately = false) {
 
 function prepareActiveViewerSnapshot() {
   try {
-    import('./viewer/lifecycle_controller.js').then(m => {
-      const instance = m.getActiveViewerInstance ? m.getActiveViewerInstance() : null;
-      if (instance && typeof instance.prepareForClose === 'function') {
-        instance.prepareForClose();
-      }
-    }).catch(() => {});
+    snapshotProvider?.();
   } catch (e) {}
 }
 

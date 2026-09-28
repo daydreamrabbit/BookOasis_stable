@@ -8,12 +8,201 @@ from services.book_scan_service import BookScanService
 from api.auth import admin_required
 from utils.i18n import _t
 import database
+from services.batch_book_scan_targets import resolve_batch_book_scan_targets
 
 scan_bp = Blueprint('scan', __name__)
+LAZY_SCAN_DB_TYPES = {'general', 'adult', 'audiobook'}
 
 def get_db_path_for_scan(db_type):
     """db_type에 대응하는 스캔 대상 데이터베이스 경로/식별자 반환 (MariaDB 모드 대응)"""
     return database.get_db_path(db_type)
+
+
+def _gdrive_virtual_parts(path):
+    """저장된 gdrive:/ 가상 경로에서 공유 폴더 ID와 상대 경로를 분리한다."""
+    from utils.drive_helper import split_gdrive_file_id
+
+    base_path, _file_id = split_gdrive_file_id(str(path or '').strip())
+    normalized = base_path.replace('\\', '/')
+    if not normalized.lower().startswith('gdrive:'):
+        return None
+    components = [part for part in normalized.split(':', 1)[1].strip('/').split('/') if part]
+    if not components:
+        return None
+    return components[0], components[1:]
+
+
+def _resolve_series_scan_target(file_path, physical_path):
+    """로컬 라이브러리 또는 Google Drive 공유 루트 아래의 시리즈 폴더를 확인한다."""
+    from utils.drive_helper import extract_gdrive_folder_id, is_gdrive_url
+
+    file_path = str(file_path or '').strip()
+    roots = [path.strip() for path in str(physical_path or '').replace('\r', '').split('\n') if path.strip()]
+    if not file_path or not roots:
+        return None
+
+    if is_gdrive_url(file_path):
+        file_parts = _gdrive_virtual_parts(file_path)
+        if not file_parts:
+            return None
+        file_root_id, file_relative_parts = file_parts
+        if not file_relative_parts:
+            return None
+        folder_relative_parts = file_relative_parts[:-1]
+
+        for root in roots:
+            if not is_gdrive_url(root):
+                continue
+            root_parts = _gdrive_virtual_parts(root)
+            if root_parts:
+                root_id, root_relative_parts = root_parts
+            else:
+                root_id = extract_gdrive_folder_id(root)
+                root_relative_parts = []
+            if root_id != file_root_id:
+                continue
+            if folder_relative_parts[:len(root_relative_parts)] != root_relative_parts:
+                continue
+
+            gdrive_subpath = '/'.join(folder_relative_parts)
+            path_scope = f"gdrive:/{file_root_id}"
+            if folder_relative_parts:
+                path_scope += '/' + '/'.join(folder_relative_parts)
+            return {
+                'target_path': root,
+                'path_scope': path_scope,
+                'gdrive_subpath': gdrive_subpath,
+            }
+        return None
+
+    if not os.path.isabs(file_path):
+        return None
+    target_path = os.path.realpath(os.path.dirname(file_path))
+    if not os.path.isdir(target_path):
+        return None
+
+    for root in roots:
+        if is_gdrive_url(root) or not os.path.isabs(root):
+            continue
+        root_path = os.path.realpath(root)
+        try:
+            if os.path.commonpath((target_path, root_path)) == root_path:
+                return {'target_path': target_path}
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _enqueue_targeted_lazy_scan(db_type, **target):
+    from services.scanner_queue import scanner_queue
+    return scanner_queue.enqueue('lazy_scan', db_type=db_type, **target)
+
+
+@scan_bp.route('/api/media/books/lazy-scan', methods=['POST'])
+@admin_required
+def trigger_books_lazy_scan():
+    """선택 도서 또는 특정 라이브러리의 전체 시리즈를 Lazy-Scanner로 보완한다."""
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    db_type = str(payload.get('type') or request.form.get('type') or 'general').strip().lower()
+    if db_type not in LAZY_SCAN_DB_TYPES:
+        return jsonify({'success': False, 'error': '지원하지 않는 도서 데이터베이스입니다.'}), 400
+
+    raw_book_ids = payload.get('book_ids')
+    if raw_book_ids is None:
+        raw_book_ids = request.form.getlist('book_ids')
+
+    raw_series_name = payload.get('series_name')
+    raw_library_id = payload.get('library_id')
+    if raw_series_name is not None or raw_library_id is not None:
+        if raw_book_ids:
+            return jsonify({'success': False, 'error': '도서 ID와 시리즈 대상은 함께 지정할 수 없습니다.'}), 400
+        if not isinstance(raw_series_name, str) or not raw_series_name.strip():
+            return jsonify({'success': False, 'error': '스캔할 시리즈명이 필요합니다.'}), 400
+        if isinstance(raw_library_id, bool) or not str(raw_library_id).strip().isdecimal():
+            return jsonify({'success': False, 'error': '시리즈 라이브러리 ID가 올바르지 않습니다.'}), 400
+        library_id = int(raw_library_id)
+        if library_id <= 0:
+            return jsonify({'success': False, 'error': '시리즈 라이브러리 ID가 올바르지 않습니다.'}), 400
+        series_name = raw_series_name.strip()
+        if len(series_name) > 512:
+            return jsonify({'success': False, 'error': '시리즈명이 너무 깁니다.'}), 400
+
+        conn = None
+        try:
+            conn = database.get_connection(db_type)
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT COUNT(*) AS book_count FROM books WHERE library_id = ? AND series_name = ?',
+                (library_id, series_name),
+            )
+            row = cursor.fetchone()
+            book_count = int(row['book_count'] or 0) if row else 0
+            if book_count == 0:
+                return jsonify({'success': False, 'error': '해당 라이브러리에서 시리즈 도서를 찾을 수 없습니다.'}), 404
+
+            if not _enqueue_targeted_lazy_scan(
+                db_type,
+                library_id=library_id,
+                series_name=series_name,
+            ):
+                return jsonify({
+                    'success': False,
+                    'error': 'Lazy-Scanner 작업이 이미 실행 중이거나 대기 중입니다. 현재 작업이 끝난 뒤 다시 요청해 주세요.'
+                }), 409
+            return jsonify({
+                'success': True,
+                'message': f"'{series_name}' 시리즈 {book_count}권의 Lazy-Scanner 작업을 대기열에 추가했습니다."
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+        finally:
+            if conn:
+                conn.close()
+
+    if not isinstance(raw_book_ids, list) or not raw_book_ids:
+        return jsonify({'success': False, 'error': '스캔할 도서 ID가 필요합니다.'}), 400
+    if len(raw_book_ids) > 500:
+        return jsonify({'success': False, 'error': '한 번에 최대 500개 도서까지 요청할 수 있습니다.'}), 400
+
+    try:
+        book_ids = []
+        for raw_id in raw_book_ids:
+            if isinstance(raw_id, bool) or not str(raw_id).strip().isdecimal():
+                raise ValueError('도서 ID는 양의 정수여야 합니다.')
+            book_id = int(raw_id)
+            if book_id <= 0:
+                raise ValueError('도서 ID는 양의 정수여야 합니다.')
+            if book_id not in book_ids:
+                book_ids.append(book_id)
+    except (TypeError, ValueError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+    conn = None
+    try:
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        placeholders = ', '.join('?' for _ in book_ids)
+        cursor.execute(f"SELECT id FROM books WHERE id IN ({placeholders})", tuple(book_ids))
+        found_ids = {int(row['id']) for row in cursor.fetchall()}
+        if found_ids != set(book_ids):
+            return jsonify({'success': False, 'error': '요청한 도서 중 현재 라이브러리에서 찾을 수 없는 항목이 있습니다.'}), 404
+
+        if not _enqueue_targeted_lazy_scan(db_type, book_ids=book_ids):
+            return jsonify({
+                'success': False,
+                'error': 'Lazy-Scanner 작업이 이미 실행 중이거나 대기 중입니다. 현재 작업이 끝난 뒤 다시 요청해 주세요.'
+            }), 409
+        return jsonify({
+            'success': True,
+            'message': f'선택한 {len(book_ids)}개 작품의 Lazy-Scanner 작업을 대기열에 추가했습니다.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @scan_bp.route('/api/media/books/<int:book_id>/scan', methods=['POST'])
 @admin_required
@@ -28,6 +217,133 @@ def scan_single_book_api(book_id):
             return jsonify({'success': False, 'error': message}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@scan_bp.route('/api/media/books/scan-batch', methods=['POST'])
+@admin_required
+def enqueue_batch_book_scan():
+    """선택한 여러 도서의 부분 재스캔을 백그라운드 큐에 등록한다."""
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    db_type = str(payload.get('type') or 'general').strip().lower()
+    if db_type not in ('general', 'adult'):
+        return jsonify({'success': False, 'error': '일반/성인 도서만 다중 스캔할 수 있습니다.'}), 400
+    # scope는 요청이 명시한다(기본 book) - 시리즈 카드는 대표 권 ID만 보내므로 서버가 같은 시리즈의
+    # 모든 권으로 확장한다. ID 개수로 스코프를 추정하지 않는다(상세 화면의 단일 권과 구분이 안 됨).
+    scan_scope = str(payload.get('scope') or 'book').strip().lower()
+    if scan_scope not in ('book', 'series'):
+        return jsonify({'success': False, 'error': '지원하지 않는 스캔 범위입니다.'}), 400
+    force_value = payload.get('force', False)
+    force_scan = force_value is True or str(force_value).strip().lower() in ('true', '1', 'yes', 'on')
+
+    raw_book_ids = payload.get('book_ids')
+    if not isinstance(raw_book_ids, list) or not raw_book_ids:
+        return jsonify({'success': False, 'error': '스캔할 도서 ID가 필요합니다.'}), 400
+    if len(raw_book_ids) > 500:
+        return jsonify({'success': False, 'error': '한 번에 최대 500개 도서까지 요청할 수 있습니다.'}), 400
+
+    book_ids = []
+    try:
+        for raw_id in raw_book_ids:
+            if isinstance(raw_id, bool) or not str(raw_id).strip().isdecimal():
+                raise ValueError('도서 ID는 양의 정수여야 합니다.')
+            book_id = int(raw_id)
+            if book_id <= 0:
+                raise ValueError('도서 ID는 양의 정수여야 합니다.')
+            if book_id not in book_ids:
+                book_ids.append(book_id)
+    except (TypeError, ValueError) as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+    # Scope is an explicit part of the request. A one-book anchor with scope=series
+    # must expand to every active volume, while scope=book must remain one book.
+    # Do not infer scope from the number of IDs: that used to silently downgrade
+    # a series scan to missing-cover-only work.
+    target_scope = scan_scope
+
+    conn = None
+    try:
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            rows = resolve_batch_book_scan_targets(cursor, book_ids, scope=scan_scope)
+        except LookupError as error:
+            return jsonify({'success': False, 'error': str(error)}), 404
+        if len(rows) > 500:
+            return jsonify({'success': False, 'error': '시리즈 스캔은 한 번에 최대 500권까지 가능합니다.'}), 400
+        book_ids = [int(row['id']) for row in rows]
+
+        library_ids = {row['library_id'] for row in rows if row['library_id'] is not None}
+        task_kwargs = {'db_type': db_type, 'book_ids': book_ids, 'scope': scan_scope}
+        if len(rows) == len(book_ids) and len(library_ids) == 1:
+            task_kwargs['library_id'] = next(iter(library_ids))
+        if len(book_ids) == 1:
+            task_kwargs['book_title'] = str(rows[0]['title'] or '').strip()
+
+        if force_scan:
+            task_kwargs['force'] = True
+            if target_scope == 'series':
+                if len(raw_book_ids) != 1:
+                    return jsonify({'success': False, 'error': '시리즈 폴더 강제 스캔은 시리즈 카드 한 개만 선택해 실행할 수 있습니다.'}), 400
+
+                anchor_id = book_ids[0] if len(book_ids) == 1 else int(raw_book_ids[0])
+                cursor.execute(
+                    "SELECT id, library_id, title, series_name, file_path FROM books "
+                    "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (anchor_id,),
+                )
+                anchor = cursor.fetchone()
+                if not anchor or anchor['library_id'] is None:
+                    return jsonify({'success': False, 'error': '시리즈의 라이브러리 정보를 찾을 수 없습니다.'}), 404
+                if not str(anchor['series_name'] or '').strip():
+                    return jsonify({'success': False, 'error': '시리즈명이 없는 도서는 시리즈 폴더 강제 스캔을 할 수 없습니다.'}), 400
+
+                from repositories.category_repository import CategoryRepository
+                library = CategoryRepository.get_library_by_id(db_type, anchor['library_id'])
+                scan_target = _resolve_series_scan_target(
+                    anchor['file_path'], library.get('physical_path') if library else None
+                )
+                if not scan_target:
+                    return jsonify({
+                        'success': False,
+                        'error': '도서 파일의 상위 폴더를 라이브러리 경로에서 확인할 수 없습니다.',
+                    }), 400
+
+                task_kwargs.update({
+                    'scan_mode': 'force_series_path',
+                    **scan_target,
+                    'db_path': get_db_path_for_scan(db_type),
+                    'library_id': int(anchor['library_id']),
+                    'series_name': str(anchor['series_name']).strip(),
+                    'book_title': str(anchor['series_name']).strip(),
+                })
+
+        from services.scanner_queue import scanner_queue
+        if not scanner_queue.enqueue('batch_book_scan', **task_kwargs):
+            return jsonify({
+                'success': False,
+                'error': '같은 다중 도서 스캔 작업이 이미 실행 중이거나 대기 중입니다.',
+            }), 409
+
+        if force_scan and scan_scope == 'series':
+            message = f'시리즈 폴더 강제 스캔을 대기열에 추가했습니다. 미등록 권도 탐색합니다: {task_kwargs["series_name"]}'
+        elif force_scan and scan_scope == 'book':
+            message = f'선택한 {len(book_ids)}권의 강제 재스캔을 대기열에 추가했습니다.'
+        elif scan_scope == 'series':
+            message = f'시리즈 전체 {len(book_ids)}권의 스캔을 대기열에 추가했습니다.'
+        elif len(book_ids) == 1:
+            message = '도서 스캔을 대기열에 추가했습니다.'
+        else:
+            message = f'선택한 {len(book_ids)}개 작품의 스캔을 대기열에 추가했습니다.'
+        return jsonify({
+            'success': True,
+            'message': message + ' 스캔 활동에서 진행 상황을 확인할 수 있습니다.',
+        }), 202
+    except Exception as error:
+        return jsonify({'success': False, 'error': str(error)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @scan_bp.route('/api/media/libraries/<int:library_id>/scan', methods=['POST'])
 @admin_required
@@ -137,12 +453,63 @@ def trigger_library_path_scan(library_id):
 @scan_bp.route('/api/media/libraries/<int:library_id>/cancel-scan', methods=['POST'])
 @admin_required
 def cancel_library_scan(library_id):
-    """지정된 라이브러리 카테고리의 진행 중인 스캔을 중단하도록 플래그 갱신"""
+    """지정된 라이브러리 스캔을 안전하게 중단하도록 취소 신호를 보냅니다."""
     db_type = request.form.get('type', 'general')
     try:
         from repositories.category_repository import CategoryRepository
-        CategoryRepository.update_library_scan_status(db_type, library_id, 'cancelling')
-        return jsonify({'success': True, 'message': _t('api.msg_scan_cancelling')})
+        from repositories.scanner_queue_repository import ScannerQueueRepository
+        from services.scanner_queue import scanner_queue
+
+        task_key = f'library_scan_{db_type}_{library_id}'
+        queue_lookup_failed = False
+        try:
+            task = ScannerQueueRepository.get_task_by_key(task_key)
+        except Exception as lookup_error:
+            # 구버전 DB/일시적 큐 조회 실패 시에도 기존 library 상태 기반
+            # 취소 경로를 보존한다. 워커가 cancelling을 폴링할 수 있다.
+            print(f'[API-ScanCancel WARNING] Queue task lookup failed; using library status fallback: {lookup_error}')
+            task = None
+            queue_lookup_failed = True
+
+        if queue_lookup_failed:
+            CategoryRepository.update_library_scan_status(db_type, library_id, 'cancelling')
+            return jsonify({'success': True, 'message': _t('api.msg_scan_cancelling')})
+
+        task_status = str((task or {}).get('status') or '').strip().lower()
+        if task_status in ('running', 'exit_pending'):
+            # 상태 플래그를 먼저 기록해, cancel_requested 컬럼을 읽지 못하는
+            # 구버전 워커도 안전하게 중단할 수 있도록 한다.
+            CategoryRepository.update_library_scan_status(db_type, library_id, 'cancelling')
+            requested = scanner_queue.cancel_running_task(task_key)
+            if not requested:
+                print(f'[API-ScanCancel WARNING] Running task cancel flag was not updated: {task_key}')
+            return jsonify({'success': True, 'message': _t('api.msg_scan_cancelling')})
+
+        if task_status == 'pending':
+            cancelled = scanner_queue.cancel_pending_task(task_key)
+            CategoryRepository.update_library_scan_status(db_type, library_id, 'ready')
+            if cancelled:
+                return jsonify({'success': True, 'message': _t('api.msg_scan_cancelled')})
+
+        if task is None:
+            # 직접 호출된 레거시 스캔이나 큐 이력 정리 직후에는 task row가
+            # 없을 수 있다. 라이브러리가 실제로 scanning 중이면 기존 상태
+            # 기반 취소를 유지하고, 이미 ready인 경우에만 종료 응답을 준다.
+            try:
+                current_status = CategoryRepository.get_library_by_id(db_type, library_id)
+                current_status = str((current_status or {}).get('scan_status') or '').strip().lower()
+            except Exception as status_error:
+                print(f'[API-ScanCancel WARNING] Library status lookup failed; preserving cancellation fallback: {status_error}')
+                current_status = 'scanning'
+            if current_status in ('scanning', 'cancelling'):
+                CategoryRepository.update_library_scan_status(db_type, library_id, 'cancelling')
+                return jsonify({'success': True, 'message': _t('api.msg_scan_cancelling')})
+
+        # 작업이 이미 종료됐거나 라이브러리가 실제로 실행 중이 아닌 경우에는 고착된
+        # cancelling 상태를 남기지 않는다. 기존 API의 성공 응답 호환성은
+        # 유지하되, 다음 스캔이 정상적으로 다시 등록될 수 있게 한다.
+        CategoryRepository.update_library_scan_status(db_type, library_id, 'ready')
+        return jsonify({'success': True, 'message': _t('api.msg_scan_cancelled')})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -171,6 +538,31 @@ def trigger_library_cover_scan(library_id):
             }), 409
         
         return jsonify({'success': True, 'message': _t('api.msg_cover_scan_started')})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@scan_bp.route('/api/media/libraries/<int:library_id>/lazy-scan', methods=['POST'])
+@admin_required
+def trigger_library_lazy_scan(library_id):
+    """지정 라이브러리 안의 Lazy-Scanner 후보만 보완 작업 큐에 추가한다."""
+    db_type = str(request.form.get('type', 'general')).strip().lower()
+    if db_type not in LAZY_SCAN_DB_TYPES:
+        return jsonify({'success': False, 'error': '지원하지 않는 도서 데이터베이스입니다.'}), 400
+    try:
+        from repositories.category_repository import CategoryRepository
+        if not CategoryRepository.get_library_by_id(db_type, library_id):
+            return jsonify({'success': False, 'error': _t('api.err_library_not_found')}), 404
+
+        if not _enqueue_targeted_lazy_scan(db_type, library_id=library_id):
+            return jsonify({
+                'success': False,
+                'error': 'Lazy-Scanner 작업이 이미 실행 중이거나 대기 중입니다. 현재 작업이 끝난 뒤 다시 요청해 주세요.'
+            }), 409
+        return jsonify({
+            'success': True,
+            'message': f'라이브러리 ID {library_id}의 Lazy-Scanner 작업을 대기열에 추가했습니다.'
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -228,4 +620,3 @@ def get_scan_history_api():
         return jsonify({'success': True, 'history': history})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
-

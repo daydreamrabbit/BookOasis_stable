@@ -34,6 +34,22 @@ export const THEMES = {
     heading: '#020617',
     className: 'txt-reader-theme-light'
   },
+  mint: {
+    name: 'mint', label: '민트', background: '#dceee9', text: '#16332f', heading: '#0c2622',
+    className: 'txt-reader-theme-mint'
+  },
+  gray: {
+    name: 'gray', label: '그레이', background: '#cfd2d6', text: '#25282c', heading: '#111315',
+    className: 'txt-reader-theme-gray'
+  },
+  blue: {
+    name: 'blue', label: '블루', background: '#dce8f3', text: '#17324a', heading: '#0a2238',
+    className: 'txt-reader-theme-blue'
+  },
+  navy: {
+    name: 'navy', label: '네이비', background: '#17243a', text: '#dce7f7', heading: '#ffffff',
+    className: 'txt-reader-theme-navy'
+  },
   dark: {
     name: 'dark',
     label: '다크',
@@ -58,10 +74,9 @@ export function getViewerSettings() {
   const defaultSizePx = state.systemSettings?.VIEWER_FONT_SIZE ? parseInt(state.systemSettings.VIEWER_FONT_SIZE, 10) : 18;
   const defaultSizeRem = (defaultSizePx / 16).toFixed(2); // px -> rem 변환
   
-  const defaultFontFamily = state.systemSettings?.VIEWER_FONT_FAMILY || 'sans-serif';
-  let fontMap = 'gothic'; // 기본 Nanum Gothic
+  const defaultFontFamily = state.systemSettings?.VIEWER_FONT_FAMILY || 'pretendard';
+  let fontMap = defaultFontFamily;
   if (defaultFontFamily === 'serif') fontMap = 'batang';
-  else if (defaultFontFamily === 'monospace') fontMap = 'monospace';
   else if (defaultFontFamily === 'sans-serif') fontMap = 'pretendard';
 
   const themeKey = localStorage.getItem('viewer_theme') || 'dark';
@@ -98,7 +113,7 @@ export function setViewerTheme(themeKey) {
 }
 
 export function toggleTheme() {
-  const order = ['dark', 'epaper', 'white', 'sepia', 'light', 'black'];
+  const order = ['dark', 'navy', 'blue', 'mint', 'epaper', 'white', 'sepia', 'light', 'gray', 'black'];
   const current = localStorage.getItem('viewer_theme') || 'dark';
   const currentIndex = order.indexOf(current);
   const next = order[(currentIndex + 1) % order.length];

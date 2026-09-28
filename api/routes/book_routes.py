@@ -7,10 +7,109 @@ from services.book_service import BookService
 from services.book_detail_service import BookDetailService
 from services.metadata_service import MetadataService
 from services.book_info_service import BookInfoService
+from services.series_delete_service import SeriesDeleteService
 from api.auth import login_required, check_adult_permission, check_download_permission, check_book_rating_permission, admin_required
 from utils.i18n import _t
 
 book_routes_bp = Blueprint('media_book_routes', __name__)
+
+
+@book_routes_bp.route('/api/media/series/cover-ratios', methods=['GET', 'POST'])
+@login_required
+def series_cover_ratios():
+    """Personal, persistent display preferences, isolated by user and DB type."""
+    import hashlib
+    import database
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify(success=False, error='JSON 객체가 필요합니다.'), 400
+    db_type = request.args.get('type') if request.method == 'GET' else payload.get('type')
+    if db_type not in ('general', 'adult', 'audiobook', 'video'):
+        return jsonify(success=False, error='잘못된 도서 유형입니다.'), 400
+    if not check_adult_permission(db_type):
+        return jsonify(success=False, error='접근 권한이 없습니다.'), 403
+    prefix = f'series-cover-ratio:{int(session["user_id"])}:'
+    with database.connection(db_type) as conn:
+        cur = conn.cursor()
+        if request.method == 'GET':
+            cur.execute('SELECT `key`,value FROM settings WHERE `key` LIKE ?', (prefix+'%',))
+            return jsonify(success=True, ratios={r['key'][len(prefix):]: r['value'] for r in cur.fetchall()})
+        ratio = payload.get('ratio')
+        if ratio not in ('inherit', '16:9'):
+            return jsonify(success=False, error='잘못된 표지 비율입니다.'), 400
+        try:
+            book_id = int(payload.get('book_id'))
+        except (ValueError, TypeError):
+            return jsonify(success=False, error='도서를 선택해 주세요.'), 400
+        from services.category_service import CategoryService
+        allowed = {int(lib['id']) for lib in CategoryService.get_libraries(db_type, user_id=session['user_id'], role=session.get('role'))}
+        cur.execute('SELECT library_id,series_name FROM books WHERE id=? AND COALESCE(is_deleted,0)=0', (book_id,))
+        book = cur.fetchone()
+        if not book or book['library_id'] not in allowed or not check_book_rating_permission(db_type, book_id):
+            return jsonify(success=False, error='도서 접근 권한이 없습니다.'), 403
+        identity = str(book['library_id']) + '\n' + (str(book['series_name'] or '').strip() or f'book:{book_id}')
+        digest = hashlib.sha256(identity.encode()).hexdigest()
+        key = prefix + digest
+        if ratio == 'inherit':
+            cur.execute('DELETE FROM settings WHERE `key`=?', (key,))
+        elif database.is_mariadb_mode():
+            cur.execute('INSERT INTO settings (`key`,value) VALUES (?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)', (key,ratio))
+        else:
+            cur.execute('INSERT INTO settings (`key`,value) VALUES (?,?) ON CONFLICT(`key`) DO UPDATE SET value=excluded.value', (key,ratio))
+        conn.commit()
+    return jsonify(success=True, key=digest, ratio=ratio)
+
+
+@book_routes_bp.route('/api/media/series/delete-data-batch', methods=['POST'])
+@admin_required
+def delete_series_data_batch():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(success=False, error='JSON 객체가 필요합니다.'), 400
+    try:
+        result = SeriesDeleteService.delete_series_batch(data.get('type', 'general'), data.get('targets'))
+        return jsonify(success=True, **result)
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    except RuntimeError as exc:
+        return jsonify(success=False, error=str(exc)), 409
+    except Exception:
+        return jsonify(success=False, error='시리즈 일괄 삭제 중 오류가 발생했습니다.'), 500
+
+
+@book_routes_bp.route('/api/media/series/delete-data', methods=['POST'])
+@admin_required
+def delete_series_data():
+    """원본 도서 파일은 유지하고 시리즈의 DB 데이터와 생성 이미지 파일만 삭제한다."""
+    data = request.get_json(silent=True) or request.form
+    db_type = str(data.get('type', 'general') or '').strip().lower()
+
+    try:
+        book_id = int(data.get('book_id'))
+        library_id = int(data.get('library_id'))
+        if book_id <= 0 or library_id <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': '올바른 도서와 라이브러리를 선택해 주세요.'}), 400
+
+    try:
+        result = SeriesDeleteService.delete_series_data(db_type, book_id, library_id)
+        if not result:
+            return jsonify({'success': False, 'error': '삭제할 시리즈를 찾을 수 없습니다.'}), 404
+        return jsonify({
+            'success': True,
+            'message': (
+                f'"{result["series_name"]}" 시리즈의 DB 데이터 {result["deleted_count"]}권과 '
+                f'생성 이미지 {result["deleted_media_count"]}개를 삭제했습니다. 원본 도서 파일은 유지됩니다.'
+            ),
+            'result': result,
+        })
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 409
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'시리즈 데이터 삭제 중 오류가 발생했습니다: {exc}'}), 500
 
 @book_routes_bp.route('/api/media/detail/edit', methods=['POST'])
 @admin_required
@@ -173,6 +272,8 @@ def get_book_info(book_id):
     db_type = request.args.get('type', 'general')
     if not check_adult_permission(db_type):
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
     
     try:
         info = BookInfoService.get_viewer_info(db_type, book_id)
@@ -193,6 +294,8 @@ def get_book_reader_info(book_id):
     db_type = request.args.get('type', 'general')
     if not check_adult_permission(db_type):
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
+    if not check_book_rating_permission(db_type, book_id):
+        return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
 
     user_id = session.get('user_id')
     try:
@@ -296,7 +399,7 @@ def toggle_author_favorite_api():
 @book_routes_bp.route('/api/media/books/<int:book_id>/download', methods=['GET'])
 @login_required
 def download_book(book_id):
-    """도서 파일을 다운로드합니다 (EPUB/PDF/TXT 전용 — iOS Books 앱 등 외부 앱 연동용)"""
+    """다운로드 권한이 있는 사용자가 원본 도서 파일을 내려받습니다."""
     db_type = request.args.get('type', 'general')
     if not check_adult_permission(db_type):
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
@@ -304,8 +407,6 @@ def download_book(book_id):
         return jsonify({'success': False, 'error': _t('api.err_no_download_access')}), 403
     if not check_book_rating_permission(db_type, book_id):
         return jsonify({'success': False, 'error': _t('api.err_no_rating_access')}), 403
-
-    ALLOWED_FORMATS = ('epub', 'pdf', 'txt')
 
     try:
         from repositories.book_repository import BookRepository
@@ -317,16 +418,22 @@ def download_book(book_id):
         file_path = row['file_path']
         file_format = (row['file_format'] or '').lower()
 
-        if file_format not in ALLOWED_FORMATS:
-            return jsonify({'success': False, 'error': '다운로드는 EPUB, PDF, TXT 포맷만 지원합니다.'}), 400
-
-        if not os.path.exists(file_path):
+        if not os.path.isfile(file_path):
             return jsonify({'success': False, 'error': _t('api.err_file_not_found')}), 404
 
         filename = os.path.basename(file_path)
         mime_type, _ = mimetypes.guess_type(file_path)
         if not mime_type:
-            mime_map = {'epub': 'application/epub+zip', 'pdf': 'application/pdf', 'txt': 'text/plain'}
+            mime_map = {
+                'epub': 'application/epub+zip',
+                'pdf': 'application/pdf',
+                'txt': 'text/plain',
+                'text': 'text/plain',
+                'zip': 'application/zip',
+                'cbz': 'application/vnd.comicbook+zip',
+                'rar': 'application/vnd.rar',
+                'cbr': 'application/vnd.comicbook-rar',
+            }
             mime_type = mime_map.get(file_format, 'application/octet-stream')
 
         return send_file(

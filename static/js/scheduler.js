@@ -1,5 +1,6 @@
 // scheduler.js – 라이브러리 스케줄 목록 로딩 및 관리 UI 전용 모듈
 import { state } from './state.js';
+import { openFolderWatch, watchSummary } from './folder_watch.js';
 import * as api from './api.js';
 import { bindFloatingMenuOutsideClose, hideFloatingMenu, positionMenuAtElement } from './context_menu_manager.js';
 import { hydrateCronHelperFromCron, onCronHelperModeChange, updateCronHelperSummary, applyCronHelperToInput } from './cron_helper.js';
@@ -78,7 +79,7 @@ function buildScheduleRow(lib) {
 
   return `
     <tr data-library-id="${lib.id}" class="${scheduleEnabled ? '' : 'schedule-row-disabled'}" style="border-bottom: 1px solid rgba(255,255,255,0.05); hover: background: rgba(255,255,255,0.02);">
-      <td style="padding: 1rem; font-weight: 600; color: var(--app-text-primary);">${lib.name}</td>
+      <td style="padding: 1rem; font-weight: 600; color: var(--app-text-primary);">${escapeHtml(lib.name)}<span data-watch-status>${watchSummary(lib.watch)}</span>${lib.watch ? `<button type="button" data-role="folder-watch-settings" data-library-id="${lib.id}" style="margin-top:6px">폴더 감시 설정</button>` : ''}</td>
       <td class="schedule-path-cell">${buildCompactPaths(lib.physical_path)}</td>
       <td style="padding: 1rem; text-align: center;">
         <div style="position: relative; display: inline-block; width: 44px; height: 24px; vertical-align: middle;">
@@ -130,6 +131,12 @@ function initScheduleActionDelegation() {
   if (window.__scheduleActionDelegationBound) return;
 
   document.addEventListener('click', (event) => {
+    const watchButton = event.target.closest?.('[data-role="folder-watch-settings"]');
+    if (watchButton) {
+      event.preventDefault();event.stopImmediatePropagation();
+      openFolderWatch(Number(watchButton.dataset.libraryId), state.currentLibraryType, loadLibrarySchedules);
+      return;
+    }
     const configBtn = event && event.target && typeof event.target.closest === 'function'
       ? event.target.closest('button[data-role="schedule-config"]')
       : null;
@@ -291,6 +298,8 @@ export async function refreshLibraryScheduleStatuses() {
       }
 
       const statusCell = row.querySelector('[data-role="schedule-status"]');
+      const watchStatus = row.querySelector('[data-watch-status]');
+      if (watchStatus) watchStatus.innerHTML = watchSummary(lib.watch);
       const nextStatusHtml = buildStatusBadge(lib.scan_status);
       if (statusCell && statusCell.innerHTML !== nextStatusHtml) {
         statusCell.innerHTML = nextStatusHtml;
@@ -507,4 +516,3 @@ export async function saveScanSettingsFromModal() {
   }
 }
 window.saveScanSettingsFromModal = saveScanSettingsFromModal;
-

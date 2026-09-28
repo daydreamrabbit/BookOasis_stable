@@ -1,52 +1,106 @@
-version: "3.8"
+# Portable defaults. Keep host-specific paths/devices/DB services in .env or docker-compose.override.yml.
+x-bookoasis-image: &bookoasis-image
+  image: bookoasis:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+x-bookoasis-volumes: &bookoasis-volumes
+  - type: bind
+    source: ./db
+    target: /app/db
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ./covers
+    target: /app/covers
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ./cache
+    target: /app/cache
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ./plugins
+    target: /app/plugins
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ${RCLONE_CONFIG_DIR:-./rclone}
+    target: /app/rclone
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ./logs
+    target: /app/logs
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ./custom_fonts
+    target: /app/static/fonts/custom
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ${BOOKS_DIR:-./books}
+    target: /book
+    bind:
+      create_host_path: false
+      propagation: rslave
+  - type: bind
+    source: ${COMICS_DIR:-./comics}
+    target: /data/comics
+    read_only: true
+    bind:
+      create_host_path: false
+      propagation: rslave
 
 services:
+  bookoasis-volume-check:
+    <<: *bookoasis-image
+    container_name: bookoasis_volume_check
+    restart: unless-stopped
+    volumes: *bookoasis-volumes
+    entrypoint: ["sh", "-c", "while :; do sleep 3600; done"]
+    healthcheck:
+      test:
+        ["CMD", "python3", "/app/tools/check_volume_paths.py", "/app/db", "/app/covers", "/app/cache", "/app/plugins", "/app/rclone", "/app/logs", "/app/static/fonts/custom", "/book", "/data/comics"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+      start_period: 0s
+
   bookoasis:
-    image: ghcr.io/leeyj/bookoasis:stable
+    <<: *bookoasis-image
     container_name: bookoasis
     restart: unless-stopped
-    stop_grace_period: 1m  # 종료 시 DB WAL 체크포인트 및 캐시 Flush 완료를 위한 유예 시간
+    stop_grace_period: 1m
     ports:
-      - "5930:5930"
-    volumes:
-      # 설정 및 데이터베이스 영구 소장용 바인딩
-      - ./db:/app/db
-      - ./covers:/app/covers
-      - ./cache:/app/cache
-      - ./plugins:/app/plugins
-      # ── "Drive에서 복사해오기" 기능을 쓰려면 자신의 rclone.conf를 아래 경로로 마운트하세요 ──
-      # (rclone 바이너리는 이미지에 내장되어 있어 별도 설치가 필요 없습니다. 파일만 준비하세요.
-      #  rclone이 OAuth 토큰을 갱신하며 파일에 다시 쓸 수 있으므로 :ro로 마운트하지 마세요)
-      # - ./rclone.conf:/app/rclone/rclone.conf
-    # ── GPU 하드웨어 트랜스코딩을 쓰고 싶다면 아래 중 서버 환경에 맞는 항목의 주석을 해제하세요 ──
-    # (기본은 둘 다 비활성화 상태입니다. devices/gpu 설정이 가리키는 장치가 호스트에
-    #  실제로 없으면 docker-compose up 자체가 시작 실패하니, 있는 것만 해제하세요.)
-    #
-    # [Intel iGPU (Iris 등) - VAAPI]
-    # devices:
-    #   - /dev/dri:/dev/dri
-    #
-    # [NVIDIA GPU (P600 등) - NVENC. 호스트에 NVIDIA 드라이버 + nvidia-container-toolkit 설치 필요]
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+      - "${BOOKOASIS_PORT:-5930}:5930"
+    volumes: *bookoasis-volumes
     env_file:
       - .env
     environment:
-      - PORT=5930
-      - REDIS_URL=redis://redis:6379/0
-      - LOG_ARCHIVE_MAX_FILES=10
-      - LOG_ARCHIVE_MAX_MB=200
-      # - TZ=Asia/Seoul  # (옵션) 스캔완료시각 등 DB에 기록되는 모든 타임스탬프의 기준 시간대를 바꿉니다.
-      #   주석을 해제하지 않으면 컨테이너는 UTC로 동작하며, 화면에는 브라우저 로컬시간 기준으로
-      #   표시되어 실제 시각과 어긋나 보입니다. 자동 스캔 "크론 예약 시각"은 이 값과 무관하게
-      #   웹 UI 설정 > 일반 > 시스템 타임존을 따로 따르므로, 시간을 맞추려면 두 곳 모두 서울로 설정하세요.
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      PORT: "5930"
+      TZ: ${TZ:-Asia/Seoul}
+      REDIS_URL: redis://redis:6379/0
+      LOG_ARCHIVE_MAX_FILES: "10"
+      LOG_ARCHIVE_MAX_MB: "200"
+      DB_ENGINE: ${DB_ENGINE:-sqlite}
     depends_on:
-      - redis
+      bookoasis-volume-check:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test:
+        ["CMD", "python3", "/app/tools/check_volume_paths.py", "/app/db", "/app/covers", "/app/cache", "/app/plugins", "/app/rclone", "/app/logs", "/app/static/fonts/custom", "/book", "/data/comics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 2m
 
   redis:
     image: redis:7-alpine

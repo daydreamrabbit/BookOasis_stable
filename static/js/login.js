@@ -1,6 +1,44 @@
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 256;
 
+async function handleInitialSetup(e) {
+    e.preventDefault();
+    const username = document.getElementById('setup-username').value.trim();
+    const password = document.getElementById('setup-password').value;
+    const confirmPassword = document.getElementById('setup-password-confirm').value;
+    const errDiv = document.getElementById('setup-error');
+    const errText = document.getElementById('setup-error-text');
+    errDiv.style.display = 'none';
+
+    if (username.length > MAX_USERNAME_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+        errText.innerText = '아이디 또는 비밀번호가 너무 깁니다.';
+        errDiv.style.display = 'flex';
+        return;
+    }
+    if (password.length < 4 || password !== confirmPassword) {
+        errText.innerText = password.length < 4 ? '비밀번호는 4자리 이상이어야 합니다.' : '비밀번호 확인이 일치하지 않습니다.';
+        errDiv.style.display = 'flex';
+        return;
+    }
+
+    try {
+        const res = await fetch('/setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, confirm_password: confirmPassword })
+        });
+        const data = await res.json();
+        if (data.success) window.location.href = '/';
+        else {
+            errText.innerText = data.error || '관리자 계정 생성에 실패했습니다.';
+            errDiv.style.display = 'flex';
+        }
+    } catch (err) {
+        errText.innerText = '서버 연결 오류가 발생했습니다.';
+        errDiv.style.display = 'flex';
+    }
+}
+
 async function handleLogin(e) {
     e.preventDefault();
     const usernameInput = document.getElementById('username').value.trim();
@@ -84,7 +122,7 @@ async function handleChangePassword(e) {
     }
 
     if (newPw.trim() === 'admin') {
-        errText.innerText = '새 비밀번호는 초기 비밀번호(admin)와 다르게 입력해 주세요.';
+        errText.innerText = '새 비밀번호는 초기 비밀번호와 다르게 입력해 주세요.';
         errDiv.style.display = 'flex';
         return;
     }

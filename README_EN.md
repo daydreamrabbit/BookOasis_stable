@@ -13,6 +13,8 @@ An ultra-lightweight, high-performance personal media server designed to let you
 
 The server provides a light and fast runtime environment by minimizing third-party dependencies and leveraging Python's standard libraries.
 
+This repository is maintained as an independent distribution that selectively adopts upstream changes. Docker builds the current source directly instead of layering local changes over an upstream GHCR image.
+
 ---
 
 ## Key Features
@@ -72,26 +74,24 @@ For detailed environment configuration and installation methods, please refer to
 
 ### Easy Operation (Docker)
 
-1. **Copy configuration template**
-   Copy the provided override template file for your local environment configuration.
+1. **Create the environment file**
    ```bash
-   cp docker-compose.override.example.yml docker-compose.override.yml
+   cp .env.example .env
    ```
 
-2. **Modify volume path**
-   Open the generated `docker-compose.override.yml` and modify the host path to point to your actual book/comic library directory.
+2. **Check the library paths**
+   Edit the `/mnt/book` paths in `docker-compose.yml` for your server.
    ```yaml
-   services:
-     bookoasis:
-       volumes:
-         - /path/to/your/comics:/data/comics:ro
+   volumes:
+     - /path/to/your/books:/book
    ```
 
 3. **Run container**
    ```bash
    docker compose up -d --build
    ```
-> **Tip:** Since `docker-compose.override.yml` is listed in `.gitignore`, your local path configuration won't be overwritten or cause conflicts when you pull updates from the remote repository.
+
+MariaDB, Redis, and the idempotent database grant repair job are included in this single Compose file. Run the same command after `git pull` to rebuild changed source.
 
 > Per security policy, operator-only deployment/update procedures are maintained in private internal documentation.
 
@@ -134,7 +134,7 @@ This drastically minimizes SQLite disk write operations, preventing database cor
 
 ### 🐳 For Docker Users (Zero-Configuration)
 - `docker-compose.yml` natively integrates a `redis:7-alpine` container service.
-- No need to configure `.env`. Running `docker compose up -d` automatically spins up the Redis container and securely hooks it up in an isolated bridge network.
+- Running `docker compose up -d --build` starts the local BookOasis image, Redis, and MariaDB together.
 - `stop_grace_period` is set to `1m` (1 minute) to ensure Gunicorn and Scanner Workers safely write cached progress data back to SQLite on shutdown.
 
 ### 🖥️ For Native Python Users (Linux / Windows)
@@ -162,7 +162,8 @@ In addition to the default file-based **SQLite** engine, BookOasis officially su
 
 ### 🚀 Switching to MariaDB
 1. **Docker Users (Automated)**
-   - Add `DB_ENGINE=mariadb` and connection details to `docker-compose.override.yml`. Upon container startup, required databases (`media_general`, `media_adult`, `media_audiobook`) and schemas are created automatically.
+   - The default `docker-compose.yml` already enables MariaDB and creates the required media databases and grants.
+   - To change database passwords, set `MARIADB_ROOT_PASSWORD` and `MARIADB_PASSWORD` in `.env` before the first startup.
    - Detailed Guide: [Docker MariaDB Migration Guide (docs/move_to_mariadb.md)](./docs/move_to_mariadb.md)
 
 2. **1-Click Data Migration (SQLite ➔ MariaDB)**

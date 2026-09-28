@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Repair the missing initial admin account on affected MariaDB installs.
+"""Repair a missing initial administrator on affected MariaDB installs.
 
 This tool only repairs the known first-install failure where all three users
 tables are empty. It never resets or overwrites an existing account.
 
 Usage:
   python tools/repair_mariadb_admin.py
-  python tools/repair_mariadb_admin.py --apply
+  python tools/repair_mariadb_admin.py --apply --username my-owner
 """
 
 import argparse
+import getpass
 import sys
 from pathlib import Path
 
@@ -22,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import database
 
 
-DB_TYPES = ("general", "adult", "audiobook")
+DB_TYPES = ("general", "adult", "audiobook", "video")
 
 
 def inspect_users(db_types=DB_TYPES):
@@ -34,10 +35,9 @@ def inspect_users(db_types=DB_TYPES):
             cursor.execute(
                 """
                 SELECT COUNT(*) AS user_count,
-                       SUM(CASE WHEN username = %s THEN 1 ELSE 0 END) AS admin_count
+                       SUM(CASE WHEN role = 'admin' THEN 1 ELSE 0 END) AS admin_count
                 FROM users
-                """,
-                ("admin",),
+                """
             )
             row = cursor.fetchone()
             states.append(
@@ -60,9 +60,9 @@ def is_known_seed_failure(states):
     )
 
 
-def create_initial_admin(db_types=DB_TYPES):
+def create_initial_admin(username, password, db_types=DB_TYPES):
     connections = []
-    password_hash = generate_password_hash("admin")
+    password_hash = generate_password_hash(password)
     try:
         for db_type in db_types:
             conn = database.get_connection(db_type)
@@ -77,10 +77,11 @@ def create_initial_admin(db_types=DB_TYPES):
                 """
                 INSERT INTO users (
                     username, password_hash, role, is_default_password,
-                    has_adult_access, has_audiobook_access
-                ) VALUES (%s, %s, 'admin', 1, 1, 1)
+                    has_adult_access, has_audiobook_access, has_video_access,
+                    has_download_access
+                ) VALUES (%s, %s, 'admin', 0, 1, 1, 1, 1)
                 """,
-                ("admin", password_hash),
+                (username, password_hash),
             )
 
         for _, conn in connections:
@@ -103,20 +104,21 @@ def print_report(states, apply_mode):
     for state in states:
         print(
             f"- {state['db_type']}: users={state['user_count']}, "
-            f"username_admin={state['admin_count']}"
+            f"role_admin={state['admin_count']}"
         )
     print("=" * 72)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Restore admin/admin when MariaDB first-install user seeding failed"
+        description="Create a chosen initial administrator when MariaDB users tables are empty"
     )
     parser.add_argument(
         "--apply",
         action="store_true",
         help="create the initial account (default: dry-run)",
     )
+    parser.add_argument("--username", help="administrator username (prompted when omitted)")
     args = parser.parse_args(argv)
 
     if not database.is_mariadb_mode():
@@ -136,17 +138,27 @@ def main(argv=None):
         return 1
 
     if not args.apply:
-        print("[DRY-RUN] Recovery is applicable. Re-run with --apply to create admin/admin.")
+        print("[DRY-RUN] Recovery is applicable. Re-run with --apply and choose an administrator account.")
         return 0
 
+    username = (args.username or input("Administrator username: ")).strip()
+    if not username:
+        print("[ERROR] Administrator username is required.")
+        return 2
+    password = getpass.getpass("Administrator password: ")
+    confirm = getpass.getpass("Confirm password: ")
+    if len(password) < 4 or password != confirm:
+        print("[ERROR] Passwords must match and contain at least 4 characters.")
+        return 2
+
     try:
-        created = create_initial_admin()
+        created = create_initial_admin(username, password)
     except Exception as exc:
         print(f"[ERROR] Recovery failed and open transactions were rolled back: {exc}")
         return 2
 
     print(f"[APPLY] Initial admin created in: {', '.join(created)}")
-    print("[APPLY] Sign in with admin/admin and change the password immediately.")
+    print(f"[APPLY] Sign in with the administrator account: {username}")
     return 0
 
 

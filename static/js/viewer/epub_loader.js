@@ -1,6 +1,6 @@
 /* epub_loader.js – EPUB 챕터 비동기 로더, 이미지 사전디코딩 및 플레이스홀더 복구 엔진 */
 import { state } from '../state.js';
-import { highlightEpubTocChapter } from './txt_toc.js';
+import { highlightEpubTocChapter } from './txt_toc.js?rev=20260922-reader-session-v45';
 import { applyAnnotationsToChunkElement } from './annotation_render.js';
 
 const epubChapterFetchInFlight = new Set();
@@ -106,6 +106,12 @@ export function requestEpubChapterContent(txtChunks, chapterIdx, options = {}) {
 
   const force = !!options.force;
   const updateDom = options.updateDom !== false;
+  const requestedBookId = String(state.activeBookId || '');
+  const requestedSession = String(document.getElementById('txt-content-area')?.dataset.viewerSession || '');
+  const isCurrentViewer = () => (
+    String(state.activeBookId || '') === requestedBookId
+    && String(document.getElementById('txt-content-area')?.dataset.viewerSession || '') === requestedSession
+  );
   const existing = txtChunks[idx];
   if (!force && existing !== null && existing !== 'LOADING_PENDING') {
     return Promise.resolve(existing);
@@ -127,6 +133,7 @@ export function requestEpubChapterContent(txtChunks, chapterIdx, options = {}) {
   return fetch(`/api/media/epub/chapter?db_type=${state.currentLibraryType}&book_id=${state.activeBookId}&chapter_idx=${idx}`)
     .then(r => r.json())
     .then(async d => {
+      if (!isCurrentViewer()) return null;
       const content = (d && d.content) ? d.content : '<p>내용이 없습니다.</p>';
       txtChunks[idx] = content;
       epubChapterRetryState.delete(idx);
@@ -137,7 +144,7 @@ export function requestEpubChapterContent(txtChunks, chapterIdx, options = {}) {
         const contentArea = document.getElementById('txt-content-area');
         if (contentArea) {
           const chunkEl = contentArea.querySelector(`.txt-scroll-chunk[data-idx="${idx}"]`);
-          if (chunkEl) {
+        if (chunkEl && isCurrentViewer()) {
             chunkEl.innerHTML = content;
             applyAnnotationsToChunkElement(chunkEl, idx, { format: 'epub' });
           }
@@ -171,6 +178,13 @@ export function requestEpubChaptersBatch(txtChunks, chapterIndices) {
     return Promise.resolve();
   }
 
+  const requestedBookId = String(state.activeBookId || '');
+  const requestedSession = String(document.getElementById('txt-content-area')?.dataset.viewerSession || '');
+  const isCurrentViewer = () => (
+    String(state.activeBookId || '') === requestedBookId
+    && String(document.getElementById('txt-content-area')?.dataset.viewerSession || '') === requestedSession
+  );
+
   targets.forEach(idx => {
     epubChapterFetchInFlight.add(idx);
     txtChunks[idx] = 'LOADING_PENDING';
@@ -185,6 +199,7 @@ export function requestEpubChaptersBatch(txtChunks, chapterIndices) {
   return fetch(url)
     .then(r => r.json())
     .then(async d => {
+      if (!isCurrentViewer()) return;
       const chapters = (d && Array.isArray(d.chapters)) ? d.chapters : [];
       const receivedIdxSet = new Set();
 
@@ -202,7 +217,7 @@ export function requestEpubChaptersBatch(txtChunks, chapterIndices) {
         const contentArea = document.getElementById('txt-content-area');
         if (contentArea) {
           const chunkEl = contentArea.querySelector(`.txt-scroll-chunk[data-idx="${idx}"]`);
-          if (chunkEl) {
+        if (chunkEl && isCurrentViewer()) {
             chunkEl.innerHTML = content;
             applyAnnotationsToChunkElement(chunkEl, idx, { format: 'epub' });
           }

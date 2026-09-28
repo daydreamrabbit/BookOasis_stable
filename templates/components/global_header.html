@@ -7,6 +7,9 @@
     <button id="btn-sidebar-toggle-desktop" class="btn-sidebar-toggle-desktop" data-role="desktop-sidebar-toggle" title="사이드바 접기/펼치기" style="background: transparent; border: none; color: var(--app-text-muted); font-size: 1.1rem; cursor: pointer; padding: 0.4rem; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; outline: none; flex-shrink: 0;">
         <i class="fa-solid fa-bars"></i>
     </button>
+    <button id="btn-mobile-sidebar-toggle" class="btn-mobile-sidebar-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false" aria-controls="sidebar-collapsible-content" title="메뉴 열기">
+        <i class="fa-solid fa-bars" aria-hidden="true"></i>
+    </button>
 
     <!-- 현재 선택된 카테고리 정보(ID/경로/시리즈·도서 수) 팝오버 트리거: 마우스 오버 또는 클릭 -->
     <button id="btn-category-info" class="btn-category-info" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="category-info-popover" title="현재 카테고리 정보">
@@ -28,12 +31,22 @@
             <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
             <span data-i18n="common.search" class="sr-only">검색</span>
         </button>
+        <section id="library-search-preview" class="library-search-preview" hidden
+            aria-label="검색 미리보기" aria-live="polite"></section>
     </div>
 
     <div id="group-mode-toggle-group" class="library-toggle-group library-toggle-group--compact">
         <button class="btn-toggle active" id="btn-group-default" data-role="grouping-mode-toggle" data-group-mode="default" data-i18n="header.group_mode_default">기본</button>
         <button class="btn-toggle" id="btn-group-author" data-role="grouping-mode-toggle" data-group-mode="author" data-i18n="header.group_mode_author">작가별</button>
     </div>
+
+    <button id="btn-toggle-library-types" data-role="library-type-collapse" class="btn-toggle library-type-collapse-toggle"
+        type="button" aria-expanded="false" aria-controls="library-type-toggle-group"
+        data-i18n-title="header.library_types_expand" title="미디어 종류 펼치기">
+        <span id="mobile-library-type-label" class="mobile-library-type-label">일반 도서</span>
+        <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+        <span data-i18n="header.library_types_expand" class="sr-only">미디어 종류 펼치기</span>
+    </button>
 
     <!-- 라이브러리 타입(세션) 탭: 페이지의 1차 내비게이션이자 "지금 어느 세션인지" 보여주는 유일한 지표라
          플러그인 화면을 포함해 어떤 뷰에서도 숨기지 않는다 (view_manager.js 참고) -->
@@ -85,33 +98,38 @@
             <i class="fa-solid fa-sort-alpha-down"></i> <span data-i18n="header.sort_asc" class="sr-only">가나다 오름차순</span>
         </button>
     </div>
-
-    <!-- 환경설정/계정: 어떤 뷰에서도 숨기지 않는 상시 그룹 (view_manager.js가 .library-controls는 숨겨도 이 그룹은 건드리지 않음) -->
-    <div class="library-controls-persistent">
-        <!-- 환경설정: 사이드바 하단에 있던 항목을 상단 아이콘으로 이동 (사이드바 클릭 위임 로직 재사용) -->
-        <button id="category-settings" class="btn-header-icon" data-role="sidebar-category-static" data-category-id="settings"
-            data-i18n-title="sidebar.settings" title="환경설정">
-            <i class="fa-solid fa-gear" aria-hidden="true"></i>
-            <span data-i18n="sidebar.settings" class="sr-only">환경설정</span>
-        </button>
-
-        <!-- 계정: 사이드바 하단의 사용자 프로필/로그아웃을 상단 아이콘 + 팝오버로 이동 -->
-        <div class="account-menu-wrap">
-            <button id="btn-account-menu" class="btn-header-icon" type="button"
-                aria-label="계정 메뉴" aria-expanded="false" aria-controls="account-menu-popover" title="계정">
-                <i class="fa-solid fa-circle-user" aria-hidden="true"></i>
-            </button>
-            <section id="account-menu-popover" class="account-menu-popover" hidden aria-live="polite">
-                <div class="account-menu-user">
-                    <i class="fa-solid fa-circle-user" aria-hidden="true"></i>
-                    <span id="session-username-display">-</span>
-                </div>
-                <a href="/logout" data-i18n-title="sidebar.logout_title" title="로그아웃" class="account-menu-logout">
-                    <i class="fa-solid fa-power-off" aria-hidden="true"></i>
-                    <span data-i18n="sidebar.logout_title">로그아웃</span>
-                </a>
-            </section>
+        <!-- 환경설정/계정은 오른쪽 액션과 같은 묶음에 둬서 중간 폭에서도 단독 줄바꿈되지 않게 한다. -->
+        <div class="library-controls-persistent">
+            <!-- 계정: 사이드바 하단의 사용자 프로필/로그아웃을 상단 아이콘 + 팝오버로 이동 -->
+            <div class="account-menu-wrap">
+                <button id="btn-account-menu" class="btn-header-icon account-menu-trigger" type="button"
+                    aria-label="계정 메뉴" aria-expanded="false" aria-controls="account-menu-popover" title="계정">
+                    <span class="user-avatar user-avatar--header" data-role="account-avatar" data-avatar="oasis" aria-hidden="true"><i class="fa-solid fa-book-open"></i></span>
+                    <span id="account-display-name" class="account-menu-trigger-name">-</span>
+                    <i class="fa-solid fa-chevron-down account-menu-trigger-chevron" aria-hidden="true"></i>
+                </button>
+                <section id="account-menu-popover" class="account-menu-popover" hidden aria-live="polite">
+                    <div class="account-menu-user">
+                        <span class="user-avatar user-avatar--menu" data-role="account-avatar" data-avatar="oasis" aria-hidden="true"><i class="fa-solid fa-book-open"></i></span>
+                        <span class="account-menu-user-copy">
+                            <strong id="account-popover-display-name">-</strong>
+                            <small id="session-username-display">-</small>
+                        </span>
+                    </div>
+                    <button type="button" class="account-menu-profile" data-role="account-menu-profile">
+                        <i class="fa-solid fa-chart-simple" aria-hidden="true"></i>
+                        <span>내 프로필</span>
+                    </button>
+                    <button type="button" class="account-menu-settings" data-role="account-menu-settings">
+                        <i class="fa-solid fa-gear" aria-hidden="true"></i>
+                        <span data-i18n="sidebar.settings">환경설정</span>
+                    </button>
+                    <a href="/logout" data-i18n-title="sidebar.logout_title" title="로그아웃" class="account-menu-logout">
+                        <i class="fa-solid fa-power-off" aria-hidden="true"></i>
+                        <span data-i18n="sidebar.logout_title">로그아웃</span>
+                    </a>
+                </section>
+            </div>
         </div>
-    </div>
     </div>
 </div>

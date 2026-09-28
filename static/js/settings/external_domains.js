@@ -2,7 +2,7 @@
 //
 // 앱은 어떤 외부 도메인도 기본 제공/추천하지 않는다. 여기서 등록한 도메인만 플러그인의
 // 웹뷰/다운로드 API(plugin_webview_api.js)가 사용할 수 있다 — 전역 단일 목록이며 관리자만
-// 추가/삭제할 수 있다(등록/책임은 관리자 본인). 일반 사용자는 조회만 가능하다.
+// 조회/추가/삭제할 수 있다(등록/책임은 관리자 본인).
 
 function isAdminUser() {
   return !!(window.currentUser && window.currentUser.role === 'admin');
@@ -29,6 +29,7 @@ function invalidateCache() {
 }
 
 export async function loadExternalDomainsSettings() {
+  if (!isAdminUser()) return;
   const listEl = document.getElementById('external-domains-list');
   if (!listEl) return;
 

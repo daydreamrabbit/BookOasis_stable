@@ -1,16 +1,45 @@
 import { state } from '../state.js';
 import { viewerStorage } from './storage.js';
-import { getTxtPageMaxScroll, snapTxtPageScrollLeft } from './txt_page_utils.js';
+import { getTxtPageMaxScroll, getTxtPageScrollLeft, setTxtPageScrollLeft, snapTxtPageScrollLeft } from './txt_page_utils.js?rev=20260922-reader-session-v45';
 
 let overlayVisibilityListenerBound = false;
 let tocEntryRefs = [];
 let activeTocIdx = -1;
+let pinnedTocIdx = -1;
 let isTocPanelOpen = false;
 let activeTocTab = 'toc';
 let bookmarksCache = [];
 let bookmarksLoadedForBookId = null;
 let currentOnJumpToChapter = null;
+let currentResolveLocation = null;
 let lastKnownChunkIdx = 0;
+let activateTocTab = null;
+let readingNotesRequestSeq = 0;
+let tocPanelBookId = null;
+let pendingTocTab = null;
+
+function _notifyViewerSidePanelVisibility(isOpen) {
+  document.dispatchEvent(new CustomEvent('viewer-overlay-visibility-changed', {
+    detail: { isOpen: Boolean(isOpen), source: 'toc-side-panel' },
+  }));
+}
+
+function _notifyViewerSidePanelState(panel = null) {
+  document.dispatchEvent(new CustomEvent('viewer-side-panel-state-changed', {
+    detail: { panel },
+  }));
+}
+
+function _closeEpubTocPanel({ notify = true } = {}) {
+  if (!isTocPanelOpen) return false;
+  isTocPanelOpen = false;
+  _applyTocPanelState(document.getElementById('epub-toc-container'), true);
+  if (notify) {
+    _notifyViewerSidePanelVisibility(false);
+    _notifyViewerSidePanelState(null);
+  }
+  return true;
+}
 
 function _debugToc() {
   // Debug hook reserved for temporary TOC troubleshooting.
@@ -41,7 +70,7 @@ function _applyTocPanelState(container, shouldShowButton) {
 
   const shouldOpen = !!shouldShowButton && !!isTocPanelOpen;
   container.style.display = 'block';
-  container.style.right = shouldOpen ? '0px' : '-320px';
+  container.style.right = shouldOpen ? '0px' : '-380px';
   container.style.opacity = shouldOpen ? '1' : '0';
   container.style.visibility = shouldOpen ? 'visible' : 'hidden';
   container.style.pointerEvents = shouldOpen ? 'auto' : 'none';
@@ -52,7 +81,7 @@ function _applyTocPanelState(container, shouldShowButton) {
   const btn = document.getElementById('epub-toc-btn');
   if (btn) {
     btn.style.right = shouldOpen
-      ? 'calc(320px + env(safe-area-inset-right, 0px))'
+      ? 'calc(380px + env(safe-area-inset-right, 0px))'
       : 'calc(20px + env(safe-area-inset-right, 0px))';
   }
 
@@ -63,29 +92,28 @@ function _applyTocPanelState(container, shouldShowButton) {
 }
 
 function _getTocHostElement() {
-  return document.getElementById('media-viewer-modal') || document.body;
+  // viewer modal은 데스크톱에서 transform이 적용된 containing block이 될 수 있어
+  // 그 안의 position:fixed 버튼이 실제 화면 오른쪽이 아니라 300px가량 안쪽에 놓인다.
+  // 목차 패널과 버튼은 viewport 기준 UI이므로 body에 직접 붙인다.
+  return document.body;
 }
 
 function _applyTocItemVisualState(li, anchorEl, isActive) {
   if (!li || !anchorEl) return;
 
   if (isActive) {
-    li.style.background = 'rgba(168, 85, 247, 0.18)';
-    li.style.border = '1px solid rgba(192, 132, 252, 0.45)';
-    li.style.borderRadius = '8px';
-    li.style.paddingTop = '6px';
-    li.style.paddingBottom = '6px';
+    li.style.background = 'var(--viewer-panel-soft, #ededed)';
+    li.style.color = 'var(--viewer-theme-text, #161616)';
+    li.style.fontWeight = '700';
     anchorEl.style.opacity = '1';
-    anchorEl.style.color = '#f5d0fe';
+    anchorEl.style.color = 'var(--viewer-theme-text, #161616)';
     anchorEl.style.fontWeight = '700';
   } else {
     li.style.background = 'transparent';
-    li.style.border = '1px solid transparent';
-    li.style.borderRadius = '8px';
-    li.style.paddingTop = '';
-    li.style.paddingBottom = '';
+    li.style.color = 'var(--viewer-panel-muted, #4a4a4a)';
+    li.style.fontWeight = '400';
     anchorEl.style.opacity = '0.85';
-    anchorEl.style.color = 'inherit';
+    anchorEl.style.color = 'var(--viewer-panel-muted, #4a4a4a)';
     anchorEl.style.fontWeight = '400';
   }
 }
@@ -94,6 +122,12 @@ function _resolveBestTocIndex(chapterIdx) {
   const target = Number.isFinite(chapterIdx) ? chapterIdx : parseInt(chapterIdx, 10);
   if (!Number.isFinite(target)) return -1;
   if (!Array.isArray(tocEntryRefs) || tocEntryRefs.length === 0) return -1;
+
+  // 0) 같은 스파인 챕터 안에 목차 항목이 여러 개인 경우(예: "제2부" + 하위 "소인들 곁에서" 모두
+  //    page-63.html), 챕터 번호만으로는 첫 항목(부모)만 골라지므로 사용자가 직접 클릭한 항목을 우선한다.
+  if (pinnedTocIdx >= 0 && pinnedTocIdx < tocEntryRefs.length && tocEntryRefs[pinnedTocIdx].chapterIdx === target) {
+    return pinnedTocIdx;
+  }
 
   // 1) Exact chapter index match.
   const exact = tocEntryRefs.findIndex(ref => ref.chapterIdx === target);
@@ -152,30 +186,57 @@ export function highlightEpubTocChapter(chapterIdx, options = {}) {
   }
 }
 
+export function updateEpubTocPageNumbers(chapterStarts = []) {
+  tocEntryRefs.forEach((ref) => {
+    if (!ref.pageEl) return;
+    const page = Number(chapterStarts[ref.chapterIdx]);
+    ref.pageEl.textContent = Number.isFinite(page) && page > 0 ? String(Math.round(page)) : '–';
+  });
+}
+
 function syncEpubTocVisibility() {
   const container = document.getElementById('epub-toc-container');
   const btn = document.getElementById('epub-toc-btn');
-  const overlayMenu = document.getElementById('comic-overlay-menu');
-  // 오버레이는 navigation.js에서 inline style('flex'/'none')로만 토글한다.
-  // style 값이 비어 있을 때를 열린 상태로 오인하지 않도록 엄격 비교한다.
-  const isOverlayOpen = !!overlayMenu && overlayMenu.style.display === 'flex';
   const format = (state.currentViewerFormat || '').toLowerCase();
-  // TXT는 실제 목차가 없지만 북마크 탭은 여전히 필요하므로 패널 자체는 EPUB과 동일하게 노출한다.
-  const shouldShow = (format === 'epub' || format === 'txt') && isOverlayOpen;
+  const shouldShow = format === 'epub' || format === 'txt';
 
   if (btn) {
-    btn.style.display = shouldShow ? 'flex' : 'none';
-  }
-
-  if (!shouldShow) {
-    isTocPanelOpen = false;
+    btn.style.display = 'none';
   }
   _applyTocPanelState(container, shouldShow);
   _debugToc('sync-visibility', {
-    isOverlayOpen,
     format,
     shouldShow,
   });
+}
+
+export function openEpubTocPanel(tab = 'toc') {
+  const format = (state.currentViewerFormat || '').toLowerCase();
+  if (format !== 'epub' && format !== 'txt') {
+    window.showToast?.('이 형식에는 목차나 독서노트가 없습니다.', 'info');
+    return;
+  }
+  const container = document.getElementById('epub-toc-container');
+  // EPUB 본문과 목차는 비동기로 만들어진다. 로딩 중 먼저 누른 요청도 버리지
+  // 않고 현재 책의 패널 렌더가 끝나는 즉시 실행한다.
+  if (!container || Number(tocPanelBookId) !== Number(state.activeBookId)) {
+    pendingTocTab = tab;
+    _notifyViewerSidePanelState(tab === 'notes' ? 'notes' : 'toc');
+    return;
+  }
+  pendingTocTab = null;
+  if (isTocPanelOpen && activeTocTab === tab) {
+    _closeEpubTocPanel();
+    return;
+  }
+  document.dispatchEvent(new CustomEvent('viewer-side-panel-opening', {
+    detail: { source: 'toc-side-panel' },
+  }));
+  isTocPanelOpen = true;
+  if (typeof activateTocTab === 'function') activateTocTab(tab);
+  _applyTocPanelState(container, true);
+  _notifyViewerSidePanelVisibility(true);
+  _notifyViewerSidePanelState(tab === 'notes' ? 'notes' : 'toc');
 }
 
 function ensureOverlayVisibilityListener() {
@@ -188,6 +249,26 @@ function ensureOverlayVisibilityListener() {
     });
     syncEpubTocVisibility();
   });
+  document.addEventListener('viewer-side-panel-opening', (event) => {
+    if (event.detail?.source === 'toc-side-panel' || !isTocPanelOpen) return;
+    _closeEpubTocPanel({ notify: false });
+  });
+  document.addEventListener('viewer-chrome-will-hide', () => _closeEpubTocPanel({ notify: false }));
+  document.addEventListener('viewer-closed', () => {
+    pendingTocTab = null;
+    tocPanelBookId = null;
+    isTocPanelOpen = false;
+  });
+  const handleTocOutside = (event) => {
+    if (!isTocPanelOpen) return;
+    const container = document.getElementById('epub-toc-container');
+    if (!container || container.contains(event.target) || event.target.closest('.ridi-viewer-toolbar-top')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    document.dispatchEvent(new CustomEvent('viewer-request-chrome-hide'));
+  };
+  document.addEventListener('pointerdown', handleTocOutside, true);
+  document.addEventListener('click', handleTocOutside, true);
   document.addEventListener('fullscreenchange', () => {
     isTocPanelOpen = false;
     _debugToc('event:fullscreenchange');
@@ -198,14 +279,24 @@ function ensureOverlayVisibilityListener() {
     _debugToc('event:webkitfullscreenchange');
     syncEpubTocVisibility();
   });
+  const refreshOpenReadingNotes = () => {
+    if (!isTocPanelOpen || activeTocTab !== 'notes') return;
+    const notesPanel = document.getElementById('epub-toc-tab-notes');
+    if (notesPanel && notesPanel.style.display !== 'none') fetchAndRenderReadingNotes(notesPanel);
+  };
+  document.addEventListener('viewer-annotations-changed', refreshOpenReadingNotes);
+  document.addEventListener('viewer-bookmarks-changed', refreshOpenReadingNotes);
+  document.addEventListener('viewer-pagination-changed', refreshOpenReadingNotes);
 }
 
-export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
+export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter, resolveLocation }) {
   currentOnJumpToChapter = onJumpToChapter;
+  currentResolveLocation = typeof resolveLocation === 'function' ? resolveLocation : null;
   const currentFormat = (state.currentViewerFormat || '').toLowerCase();
   let container = document.getElementById('epub-toc-container');
   let btn = document.getElementById('epub-toc-btn');
   const hostEl = _getTocHostElement();
+  tocPanelBookId = state.activeBookId;
 
   ensureOverlayVisibilityListener();
   _debugToc('render-start', {
@@ -220,8 +311,8 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
     container.style.cssText = `
       position: fixed;
       top: 0;
-      right: -320px;
-      width: 300px;
+      right: -380px;
+      width: 360px;
       height: 100%;
       opacity: 0;
       visibility: hidden;
@@ -249,7 +340,7 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
   if (!btn) {
     btn = document.createElement('button');
     btn.id = 'epub-toc-btn';
-    btn.innerHTML = '<i class="fas fa-list"></i>';
+    btn.innerHTML = '<i class="fas fa-list"></i><span>목차</span>';
     btn.style.cssText = `
       position: fixed;
       top: calc(100px + env(safe-area-inset-top, 0px));
@@ -309,6 +400,24 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
   const tabsEl = document.createElement('div');
   tabsEl.style.cssText = 'display:flex; gap:6px; margin-bottom:16px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:10px;';
 
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button';
+  backBtn.className = 'epub-toc-back-btn';
+  backBtn.setAttribute('aria-label', '목차 닫기');
+  backBtn.title = '뒤로';
+  backBtn.innerHTML = '<i class="fas fa-arrow-left"></i>';
+  backBtn.style.cssText = `
+    flex:0 0 36px; display:flex; align-items:center; justify-content:center;
+    min-width:36px; border:1px solid rgba(255,255,255,0.16); border-radius:7px;
+    background:rgba(255,255,255,0.06); color:inherit; cursor:pointer;
+  `;
+  backBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    _closeEpubTocPanel();
+  });
+  tabsEl.appendChild(backBtn);
+
   const makeTabBtn = (key, iconClass, label) => {
     const b = document.createElement('button');
     b.type = 'button';
@@ -328,12 +437,14 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
   };
   const tocTabBtn = makeTabBtn('toc', 'fas fa-list', '목차');
   const bookmarkTabBtn = makeTabBtn('bookmarks', 'fas fa-bookmark', '북마크');
+  const notesTabBtn = makeTabBtn('notes', 'far fa-note-sticky', '독서노트');
   // TXT는 실제 목차가 없다 — chunkText()로 임의 분할한 구간을 "N장"으로 나열하면
   // 사용자에게 진짜 챕터처럼 오인되어 혼란만 준다. TXT에서는 목차 탭 자체를 숨기고
   // 북마크 탭만 노출한다(내부적으로는 여전히 같은 구간 단위를 위치 추적에 사용).
   if (currentFormat !== 'txt') {
     tabsEl.appendChild(tocTabBtn);
   }
+  tabsEl.appendChild(notesTabBtn);
   tabsEl.appendChild(bookmarkTabBtn);
 
   const tocPanelEl = document.createElement('div');
@@ -343,34 +454,53 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
   bookmarkPanelEl.id = 'epub-toc-tab-bookmarks';
   bookmarkPanelEl.style.display = 'none';
 
+  const notesPanelEl = document.createElement('div');
+  notesPanelEl.id = 'epub-toc-tab-notes';
+  notesPanelEl.style.display = 'none';
+
   function setActiveTocTab(key) {
     activeTocTab = key;
     tocPanelEl.style.display = key === 'toc' ? 'block' : 'none';
     bookmarkPanelEl.style.display = key === 'bookmarks' ? 'block' : 'none';
-    [tocTabBtn, bookmarkTabBtn].forEach((b) => {
+    notesPanelEl.style.display = key === 'notes' ? 'block' : 'none';
+    [tocTabBtn, notesTabBtn, bookmarkTabBtn].forEach((b) => {
       const isActive = b.dataset.tocTab === key;
       b.style.opacity = isActive ? '1' : '0.65';
-      b.style.background = isActive ? 'rgba(168, 85, 247, 0.18)' : 'transparent';
+      b.style.background = isActive ? 'var(--viewer-panel-soft, #e8e8e8)' : 'transparent';
+      b.style.color = isActive ? 'var(--viewer-theme-text, #171717)' : 'var(--viewer-panel-muted, #666)';
+      b.style.fontWeight = isActive ? '800' : '600';
     });
     if (key === 'bookmarks') {
       fetchAndRenderBookmarks();
+    } else if (key === 'notes') {
+      fetchAndRenderReadingNotes(notesPanelEl);
     }
+    if (isTocPanelOpen) _notifyViewerSidePanelState(key === 'notes' ? 'notes' : 'toc');
   }
+  activateTocTab = setActiveTocTab;
 
   const ul = document.createElement('ul');
   ul.style.cssText = 'list-style:none; padding:0; margin:0; font-size:0.95rem;';
   tocEntryRefs = [];
   activeTocIdx = -1;
+  pinnedTocIdx = -1;
 
   const buildItem = (title, chapterIdx, anchor, paddingLeft, level = 1) => {
+    const entryIdx = tocEntryRefs.length;
     const li = document.createElement('li');
-    li.style.cssText = `padding-left:${paddingLeft}px; margin-bottom:12px; line-height:1.4;`;
+    li.style.cssText = `padding-left:${paddingLeft}px; line-height:1.4; border-bottom:1px solid var(--viewer-panel-border, #e5e5e5); margin:0;`;
     li.dataset.chapterIdx = String(chapterIdx);
     const a = document.createElement('a');
     a.href = '#';
-    a.style.cssText = 'color:inherit; text-decoration:none; display:block; opacity:0.85; transition:opacity 0.2s;';
+    a.style.cssText = 'color:var(--viewer-panel-muted, #4a4a4a); text-decoration:none; display:grid; grid-template-columns:42px minmax(0,1fr); gap:8px; align-items:start; padding:12px 8px; opacity:0.85; transition:opacity 0.2s, background 0.2s;';
     a.style.touchAction = 'manipulation';
-    a.textContent = title;
+    const pageEl = document.createElement('span');
+    pageEl.className = 'epub-toc-page-number';
+    pageEl.textContent = '–';
+    const titleEl = document.createElement('span');
+    titleEl.className = 'epub-toc-entry-title';
+    titleEl.textContent = title;
+    a.append(pageEl, titleEl);
     a.addEventListener('mouseover', () => {
       a.style.opacity = '1';
     });
@@ -390,9 +520,11 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
       if (now - lastJumpAt < 250) return;
       lastJumpAt = now;
       const isTopLevelChapter = Number(level || 1) <= 1;
+      pinnedTocIdx = entryIdx;
       _debugToc('toc-item-jump', { chapterIdx, hasAnchor: !!anchor, source });
       onJumpToChapter(chapterIdx, anchor, {
         preferChapterStart: isTopLevelChapter,
+        keepPanelOpen: true,
       });
     };
     a.addEventListener('click', e => {
@@ -436,6 +568,7 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
       chapterIdx: Number.isFinite(chapterIdx) ? chapterIdx : parseInt(chapterIdx, 10),
       li,
       anchorEl: a,
+      pageEl,
     });
     return li;
   };
@@ -464,6 +597,7 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
   container.innerHTML = '';
   container.appendChild(tabsEl);
   container.appendChild(tocPanelEl);
+  container.appendChild(notesPanelEl);
   container.appendChild(bookmarkPanelEl);
 
   // EPUB 새 렌더(새 책)에서는 이전 탭/북마크 캐시 및 현재 청크 추적 상태가 남지 않도록 초기화한다.
@@ -478,6 +612,10 @@ export function renderEpubTocPanel({ tocList, txtChunks, onJumpToChapter }) {
   _debugToc('render-end-reset-closed');
 
   syncEpubTocVisibility();
+
+  const queuedTab = pendingTocTab;
+  pendingTocTab = null;
+  if (queuedTab) queueMicrotask(() => openEpubTocPanel(queuedTab));
 }
 
 function _buildBookmarkEmptyState() {
@@ -486,6 +624,104 @@ function _buildBookmarkEmptyState() {
   empty.style.cssText = 'opacity:0.6; font-size:0.85rem; text-align:center; margin-top:24px;';
   empty.textContent = '저장된 북마크가 없습니다.';
   return empty;
+}
+
+async function fetchAndRenderReadingNotes(panel) {
+  if (!panel) return;
+  const requestSeq = ++readingNotesRequestSeq;
+  const selectedFilter = panel.dataset.noteFilter || 'all';
+  if (!panel.querySelector('.viewer-note-list')) {
+    panel.innerHTML = '<p class="epub-bookmark-empty">독서노트를 불러오는 중...</p>';
+  }
+  panel.setAttribute('aria-busy', 'true');
+  const bookId = state.activeBookId;
+  const dbType = encodeURIComponent(state.currentLibraryType || 'general');
+  try {
+    const [annotationResponse, bookmarkResponse] = await Promise.all([
+      fetch(`/api/v1/books/${bookId}/annotations?db_type=${dbType}`),
+      fetch(`/api/v1/books/${bookId}/bookmarks?db_type=${dbType}`),
+    ]);
+    const annotationData = await annotationResponse.json();
+    const bookmarkData = await bookmarkResponse.json();
+    if (requestSeq !== readingNotesRequestSeq || !panel.isConnected || Number(state.activeBookId) !== Number(bookId)) return;
+    const annotations = annotationData.success && Array.isArray(annotationData.annotations) ? annotationData.annotations : [];
+    const bookmarkItems = bookmarkData.success && Array.isArray(bookmarkData.bookmarks) ? bookmarkData.bookmarks : [];
+    const entries = [
+      ...annotations.map((item) => ({ ...item, kind: item.note ? 'memo' : 'highlight' })),
+      ...bookmarkItems.map((item) => ({ ...item, kind: 'bookmark' })),
+    ];
+
+    const filters = document.createElement('div');
+    filters.className = 'viewer-note-filters';
+    [['all', '전체'], ['highlight', '형광펜'], ['memo', '메모'], ['bookmark', '책갈피']].forEach(([key, label]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.noteFilter = key;
+      button.classList.toggle('active', key === selectedFilter);
+      button.textContent = label;
+      filters.appendChild(button);
+    });
+    const list = document.createElement('div');
+    list.className = 'viewer-note-list';
+
+    const render = (filter = 'all') => {
+      list.innerHTML = '';
+      const visible = filter === 'all' ? entries : entries.filter((item) => item.kind === filter);
+      if (!visible.length) {
+        list.appendChild(_buildBookmarkEmptyState());
+        return;
+      }
+      visible.forEach((item) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = `viewer-note-card viewer-note-card--${item.kind}`;
+        const icon = document.createElement('i');
+        icon.className = item.kind === 'bookmark' ? 'fa-solid fa-bookmark' : (item.kind === 'memo' ? 'fa-regular fa-note-sticky' : 'fa-solid fa-highlighter');
+        if (item.kind !== 'bookmark') {
+          const savedColor = String(item.color || '').trim();
+          icon.style.color = /^#[0-9a-f]{3,8}$/i.test(savedColor) ? savedColor : '#e5b800';
+        }
+        const body = document.createElement('span');
+        const title = document.createElement('strong');
+        title.textContent = item.note || item.quote || item.label || `${Number(item.chapter_idx || 0) + 1}페이지`;
+        const location = document.createElement('small');
+        const resolved = currentResolveLocation ? currentResolveLocation(item) : null;
+        location.textContent = resolved?.label || `${Number(item.chapter_idx || 0) + 1}페이지`;
+        body.append(title, location);
+        card.append(icon, body);
+        card.addEventListener('click', () => {
+          const targetChapter = resolved?.chapterIdx ?? Number(item.chapter_idx);
+          if (typeof currentOnJumpToChapter === 'function' && Number.isFinite(Number(targetChapter))) {
+            currentOnJumpToChapter(Number(targetChapter), '', {
+              percent: Number.isFinite(Number(item.percent)) ? Number(item.percent) : resolved?.percent,
+              annotationId: item.kind === 'bookmark' ? null : item.id,
+              globalPage: item.kind === 'bookmark' ? resolved?.globalPage : null,
+              keepPanelOpen: true,
+            });
+          }
+        });
+        list.appendChild(card);
+      });
+    };
+    filters.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-note-filter]');
+      if (!button) return;
+      panel.dataset.noteFilter = button.dataset.noteFilter;
+      filters.querySelectorAll('button').forEach((item) => item.classList.toggle('active', item === button));
+      render(button.dataset.noteFilter);
+    });
+    panel.innerHTML = '';
+    panel.append(filters, list);
+    render(selectedFilter);
+    panel.removeAttribute('aria-busy');
+  } catch (error) {
+    if (requestSeq !== readingNotesRequestSeq) return;
+    panel.innerHTML = '';
+    const failed = _buildBookmarkEmptyState();
+    failed.textContent = '독서노트를 불러오지 못했습니다.';
+    panel.appendChild(failed);
+    panel.removeAttribute('aria-busy');
+  }
 }
 
 function _formatBookmarkLabel(bookmark) {
@@ -543,12 +779,15 @@ function _renderBookmarkListInto(bookmarkPanelEl, bookId, dbType) {
     a.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      const resolved = currentResolveLocation ? currentResolveLocation({ ...bookmark, kind: 'bookmark' }) : null;
       const jumpOptions = {
         preferChapterStart: true,
-        percent: Number.isFinite(Number(bookmark.percent)) ? Number(bookmark.percent) : 0,
+        percent: resolved?.percent ?? (Number.isFinite(Number(bookmark.percent)) ? Number(bookmark.percent) : 0),
+        globalPage: resolved?.globalPage,
+        keepPanelOpen: true,
       };
       if (typeof currentOnJumpToChapter === 'function') {
-        currentOnJumpToChapter(Number(bookmark.chapter_idx), '', jumpOptions);
+        currentOnJumpToChapter(Number(resolved?.chapterIdx ?? bookmark.chapter_idx), '', jumpOptions);
       }
     });
 
@@ -584,6 +823,10 @@ function _renderBookmarkListInto(bookmarkPanelEl, bookId, dbType) {
 }
 
 function _captureCurrentChapterPercent(chapterIdx) {
+  if (state.currentViewerFormat === 'txt' && document.querySelector('#txt-content-area .txt-flow-chunk')) {
+    const slider = document.querySelector('#viewer-page-slider');
+    if (slider?.dataset.chapterPercent != null) return Number(slider.dataset.chapterPercent) || 0;
+  }
   const scrollWrapper = document.getElementById('txt-scroll-wrapper');
   if (!scrollWrapper) return 0;
   const scrollMode = viewerStorage.getItem('viewer_scroll_mode') || 'page';
@@ -598,7 +841,7 @@ function _captureCurrentChapterPercent(chapterIdx) {
 
   const maxScroll = getTxtPageMaxScroll(scrollWrapper);
   if (!maxScroll) return 0;
-  return Math.max(0, Math.min(100, Math.round((scrollWrapper.scrollLeft / maxScroll) * 100)));
+  return Math.max(0, Math.min(100, Math.round((getTxtPageScrollLeft(scrollWrapper) / maxScroll) * 100)));
 }
 
 function _waitForChapterImagesSettled(chapterIdx) {
@@ -719,10 +962,9 @@ export function jumpToTxtTocChapter({
     return rootEl.querySelector(`[id="${safeAnchor}"]`);
   };
 
-  const container = document.getElementById('epub-toc-container');
-  isTocPanelOpen = false;
-  _applyTocPanelState(container, false);
-  _debugToc('jump-chapter-close-toc', { chapterIdx, hasAnchor: !!anchor });
+  // 목차/독서노트 항목을 연속해서 확인할 수 있도록 위치 이동과 패널 생명주기를
+  // 분리한다. 패널은 뒤로 버튼, 같은 상단 버튼 재클릭, 화면 닫기 때만 닫힌다.
+  _debugToc('jump-chapter', { chapterIdx, hasAnchor: !!anchor });
 
   setCurrentChunkIdx(chapterIdx);
   if (typeof onActiveChapterChange === 'function') {
@@ -735,6 +977,7 @@ export function jumpToTxtTocChapter({
   const restorePercent = (options && Number.isFinite(Number(options.percent)))
     ? Math.max(0, Math.min(100, Number(options.percent)))
     : null;
+  const annotationId = options?.annotationId;
   const overlayMenu = document.getElementById('comic-overlay-menu');
   const scrollWrapper = getScrollWrapper();
 
@@ -818,27 +1061,44 @@ export function jumpToTxtTocChapter({
     }
   } else {
     const applyPagePercentRestore = () => {
-      if (restorePercent === null || !scrollWrapper) return;
+      if (!scrollWrapper) return;
       // 2중 rAF로 이 콜백 프레임 자체의 레이아웃(컬럼 폭 재계산)이 완전히 반영된
       // 뒤에 스크롤을 적용한다 — onSettled가 이미지 로드/에러/3초 타임아웃 이후에
       // 불려도, applyTxtTwoPageTrailingSpacer가 막 갱신한 DOM의 최종 scrollWidth는
       // 다음 프레임에야 안정적으로 읽힌다.
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          const mark = annotationId
+            ? document.querySelector(`mark.annotation-highlight[data-annotation-id="${String(annotationId).replace(/"/g, '\\"')}"]`)
+            : null;
           const maxScroll = getTxtPageMaxScroll(scrollWrapper);
-          if (maxScroll > 0) {
-            scrollWrapper.scrollLeft = Math.round((restorePercent / 100) * maxScroll);
+          if (mark) {
+            const wrapperRect = scrollWrapper.getBoundingClientRect();
+            const markRect = mark.getBoundingClientRect();
+            setTxtPageScrollLeft(scrollWrapper, Math.max(0, Math.min(maxScroll,
+              getTxtPageScrollLeft(scrollWrapper) + Math.abs(markRect.left - wrapperRect.left))));
+            snapTxtPageScrollLeft(scrollWrapper);
+          } else if (restorePercent !== null && maxScroll > 0) {
+            setTxtPageScrollLeft(scrollWrapper, Math.round((restorePercent / 100) * maxScroll));
             snapTxtPageScrollLeft(scrollWrapper);
           }
+          scrollWrapper.dispatchEvent(new Event('scroll'));
         });
       });
     };
 
     renderCurrentChunk(true, applyPagePercentRestore);
     if (scrollWrapper) {
-      scrollWrapper.scrollLeft = 0;
+      setTxtPageScrollLeft(scrollWrapper, 0);
       scrollWrapper.scrollTop = 0;
     }
+  }
+
+  if (scrollMode === 'scroll' && annotationId) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const mark = document.querySelector(`mark.annotation-highlight[data-annotation-id="${String(annotationId).replace(/"/g, '\\"')}"]`);
+      if (mark) mark.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
+    }));
   }
 
   saveProgress(activeBookId, chapterIdx, chunkCount);
@@ -865,4 +1125,3 @@ export function jumpToTxtTocChapter({
     });
   }
 }
-

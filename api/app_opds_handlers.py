@@ -110,7 +110,13 @@ class AppOpdsHandlers:
 
         try:
             if request.path.endswith('/all-list'):
-                series_list = SeriesService.get_all_books_list(db_type, library_id, user_id=user_id, role=role)
+                series_list = SeriesService.get_all_books_list(
+                    db_type,
+                    library_id,
+                    user_id=user_id,
+                    role=role,
+                    content_rating_max=(current_user or {}).get('content_rating_max', 18),
+                )
                 series_list = self._filter_supported_series(db_type, series_list)
                 return jsonify({'success': True, 'series': series_list})
 
@@ -123,7 +129,8 @@ class AppOpdsHandlers:
                 search_query,
                 sort,
                 user_id=user_id,
-                role=role
+                role=role,
+                content_rating_max=(current_user or {}).get('content_rating_max', 18),
             )
             series_list = self._filter_supported_series(db_type, series_list)
             has_more = len(series_list) > limit

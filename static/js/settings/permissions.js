@@ -2,6 +2,186 @@
 let permissionSessionData = null;
 let activePermissionSession = 'general';
 
+function syncCurrentUserPermission(userId, field, value) {
+  if (String(window.currentUser?.id || '') !== String(userId || '')) return;
+  window.currentUser[field] = value;
+  if (window.applyLibraryTypeToggleVisibility) window.applyLibraryTypeToggleVisibility();
+}
+
+// 체크박스 하나에서 /update, /bulk-update 등에 보낼 change 페이로드를 만든다
+// (기존 개별 change 핸들러의 파싱 로직과 동일 - dbType==='plugin'이면 문자열 ID 그대로 유지)
+function buildPermissionChangeFromCheckbox(chk, hasAccess) {
+  const userIdRaw = chk.getAttribute('data-user-id');
+  const libraryIdRaw = chk.getAttribute('data-library-id');
+  const dbType = chk.getAttribute('data-db-type');
+
+  const parsedUserId = parseInt(userIdRaw, 10);
+  if (!Number.isFinite(parsedUserId)) return null;
+
+  let payloadLibraryId;
+  if (dbType === 'plugin') {
+    payloadLibraryId = (libraryIdRaw || '').trim();
+    if (!payloadLibraryId) return null;
+  } else {
+    const parsedLibraryId = parseInt(libraryIdRaw, 10);
+    if (!Number.isFinite(parsedLibraryId)) return null;
+    payloadLibraryId = parsedLibraryId;
+  }
+
+  return { user_id: parsedUserId, library_id: payloadLibraryId, has_access: hasAccess, target_db: dbType };
+}
+
+// entries: [{ chk, hasAccess, prevChecked }] - 여러 체크박스 변경을 요청 1건으로 묶어 전송하고,
+// 실패한 항목만 되돌린다 (행/열 전체선택, 권한 복사가 공통으로 사용).
+async function sendBulkPermissionChanges(entries) {
+  const changes = [];
+  const validEntries = [];
+  entries.forEach(entry => {
+    const change = buildPermissionChangeFromCheckbox(entry.chk, entry.hasAccess);
+    if (change) {
+      changes.push(change);
+      validEntries.push(entry);
+    }
+  });
+  if (!changes.length) return;
+
+  try {
+    const res = await fetch('/api/admin/permissions/bulk-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ changes })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      validEntries.forEach(entry => { entry.chk.checked = entry.prevChecked; });
+      alert('변경에 실패했습니다: ' + (data.error || '알 수 없는 오류'));
+      return;
+    }
+    const errors = data.errors || [];
+    if (errors.length) {
+      errors.forEach(err => {
+        const entry = validEntries[err.index];
+        if (entry) entry.chk.checked = entry.prevChecked;
+      });
+      alert(`${errors.length}건 변경에 실패했습니다. (성공 ${data.applied || 0}건)`);
+    }
+  } catch (err) {
+    validEntries.forEach(entry => { entry.chk.checked = entry.prevChecked; });
+    alert('네트워크 오류가 발생했습니다.');
+  }
+}
+
+// 체크박스 목록을 받아 전체선택/해제 상태를 뒤집고, 실제로 바뀐 것만 모아 배치 전송
+function togglePermissionCheckboxGroup(checkboxes) {
+  const list = Array.from(checkboxes);
+  if (!list.length) return;
+  const shouldCheck = !list.every(chk => chk.checked);
+
+  const entries = [];
+  list.forEach(chk => {
+    if (chk.checked === shouldCheck) return;
+    entries.push({ chk, hasAccess: shouldCheck, prevChecked: chk.checked });
+    chk.checked = shouldCheck;
+  });
+  if (entries.length) sendBulkPermissionChanges(entries);
+}
+
+function closeCopyPermissionPanel() {
+  document.querySelectorAll('.permission-copy-panel').forEach(p => p.remove());
+}
+
+function openCopyPermissionPanel(triggerBtn) {
+  closeCopyPermissionPanel();
+
+  const sourceUserId = triggerBtn.getAttribute('data-user-id');
+  const table = triggerBtn.closest('table');
+  if (!table || !permissionSessionData) return;
+
+  const users = (permissionSessionData.users || [])
+    .filter(u => String(u.id) !== String(sourceUserId));
+  if (!users.length) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'permission-copy-panel';
+  panel.style.cssText = 'position:absolute; z-index:1000; background: rgba(20,22,30,0.98); border:1px solid rgba(255,255,255,0.15); border-radius:8px; padding:0.75rem; box-shadow:0 8px 24px rgba(0,0,0,0.4); min-width:200px; max-height:260px; overflow-y:auto;';
+
+  const rect = triggerBtn.getBoundingClientRect();
+  panel.style.top = `${rect.bottom + window.scrollY + 4}px`;
+  panel.style.left = `${rect.left + window.scrollX}px`;
+
+  const listHTML = users.map(u => `
+    <label style="display:flex; align-items:center; gap:0.4rem; padding:0.2rem 0; color: var(--app-text-primary); font-size:0.85rem; cursor:pointer;">
+      <input type="checkbox" class="permission-copy-target" value="${u.id}">
+      <span>${u.username}</span>
+    </label>
+  `).join('');
+
+  panel.innerHTML = `
+    <div style="font-size:0.78rem; font-weight:700; margin-bottom:0.5rem; color: var(--app-text-primary);">이 사용자 권한을 복사할 대상</div>
+    ${listHTML}
+    <button type="button" class="permission-copy-apply" style="margin-top:0.6rem; width:100%; padding:0.4rem; border-radius:6px; border:none; background: var(--app-accent, #a855f7); color:#fff; font-weight:700; cursor:pointer;">적용</button>
+  `;
+
+  document.body.appendChild(panel);
+
+  panel.querySelector('.permission-copy-apply').addEventListener('click', () => {
+    const targetIds = Array.from(panel.querySelectorAll('.permission-copy-target:checked')).map(chk => chk.value);
+    closeCopyPermissionPanel();
+    if (!targetIds.length) return;
+    applyPermissionCopy(table, sourceUserId, targetIds);
+  });
+}
+
+function applyPermissionCopy(table, sourceUserId, targetUserIds) {
+  const sourceCheckboxes = table.querySelectorAll(`.permission-chk-category[data-user-id="${sourceUserId}"]`);
+  const entries = [];
+
+  sourceCheckboxes.forEach(sourceChk => {
+    const libraryId = sourceChk.getAttribute('data-library-id');
+    const dbType = sourceChk.getAttribute('data-db-type');
+    const hasAccess = sourceChk.checked;
+
+    targetUserIds.forEach(targetUserId => {
+      const targetChk = table.querySelector(
+        `.permission-chk-category[data-user-id="${targetUserId}"][data-library-id="${libraryId}"][data-db-type="${dbType}"]`
+      );
+      if (!targetChk || targetChk.disabled || targetChk.checked === hasAccess) return;
+      entries.push({ chk: targetChk, hasAccess, prevChecked: targetChk.checked });
+      targetChk.checked = hasAccess;
+    });
+  });
+
+  if (entries.length) {
+    sendBulkPermissionChanges(entries);
+  } else {
+    alert('변경할 항목이 없습니다 (이미 동일한 권한입니다).');
+  }
+}
+
+function applyPermissionUserFilter(input) {
+  const panel = input.closest('.permission-session-panel');
+  const table = panel && panel.querySelector('table');
+  if (!table) return;
+  const term = input.value.trim().toLowerCase();
+
+  table.querySelectorAll('th[data-username], td[data-username]').forEach(cell => {
+    const match = !term || (cell.getAttribute('data-username') || '').toLowerCase().includes(term);
+    cell.style.display = match ? '' : 'none';
+  });
+}
+
+function applyPermissionCategoryFilter(input) {
+  const panel = input.closest('.permission-session-panel');
+  const table = panel && panel.querySelector('table');
+  if (!table) return;
+  const term = input.value.trim().toLowerCase();
+
+  table.querySelectorAll('tbody tr[data-category-name]').forEach(row => {
+    const match = !term || (row.getAttribute('data-category-name') || '').toLowerCase().includes(term);
+    row.style.display = match ? '' : 'none';
+  });
+}
+
 function initPermissionDelegation() {
   if (window.__permissionDelegationBound) return;
 
@@ -17,24 +197,55 @@ function initPermissionDelegation() {
   }, true);
 
   document.addEventListener('click', (event) => {
-    const toggleBtn = event && event.target && typeof event.target.closest === 'function'
+    const colToggleBtn = event && event.target && typeof event.target.closest === 'function'
       ? event.target.closest('.permission-col-toggle-all')
       : null;
-    if (!toggleBtn) return;
+    if (colToggleBtn) {
+      event.preventDefault();
+      const userId = colToggleBtn.getAttribute('data-user-id');
+      const table = colToggleBtn.closest('table');
+      if (table) {
+        togglePermissionCheckboxGroup(table.querySelectorAll(`.permission-chk-category[data-user-id="${userId}"]:not(:disabled)`));
+      }
+      return;
+    }
 
-    event.preventDefault();
-    const userId = toggleBtn.getAttribute('data-user-id');
-    const table = toggleBtn.closest('table');
-    if (!table) return;
+    const rowToggleBtn = event && event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('.permission-row-toggle-all')
+      : null;
+    if (rowToggleBtn) {
+      event.preventDefault();
+      const libraryId = rowToggleBtn.getAttribute('data-library-id');
+      const dbType = rowToggleBtn.getAttribute('data-db-type');
+      const table = rowToggleBtn.closest('table');
+      if (table) {
+        togglePermissionCheckboxGroup(table.querySelectorAll(`.permission-chk-category[data-library-id="${libraryId}"][data-db-type="${dbType}"]:not(:disabled)`));
+      }
+      return;
+    }
 
-    const checkboxes = table.querySelectorAll(`.permission-chk-category[data-user-id="${userId}"]:not(:disabled)`);
-    const shouldCheck = !Array.from(checkboxes).every(chk => chk.checked);
+    const copyBtn = event && event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('.permission-copy-btn')
+      : null;
+    if (copyBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      openCopyPermissionPanel(copyBtn);
+      return;
+    }
 
-    checkboxes.forEach(chk => {
-      if (chk.checked === shouldCheck) return;
-      chk.checked = shouldCheck;
-      chk.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    const openPanel = document.querySelector('.permission-copy-panel');
+    if (openPanel && !openPanel.contains(event.target)) {
+      closeCopyPermissionPanel();
+    }
+  }, true);
+
+  document.addEventListener('input', (event) => {
+    if (event.target && event.target.classList && event.target.classList.contains('permission-user-filter')) {
+      applyPermissionUserFilter(event.target);
+    } else if (event.target && event.target.classList && event.target.classList.contains('permission-category-filter')) {
+      applyPermissionCategoryFilter(event.target);
+    }
   }, true);
 
   window.__permissionDelegationBound = true;
@@ -119,15 +330,18 @@ function renderSessionTabs(sessions) {
 function renderMatrixHeader(headerRow, users) {
   let headerHTML = '<th style="padding:1rem; width:25%;">카테고리 이름</th>';
   users.forEach(user => {
-    const isAdmin = user.username === 'admin';
     headerHTML += `
-      <th style="padding:1rem; text-align:center; min-width:100px;">
+      <th data-username="${user.username}" style="padding:1rem; text-align:center; min-width:100px;">
         <div style="font-weight:700; color: var(--app-text-primary);">${user.username}</div>
-        <div style="font-size:0.75rem; color: var(--app-text-muted); margin-bottom:${isAdmin ? '0' : '0.4rem'};">(${user.role})</div>
-        ${isAdmin ? '' : `
-        <button type="button" class="permission-col-toggle-all" data-user-id="${user.id}"
-                style="font-size:0.68rem; padding:0.15rem 0.5rem; border-radius:4px; border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.05); color: var(--app-text-muted); cursor:pointer;">전체선택/해제</button>
-        `}
+        <div style="font-size:0.75rem; color: var(--app-text-muted); margin-bottom:0.4rem;">(${user.role})</div>
+        <div style="display:flex; gap:0.3rem; justify-content:center; flex-wrap:wrap;">
+          <button type="button" class="permission-col-toggle-all" data-user-id="${user.id}"
+                  style="font-size:0.68rem; padding:0.15rem 0.5rem; border-radius:4px; border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.05); color: var(--app-text-muted); cursor:pointer;">전체선택/해제</button>
+          <button type="button" class="permission-copy-btn" data-user-id="${user.id}" title="이 사용자 권한을 다른 사용자에게 복사"
+                  style="font-size:0.68rem; padding:0.15rem 0.5rem; border-radius:4px; border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.05); color: var(--app-text-muted); cursor:pointer;">
+            <i class="fa-solid fa-copy"></i>
+          </button>
+        </div>
       </th>
     `;
   });
@@ -137,9 +351,11 @@ function renderMatrixHeader(headerRow, users) {
 function renderMatrixBody(users, categories, permissions, targetDb) {
   return (categories || []).map(cat => {
     let rowHTML = `
-      <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+      <tr style="border-bottom:1px solid rgba(255,255,255,0.05);" data-category-name="${cat.name}">
         <td style="padding:1rem; color: var(--app-text-primary);">
           <i class="fa-solid fa-folder" style="color: var(--app-text-muted); margin-right:0.5rem;"></i>${cat.name}
+          <button type="button" class="permission-row-toggle-all" data-library-id="${cat.id}" data-db-type="${cat.db_type || targetDb}"
+                  style="margin-left:0.5rem; font-size:0.65rem; padding:0.1rem 0.4rem; border-radius:4px; border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.05); color: var(--app-text-muted); cursor:pointer;">전체선택/해제</button>
         </td>
     `;
 
@@ -149,14 +365,13 @@ function renderMatrixBody(users, categories, permissions, targetDb) {
       const hasPerm = permissions[user.id] && permissions[user.id][key] !== undefined
         ? permissions[user.id][key]
         : true;
-      const isDisabled = user.username === 'admin' ? 'disabled' : '';
       const accentColor = targetDb === 'audiobook' ? '#10b981' : '#10b981';
 
       rowHTML += `
-        <td style="padding:1rem; text-align:center;">
+        <td data-username="${user.username}" style="padding:1rem; text-align:center;">
           <input type="checkbox" class="permission-chk-category"
                  data-user-id="${user.id}" data-library-id="${cat.id}" data-db-type="${permissionTargetDb}"
-                 ${hasPerm ? 'checked' : ''} ${isDisabled}
+                 ${hasPerm ? 'checked' : ''}
                  style="cursor:pointer; width:1.1rem; height:1.1rem; accent-color:${accentColor};">
         </td>
       `;
@@ -170,14 +385,13 @@ function renderMatrixBody(users, categories, permissions, targetDb) {
 function renderAdultBody(users) {
   return users.map(user => {
     const isChecked = user.has_adult_access === 1 ? 'checked' : '';
-    const isDisabled = user.username === 'admin' ? 'disabled' : '';
     return `
       <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
         <td style="padding:0.9rem 1rem; color: var(--app-text-primary); font-weight:700;">${user.username}</td>
         <td style="padding:0.9rem 1rem; text-align:center; color: var(--app-text-muted);">${user.role}</td>
         <td style="padding:0.9rem 1rem; text-align:center;">
           <label style="display:inline-flex; align-items:center; gap:0.5rem; color:var(--app-accent-hover); font-weight:700;">
-            <input type="checkbox" class="permission-chk-adult" data-user-id="${user.id}" ${isChecked} ${isDisabled}
+            <input type="checkbox" class="permission-chk-adult" data-user-id="${user.id}" ${isChecked}
                    style="cursor:pointer; width:1.2rem; height:1.2rem; accent-color:var(--app-accent);">
             <span>성인 서재 접근 허용</span>
           </label>
@@ -190,14 +404,13 @@ function renderAdultBody(users) {
 function renderDownloadBody(users) {
   return users.map(user => {
     const isChecked = user.has_download_access === 1 ? 'checked' : '';
-    const isDisabled = user.username === 'admin' ? 'disabled' : '';
     return `
       <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
         <td style="padding:0.9rem 1rem; color: var(--app-text-primary); font-weight:700;">${user.username}</td>
         <td style="padding:0.9rem 1rem; text-align:center; color: var(--app-text-muted);">${user.role}</td>
         <td style="padding:0.9rem 1rem; text-align:center;">
           <label style="display:inline-flex; align-items:center; gap:0.5rem; color:var(--app-accent-hover); font-weight:700;">
-            <input type="checkbox" class="permission-chk-download" data-user-id="${user.id}" ${isChecked} ${isDisabled}
+            <input type="checkbox" class="permission-chk-download" data-user-id="${user.id}" ${isChecked}
                    style="cursor:pointer; width:1.2rem; height:1.2rem; accent-color:var(--app-accent);">
             <span>파일 다운로드 허용</span>
           </label>
@@ -209,18 +422,19 @@ function renderDownloadBody(users) {
 
 function renderContentRatingBody(users) {
   return users.map(user => {
-    const isDisabled = user.username === 'admin' ? 'disabled' : '';
-    const currentLevel = user.content_rating_max !== undefined && user.content_rating_max !== null ? user.content_rating_max : 18;
+    const currentLevel = Number(user.content_rating_max !== undefined && user.content_rating_max !== null ? user.content_rating_max : 18);
     return `
       <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
         <td style="padding:0.9rem 1rem; color: var(--app-text-primary); font-weight:700;">${user.username}</td>
         <td style="padding:0.9rem 1rem; text-align:center; color: var(--app-text-muted);">${user.role}</td>
         <td style="padding:0.9rem 1rem; text-align:center;">
-          <select class="permission-select-content-rating" data-user-id="${user.id}" ${isDisabled}
+          <select class="permission-select-content-rating" data-user-id="${user.id}"
                   style="cursor:pointer; padding:0.4rem 0.7rem; border-radius:6px; border:1px solid rgba(255,255,255,0.15); background: rgba(var(--app-panel-rgb), 0.6); color: var(--app-text-primary); font-weight:700;">
             <option value="0" ${currentLevel === 0 ? 'selected' : ''}>전체이용가</option>
             <option value="15" ${currentLevel === 15 ? 'selected' : ''}>15세이상</option>
             <option value="18" ${currentLevel === 18 ? 'selected' : ''}>18세이상(성인)</option>
+            <option value="19" ${currentLevel === 19 ? 'selected' : ''}>성인망가 (R18)</option>
+            <option value="20" ${currentLevel === 20 ? 'selected' : ''}>포르노 (Adult Only 18+)</option>
           </select>
         </td>
       </tr>
@@ -259,6 +473,8 @@ function bindPermissionEvents() {
         if (!data.success) {
           alert('변경에 실패했습니다: ' + data.error);
           e.target.checked = !hasAdultAccess;
+        } else {
+          syncCurrentUserPermission(userId, 'has_adult_access', hasAdultAccess ? 1 : 0);
         }
       } catch (err) {
         alert('네트워크 오류가 발생했습니다.');
@@ -282,6 +498,8 @@ function bindPermissionEvents() {
         if (!data.success) {
           alert('변경에 실패했습니다: ' + data.error);
           e.target.checked = !hasDownloadAccess;
+        } else {
+          syncCurrentUserPermission(userId, 'has_download_access', hasDownloadAccess ? 1 : 0);
         }
       } catch (err) {
         alert('네트워크 오류가 발생했습니다.');
@@ -308,6 +526,7 @@ function bindPermissionEvents() {
           e.target.value = prevLevel;
         } else {
           e.target.dataset.prevValue = newLevel;
+          syncCurrentUserPermission(userId, 'content_rating_max', parseInt(newLevel));
         }
       } catch (err) {
         alert('네트워크 오류가 발생했습니다.');

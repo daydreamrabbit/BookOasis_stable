@@ -85,8 +85,10 @@ def _run_db_self_recovery(db_type):
         print(f"[Scanner-SelfHealing ERROR] Auto recovery failed: {rec_err}")
 
 @scanner_print_control_decorator
-def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refresh=False):
-    """Scan library path and sync DB with file system (force full reindex if force=True)"""
+def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refresh=False, progress_callback=None, cancel_event=None):
+    """Scan library path and sync DB with file system (force full reindex if force=True).
+
+    progress_callback(phase, **details): 스캔 활동창용 진행 알림(utils/library_scan_progress.py). 선택 사항."""
     print(f"🚀🚀🚀 [ScannerEngine] Core scan_library EXECUTING! DB Path={db_path}, Library ID={library_id}, Path='{physical_path}', Force={force}")
     
     library_errors = []
@@ -152,7 +154,7 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
         print(f"[Scanner-Audiobook] 🎧 Triggering audiobook dedicated scanner pipeline for library_id={library_id}...")
         from services.audiobook_scanner import scan_audiobook_library
         for target_p in target_paths:
-            scan_audiobook_library(target_p, library_id=library_id, force=force)
+            scan_audiobook_library(target_p, library_id=library_id, force=force, cancel_event=cancel_event)
         print(f"[Scanner-Audiobook] 🎧 Audiobook scan completed for library_id={library_id}")
         return
 
@@ -160,7 +162,7 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
         print(f"[Scanner-Video] 🎬 Triggering video dedicated scanner pipeline for library_id={library_id}...")
         from services.video_scanner import scan_video_library
         for target_p in target_paths:
-            scan_video_library(target_p, library_id=library_id, force=force)
+            scan_video_library(target_p, library_id=library_id, force=force, cancel_event=cancel_event)
         print(f"[Scanner-Video] 🎬 Video scan completed for library_id={library_id}")
         return
 
@@ -195,7 +197,12 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
 
     conn = database.get_connection(db_type)
     try:
-        _scan_library_internal(conn, db_path, library_id, physical_path, force, db_type, target_paths, is_remote, threads_to_use, library_errors)
+        _scan_library_internal(
+            conn, db_path, library_id, physical_path, force, db_type, target_paths,
+            is_remote, threads_to_use, library_errors,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
     finally:
         try:
             conn.close()
@@ -212,7 +219,18 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
             print(f"[Scanner ERROR] Scan report save failed: {report_err}")
 
 @scanner_print_control_decorator
-def scan_library_path(db_path, library_id, target_path, force=False, skip_vfs_refresh=False):
+def scan_library_path(
+    db_path,
+    library_id,
+    target_path,
+    force=False,
+    skip_vfs_refresh=False,
+    path_scope=None,
+    gdrive_subpath=None,
+    allow_missing=True,
+    gdrive_listing=None,
+    moves_reconciled=False,
+):
     """Scan a single book/series subfolder within a library and register just those books
     (used by the 'add one book/series then scan it in' API, as opposed to a full periodic scan)."""
     print(f"🎯 [ScannerEngine] Single-path scan EXECUTING! DB Path={db_path}, Library ID={library_id}, Target='{target_path}', Force={force}")
@@ -261,7 +279,11 @@ def scan_library_path(db_path, library_id, target_path, force=False, skip_vfs_re
         _scan_library_internal(
             conn, db_path, library_id, target_path, force, db_type,
             [target_path], is_remote, threads_to_use, library_errors,
-            path_scope=canonical_path(target_path)
+            path_scope=path_scope or canonical_path(target_path),
+            gdrive_subpath=gdrive_subpath,
+            allow_missing=allow_missing,
+            gdrive_listing=gdrive_listing,
+            moves_reconciled=moves_reconciled,
         )
     finally:
         try:

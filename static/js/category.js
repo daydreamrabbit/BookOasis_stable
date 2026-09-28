@@ -1,7 +1,8 @@
 // category.js – 카테고리 진입점 (category/ 서브모듈 Re-export & 전역 바인딩)
 
-import { loadLibraries, toggleCategoryOrderPin, bindDragAndDropEvents, saveNewOrder } from './category/index.js';
-import { currentTargetLibrary, setCurrentTargetLibrary, bindSidebarContextMenu, showContextMenu } from './category/context_menu.js';
+import { loadLibraries, toggleCategoryOrderPin, bindDragAndDropEvents, saveNewOrder } from './category/index.js?rev=20260922-library-kinds-v5';
+import { currentTargetLibrary, setCurrentTargetLibrary, bindSidebarContextMenu, showContextMenu } from './category/context_menu.js?rev=20260922-library-kinds-v5';
+import './category/kind_manager.js';
 import {
   triggerAddLibrary,
   triggerEditLibrary,
@@ -14,7 +15,7 @@ import {
   triggerMoveLibrary,
   selectIconOption,
   selectColorOption
-} from './category/crud_controller.js';
+} from './category/crud_controller.js?rev=20260922-library-kinds-v5';
 import {
   testGDriveLinks,
   openPathBrowser,

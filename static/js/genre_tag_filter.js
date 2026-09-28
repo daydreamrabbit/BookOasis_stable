@@ -59,6 +59,38 @@ export async function initFloatingFilter() {
     tabTags.addEventListener('click', () => switchFilterTab('tags'));
     searchInput.addEventListener('input', onFilterSearchChange);
 
+    // 필터 창 바깥을 클릭하면 닫는다. 필터 창 내부의 검색/탭/칩 조작과
+    // 필터 열기 버튼을 다시 누르는 동작은 외부 클릭으로 처리하지 않는다.
+    if (document.body.dataset.floatingFilterOutsideBound !== '1') {
+        document.body.dataset.floatingFilterOutsideBound = '1';
+        document.addEventListener('click', (event) => {
+            const currentModal = document.getElementById('floating-filter-modal');
+            const currentAnchor = document.getElementById('btn-open-filter');
+            if (!currentModal || currentModal.style.display === 'none') return;
+
+            const target = event.target;
+            // Chips rerender their container on selection, which detaches the
+            // clicked node before this document-level listener runs. `contains`
+            // then incorrectly treats that internal click as an outside click.
+            // The event path is captured before dispatch and still includes the
+            // modal after its child is replaced.
+            const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : [];
+            if ((target instanceof Element && (currentModal.contains(target) || currentAnchor?.contains(target))) ||
+                eventPath.includes(currentModal) || (currentAnchor && eventPath.includes(currentAnchor))) {
+                return;
+            }
+
+            currentModal.style.display = 'none';
+        });
+    }
+
+    if (modal.dataset.positionBound !== '1') {
+        modal.dataset.positionBound = '1';
+        window.addEventListener('resize', () => {
+            if (modal.style.display !== 'none') positionFilterModal();
+        });
+    }
+
     // 전역 함수 바인딩 (HTML onclick 바인딩 호환용)
     window.toggleFilterModal = toggleFilterModal;
     window.selectGenreFilter = selectGenreFilter;
@@ -67,6 +99,36 @@ export async function initFloatingFilter() {
     window.quickFilterByTag = quickFilterByTag;
     window.removeActiveFilterItem = removeActiveFilterItem;
     window.resetAllFilters = resetAllFilters;
+}
+
+function positionFilterModal() {
+    const modal = document.getElementById('floating-filter-modal');
+    const anchor = document.getElementById('btn-open-filter');
+    if (!modal || !anchor) return;
+
+    const margin = 8;
+    const anchorRect = anchor.getBoundingClientRect();
+    const modalRect = modal.getBoundingClientRect();
+    const top = Math.min(Math.max(margin, anchorRect.bottom + margin), Math.max(margin, window.innerHeight - 180));
+    const availableHeight = Math.max(0, window.innerHeight - top - margin);
+    const maxHeight = Math.min(window.innerHeight * 0.7, availableHeight);
+    const left = Math.min(
+        Math.max(margin, anchorRect.right - modalRect.width),
+        Math.max(margin, window.innerWidth - modalRect.width - margin),
+    );
+
+    currentX = 0;
+    currentY = 0;
+    initialX = 0;
+    initialY = 0;
+    xOffset = 0;
+    yOffset = 0;
+    modal.style.top = `${Math.round(top)}px`;
+    modal.style.left = `${Math.round(left)}px`;
+    modal.style.right = 'auto';
+    modal.style.bottom = 'auto';
+    modal.style.maxHeight = `${Math.round(maxHeight)}px`;
+    modal.style.transform = 'none';
 }
 
 function sleep(ms) {
@@ -90,12 +152,18 @@ async function ensureFilterDataLoaded() {
 }
 
 function getCurrentLibraryIdForFilterOptions() {
-    const currentId = state.currentLibraryId;
-    if (currentId === 'home' || currentId === 'history' || currentId === 'favorite' || currentId === 'settings') {
-        return state.detailLibraryId || 'all';
-    }
+    // Option scope belongs to the selected category, never the last detail view
+    // or the separate "search tags in all libraries" preference.
+    return state.currentLibraryId || 'all';
+}
 
-    return currentId || 'all';
+export function refreshFilterCategory() {
+    genresData = [];
+    tagsData = [];
+    const modal = document.getElementById('floating-filter-modal');
+    if (modal && modal.style.display !== 'none') {
+        loadGenresAndTagsData();
+    }
 }
 
 function getScopedLibraryIdForTagFilter() {
@@ -110,7 +178,10 @@ async function prepareTargetCategoryForQuickFilter() {
     const targetCategoryId = getScopedLibraryIdForTagFilter();
     const shouldSwitchCategory = String(state.currentLibraryId) !== String(targetCategoryId);
     if (shouldSwitchCategory && typeof window.selectCategory === 'function') {
-        window.selectCategory(targetCategoryId);
+        // The quick-filter history entry is created by leaveDetailForQuickFilter.
+        // Do not add a second category entry or Back would stop there instead of
+        // returning to the detail page.
+        window.selectCategory(targetCategoryId, true);
         await ensureBooksReady();
         return;
     }
@@ -119,13 +190,18 @@ async function prepareTargetCategoryForQuickFilter() {
     await ensureBooksReady();
 }
 
-async function applySingleFilter(type, value) {
+async function applySingleFilter(type, value, options = {}) {
     const normalizedValue = normalizeMetadataToken(value);
     if (!normalizedValue) return;
 
     await prepareTargetCategoryForQuickFilter();
 
-    // 기존 필터를 초기화하지 않고 누적(Accumulate) 방식으로 추가
+    // 상세 화면의 빠른 태그/장르 검색은 하나의 검색 조건으로 동작한다.
+    // 일반 필터 모달의 다중 선택 동작은 그대로 유지한다.
+    if (options.replace) {
+        selectedGenres.clear();
+        selectedTags.clear();
+    }
     if (type === 'genre') {
         selectedGenres.add(normalizedValue);
         state.filterGenres = Array.from(selectedGenres);
@@ -158,18 +234,35 @@ export async function selectTagFilter(tagName) {
 }
 
 export async function quickFilterByGenre(genreName) {
-    if (typeof window.goBackToList === 'function') {
-        // 해시 히스토리 popstate 사이드이펙트를 줄이기 위해 back 트리거 없이 목록 전환
-        window.goBackToList(false);
-    }
-    await selectGenreFilter(genreName);
+    await leaveDetailForQuickFilter();
+    await applySingleFilter('genre', genreName, { replace: true });
 }
 
 export async function quickFilterByTag(tagName) {
-    if (typeof window.goBackToList === 'function') {
-        window.goBackToList(false);
+    await leaveDetailForQuickFilter();
+    await applySingleFilter('tag', tagName, { replace: true });
+}
+
+// 상세 화면에서 필터를 누르면 현재 상세 엔트리를 브라우저 히스토리에
+// 남긴 채 목록 엔트리를 새로 쌓는다. 따라서 모바일 뒤로가기가 이전 상세로
+// 돌아오고, 목록으로 이동할 때는 기존 태그/장르 선택을 비운다.
+async function leaveDetailForQuickFilter() {
+    const current = history.state;
+    if (current?.view === 'detail') {
+        const libraryId = current.sourceLibraryId || current.libraryId || state.currentLibraryId || 'all';
+        const type = current.type || state.currentLibraryType || 'general';
+        const params = new URLSearchParams({ library: String(libraryId), type: String(type) });
+        try {
+            history.pushState(
+                { view: 'list', type, libraryId, scrollTop: current.returnState?.scrollTop || 0 },
+                '',
+                `${window.location.pathname}${window.location.search}#${params.toString()}`,
+            );
+        } catch (error) {
+            console.warn('[Filter] 상세→목록 히스토리 저장 실패:', error);
+        }
     }
-    await selectTagFilter(tagName);
+    if (typeof window.goBackToList === 'function') window.goBackToList(false);
 }
 
 // 모달 토글
@@ -179,6 +272,7 @@ export function toggleFilterModal() {
     
     if (modal.style.display === 'none') {
         modal.style.display = 'flex';
+        positionFilterModal();
         // 카테고리/스코프 변경 시 stale 데이터가 남지 않도록 모달 오픈마다 재조회
         loadGenresAndTagsData();
     } else {
@@ -186,10 +280,20 @@ export function toggleFilterModal() {
     }
 }
 
+let filterDataRequestId = 0;
+
 // 장르 및 태그 데이터 로드
 export async function loadGenresAndTagsData() {
+    const requestId = ++filterDataRequestId;
     const libraryId = getCurrentLibraryIdForFilterOptions();
     const dbType = state.currentLibraryType || 'general';
+    const isCurrent = () => requestId === filterDataRequestId &&
+        String(libraryId) === String(getCurrentLibraryIdForFilterOptions()) &&
+        dbType === (state.currentLibraryType || 'general');
+    // Do not keep the previous library/account's chips visible during refresh.
+    genresData = [];
+    tagsData = [];
+    renderChips();
     const genresUrl = `/api/media/genres?type=${dbType}&library_id=${libraryId}`;
     const tagsUrl = `/api/media/tags?type=${dbType}&library_id=${libraryId}`;
 
@@ -208,6 +312,8 @@ export async function loadGenresAndTagsData() {
             tagsRes = await tagsHttp.json();
         } catch (e) {}
 
+        if (!isCurrent()) return;
+
         if (genresRes.success) {
             genresData = Array.from(new Set((genresRes.genres || []).map(normalizeMetadataToken).filter(Boolean)));
         } else {
@@ -222,6 +328,10 @@ export async function loadGenresAndTagsData() {
         renderChips();
         renderSelectedChips();
     } catch (err) {
+        if (!isCurrent()) return;
+        genresData = [];
+        tagsData = [];
+        renderChips();
         console.error("[Filter] 장르 및 태그 목록 로드 실패:", err);
     }
 }
@@ -363,10 +473,7 @@ export async function applyFilters() {
 
 // 필터 전체 초기화
 export function resetAllFilters() {
-    selectedGenres.clear();
-    selectedTags.clear();
-    state.filterGenres = [];
-    state.filterTags = [];
+    clearFilterState();
     
     document.getElementById('filter-search-input').value = '';
     renderChips();
@@ -378,6 +485,19 @@ export function resetAllFilters() {
     }
     
     // 알림 바 UI 업데이트 (숨김 처리)
+    updateActiveFilterBar();
+}
+
+export function clearFilterState({ render = true } = {}) {
+    selectedGenres.clear();
+    selectedTags.clear();
+    state.filterGenres = [];
+    state.filterTags = [];
+    if (!render) return;
+    const input = document.getElementById('filter-search-input');
+    if (input) input.value = '';
+    renderChips();
+    renderSelectedChips();
     updateActiveFilterBar();
 }
 
@@ -438,6 +558,7 @@ window.selectGenreFilter = selectGenreFilter;
 window.selectTagFilter = selectTagFilter;
 window.quickFilterByGenre = quickFilterByGenre;
 window.quickFilterByTag = quickFilterByTag;
+window.clearMetadataFilters = () => clearFilterState();
 
 // 필터 활성 알림 바 동적 렌더링
 export function updateActiveFilterBar() {

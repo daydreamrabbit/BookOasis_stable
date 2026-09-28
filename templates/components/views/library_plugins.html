@@ -1,10 +1,14 @@
-<div id="library-plugins-view" style="display: none; flex-direction: column; gap: 1rem; width: 100%; box-sizing: border-box; padding: 0.5rem 1.5rem 1.5rem 1.5rem;">
+<div id="library-plugins-view" class="library-plugins-view" style="display: none; flex-direction: column; gap: 1rem; width: 100%; box-sizing: border-box;">
     <!-- 탭 헤더 영역 -->
-    <div class="plugins-tabs" id="plugins-view-tabs" style="display: flex; gap: 0.5rem; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+    <div class="plugins-tabs" id="plugins-view-tabs">
         <button class="settings-tab-btn active" id="tab-btn-common-desk" data-role="plugins-view-tab" data-plugin-tab="common-desk">
             <i class="fa-solid fa-desktop"></i> <span data-i18n="dashboard.plugin_desk_title">공통 데스크</span>
         </button>
         <!-- 동적 탭 버튼이 추가될 공간 -->
+        <button type="button" id="plugin-desk-lock-toggle" class="plugin-desk-lock-toggle" data-role="plugin-desk-lock-toggle" data-locked="1" title="플러그인 카드 배치 잠금">
+            <i class="fa-solid fa-lock" aria-hidden="true"></i>
+            <span>배치 잠금</span>
+        </button>
     </div>
 
     <!-- 1. 공통 플러그인 데스크 탭 내용 -->

@@ -84,12 +84,26 @@ def _fallback_latest(db_type, library_id, exclude_series_names, limit):
 
 class RecommendationService:
     @staticmethod
-    def get_similar_series(db_type, series_name, library_id=None, user_id=1, limit=RECOMMEND_LIMIT):
-        cache_key = f"cache:smart_rec:v3:{db_type}:{library_id}:{series_name}:{limit}"
+    def get_similar_series(db_type, series_name, library_id=None, user_id=1, limit=RECOMMEND_LIMIT, content_rating_max=None):
+        rating_key = content_rating_max if db_type in ('general', 'adult') and content_rating_max is not None else 'unrestricted'
+        cache_key = f"cache:smart_rec:v4:{db_type}:{library_id}:{series_name}:{limit}:{rating_key}"
+
+        def filter_result(result):
+            if db_type not in ('general', 'adult') or content_rating_max is None:
+                return result
+            from services.content_rating_service import ContentRatingService
+            filtered = dict(result or {})
+            for key in ('genre', 'tags', 'author'):
+                filtered[key] = [
+                    item for item in (filtered.get(key) or [])
+                    if ContentRatingService.can_view_book(db_type, item.get('id'), content_rating_max)
+                ]
+            return filtered
+
         cached = redis_get(cache_key)
         if cached:
             try:
-                return json.loads(cached)
+                return filter_result(json.loads(cached))
             except Exception:
                 pass
 
@@ -102,7 +116,11 @@ class RecommendationService:
         if target_row is None:
             target_row = next((r for r in index_rows if r['series_name'] == series_name), None)
 
-        history = ReadingHistoryService.get_history(db_type, user_id=user_id)
+        history = ReadingHistoryService.get_history(
+            db_type,
+            user_id=user_id,
+            content_rating_max=content_rating_max,
+        )
         exclude_series_names = {item['series_name'] for item in history}
         exclude_series_names.add(series_name)
 
@@ -143,4 +161,4 @@ class RecommendationService:
         except Exception:
             pass
 
-        return result
+        return filter_result(result)

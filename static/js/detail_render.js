@@ -4,7 +4,7 @@ import { stripLeadingBracketTags } from './series_display.js';
 import { renderAudiobookVolumes } from './detail/volume_audiobook_view.js';
 import { renderVideoVolumes } from './detail/volume_video_view.js';
 import { renderVolumeGrid } from './detail/volume_grid_view.js';
-import { renderVolumeList } from './detail/volume_list_view.js';
+import { renderVolumeList } from './detail/volume_list_view.js?rev=20260927-tts-listen-v1';
 export { renderDetailHeader } from './detail/header_view.js';
 
 export function renderVolumesList(books, safeSeriesName, actualLibraryId, dbType = 'general', viewOptions = {}) {

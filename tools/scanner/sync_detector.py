@@ -60,7 +60,7 @@ def detect_and_handle_book_movement(cursor, db_books, found_file_paths, db_meta_
 
     return deleted_paths | deleted_imgdir_paths
 
-def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_file_paths):
+def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_file_paths, allow_missing=True):
     """Transaction-safely soft delete books no longer found, and restore previously soft deleted books if found again"""
     norm_db_books = { _normalize_path(k): v for k, v in db_books.items() }
     norm_found_file_paths = { _normalize_path(p) for p in found_file_paths }
@@ -79,7 +79,7 @@ def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_fi
                     WHERE file_path IN ({placeholders}) AND is_deleted = 1
                 """, tuple(chunk) if _is_mariadb_mode() else chunk)
 
-    if not deleted_paths:
+    if not allow_missing or not deleted_paths:
         return True
         
     # 0 files emergency brake safety device
@@ -95,8 +95,8 @@ def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_fi
             cursor.execute(f"""
                 UPDATE books 
                 SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP 
-                WHERE id = {ph}
-            """, (book_id,))
+                WHERE id = {ph} AND file_path = {ph}
+            """, (book_id, dp))
             print(f"[Scanner] File disappearance detected, set to trash: {dp}")
             
     # 2. [대안 2 적용] 7일 이상 경과한 소프트 딜리트 도서들을 영구 하드 딜리트 (자동 비우기)
@@ -126,6 +126,7 @@ def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_fi
             cursor.execute(f"DELETE FROM book_annotations WHERE book_id IN ({placeholders})", params)
             cursor.execute(f"DELETE FROM epub_bookmarks WHERE book_id IN ({placeholders})", params)
             cursor.execute(f"DELETE FROM collection_items WHERE book_id IN ({placeholders})", params)
+            cursor.execute(f"DELETE FROM tts_progress WHERE book_id IN ({placeholders})", params)
             cursor.execute(f"DELETE FROM books WHERE id IN ({placeholders})", params)
             
             # 커버 이미지 물리 파일 소거

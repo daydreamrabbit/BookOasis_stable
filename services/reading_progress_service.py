@@ -122,7 +122,11 @@ class ReadingProgressService:
         if is_epub:
             raw_total = max(1, total_pages)
             raw_idx = max(0, page_idx)
-            normalized_percent = int(round(((raw_idx + 1) / raw_total) * 100))
+            try:
+                precise_percent = (epub_session or {}).get('percent')
+                normalized_percent = int(round(float(precise_percent))) if precise_percent is not None else int(round(((raw_idx + 1) / raw_total) * 100))
+            except (ValueError, TypeError, OverflowError):
+                normalized_percent = int(round(((raw_idx + 1) / raw_total) * 100))
             normalized_percent = max(0, min(100, normalized_percent))
             total_pages = 100
             page_idx = max(0, normalized_percent - 1)
@@ -131,7 +135,7 @@ class ReadingProgressService:
         if total_pages > 0 and book_row and book_row['total_pages'] != total_pages:
             ReadingProgressRepository.update_book_total_pages(db_type, book_id, total_pages)
 
-        pages_read = page_idx + 1
+        pages_read = normalized_percent if is_epub else page_idx + 1
         is_completed = 0
         if total_pages > 0:
             if (pages_read / total_pages) >= 0.95 or pages_read >= total_pages:
@@ -411,6 +415,26 @@ class ReadingProgressService:
             logger.warning(f"[Redis] mark_unread cache invalidation failed: {e}")
 
         return len(book_ids)
+
+    @staticmethod
+    def mark_read(db_type: str, book_id, user_id=1, series_name=None, library_id=None):
+        """도서(또는 시리즈 전체)를 현재 사용자 기준 완독(100%) 처리 - mark_unread의 대칭 동작.
+        video는 완독 처리 인프라가 아직 없어 지원하지 않는다 (호출측에서 사전에 걸러야 함)."""
+        if series_name and library_id is not None:
+            book_ids = ReadingProgressRepository.get_book_ids_by_series(db_type, series_name, library_id)
+        else:
+            book_ids = [book_id]
+
+        if not book_ids:
+            return 0
+
+        if db_type == 'audiobook':
+            total = 0
+            for target_id in book_ids:
+                total += ReadingProgressService.mark_audiobook_completed(target_id, user_id=user_id, track_ids=[])
+            return total
+
+        return ReadingProgressService.mark_books_completed(db_type, book_ids, user_id=user_id)
 
     @staticmethod
     def mark_books_completed(db_type: str, book_ids, user_id=1):

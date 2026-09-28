@@ -7,6 +7,7 @@ EMPTY_STATES = [
     {"db_type": "general", "user_count": 0, "admin_count": 0},
     {"db_type": "adult", "user_count": 0, "admin_count": 0},
     {"db_type": "audiobook", "user_count": 0, "admin_count": 0},
+    {"db_type": "video", "user_count": 0, "admin_count": 0},
 ]
 
 
@@ -33,15 +34,17 @@ def test_dry_run_does_not_create_admin():
 def test_apply_creates_admin_for_known_failure():
     with patch.object(repair_mariadb_admin.database, "is_mariadb_mode", return_value=True), patch.object(
         repair_mariadb_admin, "inspect_users", return_value=EMPTY_STATES
+    ), patch("builtins.input", return_value="chosen-owner"), patch(
+        "getpass.getpass", side_effect=["safe-password", "safe-password"]
     ), patch.object(
         repair_mariadb_admin,
         "create_initial_admin",
-        return_value=["general", "adult", "audiobook"],
+        return_value=["general", "adult", "audiobook", "video"],
     ) as create_initial_admin:
         result = repair_mariadb_admin.main(["--apply"])
 
     assert result == 0
-    create_initial_admin.assert_called_once_with()
+    create_initial_admin.assert_called_once_with("chosen-owner", "safe-password")
 
 
 def test_apply_refuses_to_touch_nonempty_users_tables():

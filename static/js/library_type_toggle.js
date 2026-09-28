@@ -1,39 +1,42 @@
 /* library_type_toggle.js – 일반도서/성인도서/오디오북 미디어 타입 토글 및 권한 관리 모듈 */
 import { state } from './state.js';
-import { loadLibraries } from './category.js';
+import { loadLibraries } from './category.js?rev=20260922-library-kinds-v5';
+
+let libraryTypeCollapseInitialized = false;
+let libraryTypeCollapseMediaQuery = null;
+
+const LIBRARY_TYPE_LABELS = {
+  general: '일반 도서',
+  adult: '성인 도서',
+  audiobook: '오디오북',
+  video: '영상 강좌',
+};
+
+function updateMobileLibraryTypeLabel(type = state.currentLibraryType || 'general') {
+  const label = document.getElementById('mobile-library-type-label');
+  if (label) label.textContent = LIBRARY_TYPE_LABELS[type] || LIBRARY_TYPE_LABELS.general;
+}
 
 export function canAccessAdultLibrary() {
   const user = state.currentUser || window.currentUser || {};
-  const role = String(user.role || '').toLowerCase();
-  if (role === 'admin') return true;
-
   const raw = user.has_adult_access;
   return raw === true || raw === 1 || String(raw) === '1';
 }
 
 export function canAccessAudiobookLibrary() {
   const user = state.currentUser || window.currentUser || {};
-  const role = String(user.role || '').toLowerCase();
-  if (role === 'admin') return true;
-
   const raw = user.has_audiobook_access;
   return raw === true || raw === 1 || String(raw) === '1';
 }
 
 export function canAccessVideoLibrary() {
   const user = state.currentUser || window.currentUser || {};
-  const role = String(user.role || '').toLowerCase();
-  if (role === 'admin') return true;
-
   const raw = user.has_video_access;
   return raw === true || raw === 1 || String(raw) === '1';
 }
 
 export function canDownloadFiles() {
   const user = state.currentUser || window.currentUser || {};
-  const role = String(user.role || '').toLowerCase();
-  if (role === 'admin') return true;
-
   const raw = user.has_download_access;
   return raw === true || raw === 1 || String(raw) === '1';
 }
@@ -43,6 +46,85 @@ export function canAccessLibraryType(type) {
   if (type === 'audiobook') return canAccessAudiobookLibrary();
   if (type === 'video') return canAccessVideoLibrary();
   return true;
+}
+
+function isMobileLibraryLayout() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 1200px)').matches;
+}
+
+export function applyLibraryTypeCollapseState(collapsed = true) {
+  const toggleGroup = document.getElementById('library-type-toggle-group');
+  const collapseButton = document.getElementById('btn-toggle-library-types');
+  if (!toggleGroup || !collapseButton) return;
+
+  // 데스크톱에서는 기존 한 줄 탭을 항상 표시하고, 접힘 상태는 모바일에서만 적용한다.
+  const shouldCollapse = isMobileLibraryLayout() && Boolean(collapsed);
+  toggleGroup.classList.toggle('library-type-toggle-group--collapsed', shouldCollapse);
+  collapseButton.setAttribute('aria-expanded', String(!shouldCollapse));
+  collapseButton.setAttribute(
+    'title',
+    shouldCollapse ? '미디어 종류 펼치기' : '미디어 종류 접기'
+  );
+  collapseButton.dataset.i18nTitle = shouldCollapse
+    ? 'header.library_types_expand'
+    : 'header.library_types_collapse';
+  const translationKey = shouldCollapse
+    ? 'header.library_types_expand'
+    : 'header.library_types_collapse';
+  const fallbackLabel = shouldCollapse ? '미디어 종류 펼치기' : '미디어 종류 접기';
+  const translatedLabel = window.i18n?.t?.(translationKey) || fallbackLabel;
+  collapseButton.title = translatedLabel;
+  const label = collapseButton.querySelector('[data-i18n]');
+  if (label) {
+    label.dataset.i18n = translationKey;
+    label.textContent = translatedLabel;
+  }
+}
+
+export function toggleLibraryTypeCollapse() {
+  const toggleGroup = document.getElementById('library-type-toggle-group');
+  if (!toggleGroup) return;
+  const willCollapse = !toggleGroup.classList.contains('library-type-toggle-group--collapsed');
+  applyLibraryTypeCollapseState(willCollapse);
+}
+
+export function initLibraryTypeCollapse() {
+  const collapseButton = document.getElementById('btn-toggle-library-types');
+  if (!collapseButton) return;
+
+  if (!libraryTypeCollapseInitialized) {
+    libraryTypeCollapseInitialized = true;
+    libraryTypeCollapseMediaQuery = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 1200px)')
+      : null;
+    const handleViewportChange = () => applyLibraryTypeCollapseState(true);
+    if (libraryTypeCollapseMediaQuery?.addEventListener) {
+      libraryTypeCollapseMediaQuery.addEventListener('change', handleViewportChange);
+    } else if (libraryTypeCollapseMediaQuery?.addListener) {
+      libraryTypeCollapseMediaQuery.addListener(handleViewportChange);
+    }
+    document.addEventListener('click', (event) => {
+      if (!isMobileLibraryLayout()) return;
+      const target = event.target;
+      if (target?.closest?.('#btn-toggle-library-types, #library-type-toggle-group')) return;
+      const toggleGroup = document.getElementById('library-type-toggle-group');
+      if (toggleGroup && !toggleGroup.classList.contains('library-type-toggle-group--collapsed')) {
+        applyLibraryTypeCollapseState(true);
+      }
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !isMobileLibraryLayout()) return;
+      applyLibraryTypeCollapseState(true);
+    });
+  }
+
+  updateMobileLibraryTypeLabel();
+  // 모바일 미디어 유형 목록은 영구 펼침 상태가 아니라 일시적인 드롭다운이다.
+  // 과거 버전에서 저장된 expanded 값 때문에 새로고침 직후 본문을 가리지 않도록
+  // 초기화할 때는 항상 닫힌 상태로 시작한다.
+  applyLibraryTypeCollapseState(true);
 }
 
 export function applyLibraryTypeToggleVisibility() {
@@ -76,6 +158,7 @@ export function applyLibraryTypeButtonState(type) {
   const safeType = (type === 'adult' || type === 'audiobook' || type === 'video') ? type : 'general';
   state.currentLibraryType = safeType;
   window.currentLibraryType = safeType;
+  updateMobileLibraryTypeLabel(safeType);
   document.documentElement.setAttribute('data-library-type', safeType);
 
   // 초기 로드 1회 + 세션 전환마다 항상 거치는 유일한 지점이라, 플러그인이 세션 변경을
@@ -108,6 +191,9 @@ export async function switchLibraryType(type) {
 
   applyLibraryTypeButtonState(type);
   localStorage.setItem('last_selected_library_type', type);
+  if (isMobileLibraryLayout()) {
+    applyLibraryTypeCollapseState(true);
+  }
 
   // 영상 강좌는 일반 도서 그리드/대시보드 파이프라인을 타지 않고 전용 화면을 로드한다
   if (type === 'video') {
@@ -135,3 +221,6 @@ window.canAccessLibraryType = canAccessLibraryType;
 window.applyLibraryTypeToggleVisibility = applyLibraryTypeToggleVisibility;
 window.applyLibraryTypeButtonState = applyLibraryTypeButtonState;
 window.switchLibraryType = switchLibraryType;
+window.applyLibraryTypeCollapseState = applyLibraryTypeCollapseState;
+window.toggleLibraryTypeCollapse = toggleLibraryTypeCollapse;
+window.initLibraryTypeCollapse = initLibraryTypeCollapse;
