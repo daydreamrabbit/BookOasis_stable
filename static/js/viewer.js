@@ -743,6 +743,9 @@ function initMediaViewerDelegation() {
     }
 
     if (target.closest('#common-viewer-hotspot') && isViewerTextPoint(event.clientX, event.clientY)) return;
+    // The capture handler owns hotspot clicks. Do not let the body handler
+    // immediately dismiss chrome that this same click has just opened.
+    if (target.closest('#common-viewer-hotspot')) event.stopPropagation();
     event.preventDefault();
     let action = target.getAttribute('data-action');
     const value = target.getAttribute('data-value');

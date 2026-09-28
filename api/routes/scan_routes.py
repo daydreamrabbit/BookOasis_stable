@@ -212,6 +212,16 @@ def scan_single_book_api(book_id):
     try:
         success, message, cover_image = BookScanService.scan_single_book(db_type, book_id)
         if success:
+            try:
+                from repositories.book_scan_repository import BookScanRepository
+                from services.scanner_queue import queue_scanned_books_metadata_hooks
+
+                book = BookScanRepository.get_book_basic_info_raw(db_type, book_id) or {}
+                library_id = book.get('library_id')
+                if library_id is not None:
+                    queue_scanned_books_metadata_hooks(db_type, {library_id: [book_id]})
+            except Exception as hook_error:
+                print(f"[ScanAPI] Could not queue metadata collection after book scan: {hook_error}")
             return jsonify({'success': True, 'message': message, 'cover_image': cover_image})
         else:
             return jsonify({'success': False, 'error': message}), 400

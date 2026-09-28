@@ -147,13 +147,17 @@ function renderScanActivity(data) {
   }
   button.title = tasks.length > 0 ? `스캔 활동 ${tasks.length}건` : '스캔 활동';
   const activeMetadataCount = metadataActivities.filter(task => task?.status === 'running').length;
+  const recentMetadataCount = metadataActivities.filter(task => task?.status !== 'running').length;
+  const failedMetadataCount = metadataActivities.filter(task => task?.status === 'failed').length;
   summary.textContent = running
     ? `실행 중 · 대기열 ${pending.length}건`
     : activeMetadataCount ? `자동 메타데이터 수집 ${activeMetadataCount}건`
     : pending.length ? `대기열 ${pending.length}건`
-      : recentLibraryScans.length ? `최근 카테고리 스캔 ${recentLibraryScans.length}건`
-        : recentBookScans.length ? `최근 도서 스캔 ${recentBookScans.length}건`
-        : tasks.length ? '실행 중' : '대기 중';
+      : failedMetadataCount ? `자동 메타데이터 수집 실패 ${failedMetadataCount}건`
+        : recentMetadataCount ? `자동 메타데이터 수집 완료 ${recentMetadataCount}건`
+        : recentLibraryScans.length ? `최근 카테고리 스캔 ${recentLibraryScans.length}건`
+          : recentBookScans.length ? `최근 도서 스캔 ${recentBookScans.length}건`
+            : tasks.length ? '실행 중' : '대기 중';
   if (tasks.length === 0) {
     list.innerHTML = `
       <div class="scan-activity-empty">

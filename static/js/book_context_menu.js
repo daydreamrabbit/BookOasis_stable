@@ -8,7 +8,7 @@ import { loadBooksList, loadReadingHistory } from './book_list.js?rev=20260920-m
 import { loadDashboardData } from './dashboard.js?v=20260926-home-layout-type-cache-v1';
 import { hideFloatingMenu, isFloatingMenuOpen, positionMenuAtPoint } from './context_menu_manager.js';
 import { clearBookSelection, getSelectedBookTargets, isBookCardSelected } from './book_selection.js';
-import { refreshSystemStatus } from './scan_activity_status.js?rev=20260928-metadata-activity-v1';
+import { refreshSystemStatus } from './scan_activity_status.js?rev=20260928-metadata-activity-v2';
 import { shouldOfferMarkAsRead } from './book_context_read_state.js?rev=20260920-detail-read-toggle-v1';
 import { resolveSeriesDeleteTargets } from './series_delete_targets.js?rev=20260921-multi-series-delete-v1';
 

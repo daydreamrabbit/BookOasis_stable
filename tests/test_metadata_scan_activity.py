@@ -19,6 +19,10 @@ class FakeRedis:
     def get(self, key):
         return self.values.get(key)
 
+    def delete(self, key):
+        self.ttls.pop(key, None)
+        return int(self.values.pop(key, None) is not None)
+
     def scan_iter(self, match, count=50):
         return [key for key in self.values if fnmatch.fnmatch(key, match)]
 
@@ -30,6 +34,7 @@ def redis_helper_stub(client):
         return client.set(f'bookoasis:{key}', value, ex=ex)
 
     module.redis_set = save
+    module.redis_del = lambda key: client.delete(f'bookoasis:{key}')
     module.get_redis_client = lambda: client
     module.make_key = lambda key: f'bookoasis:{key}'
     return module
@@ -71,3 +76,17 @@ def test_completed_metadata_activity_is_retained_briefly():
         })
 
     assert next(iter(client.ttls.values())) == activity._FINISHED_TTL_SECONDS
+
+
+def test_empty_metadata_run_can_remove_its_temporary_activity():
+    client = FakeRedis()
+
+    with patch.dict(sys.modules, {'utils.redis_helper': redis_helper_stub(client)}):
+        activity.save_metadata_scan_activity({
+            'type': 'metadata_auto_collect',
+            'db_type': 'general',
+            'library_id': 19,
+            'status': 'running',
+        })
+        assert activity.clear_metadata_scan_activity('general', 19)
+        assert activity.list_metadata_scan_activities() == []

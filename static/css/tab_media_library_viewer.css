@@ -313,7 +313,7 @@
     transform: none;
     display: block;
     margin: 0 auto;
-    /* 별도 높이/너비 버튼 없이 현재 창 너비에 자동 대응한다. */
+    /* 폭맞춤 기본값. 높이맞춤은 아래 별도 규칙으로 적용한다. */
     width: min(100%, 1100px);
     max-width: 100%;
     height: auto;
@@ -2622,3 +2622,51 @@ input:checked + .toggle-switch-slider::before {
         touch-action: manipulation;
     }
 }
+
+/* Keep the mode switch centered independently of title/tool widths. */
+#media-viewer-modal .ridi-viewer-toolbar-top {
+    display: grid !important;
+    grid-template-columns: 38px minmax(0, 1fr) auto minmax(0, 1fr) 38px;
+    align-items: center;
+}
+#media-viewer-modal .ridi-viewer-mode-group {
+    grid-column: 3;
+    justify-self: center;
+    margin: 0;
+}
+#media-viewer-modal .ridi-viewer-tools {
+    justify-self: end;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+}
+#media-viewer-modal .ridi-viewer-toolbar-top > .viewer-controls { min-width: 0; }
+@media (max-width: 1200px) {
+    #media-viewer-modal .ridi-viewer-toolbar-top {
+        height: 88px;
+        grid-template-columns: 38px minmax(0, 1fr) 38px;
+        grid-template-rows: 44px 38px;
+        gap: 0 6px;
+    }
+    #media-viewer-modal .ridi-viewer-toolbar-top > .viewer-title { display: none; }
+    #media-viewer-modal .ridi-viewer-back { grid-area: 1 / 1; }
+    #media-viewer-modal .ridi-viewer-tools { grid-area: 1 / 2; }
+    #media-viewer-modal .ridi-viewer-toolbar-top > .viewer-controls { grid-area: 1 / 3; }
+    #media-viewer-modal .ridi-viewer-mode-group { grid-area: 2 / 1 / 3 / -1; }
+    #media-viewer-modal #epub-toc-container,
+    #media-viewer-modal .viewer-side-panel { top: 88px !important; }
+}
+@media (min-width: 621px) and (max-width: 1200px) {
+    #media-viewer-modal .ridi-view-settings { top: calc(96px + env(safe-area-inset-top, 0px)); }
+}
+
+/* Fit a scroll page to the viewport height, not the entire scroll strip. */
+#media-viewer-modal .comic-image-wrapper.scroll-mode.fit-height img.comic-scroll-img {
+    width: auto;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    max-width: none;
+    object-fit: contain;
+}
+#media-viewer-modal .comic-image-wrapper.scroll-mode.fit-height { overflow-x: auto; }

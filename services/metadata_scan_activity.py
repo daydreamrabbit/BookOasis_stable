@@ -26,6 +26,18 @@ def save_metadata_scan_activity(activity):
         return False
 
 
+def clear_metadata_scan_activity(db_type, library_id):
+    if library_id is None:
+        return False
+    try:
+        from utils.redis_helper import redis_del
+
+        key = f'{_ACTIVITY_KEY_PREFIX}{str(db_type or "").strip()}:{int(library_id)}'
+        return redis_del(key)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def list_metadata_scan_activities():
     """Return current and briefly retained completed metadata activities."""
     try:

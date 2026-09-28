@@ -242,8 +242,20 @@ def _make_metadata_scan_progress_callback(db_type, event_payload):
     library_name = str(event_payload.get('library_name') or '').strip()
     started_at = time.strftime('%Y-%m-%d %H:%M:%S')
     activity_key = f'metadata_auto_collect_{db_type}_{library_id}'
+    suppressed = False
 
     def report(event, **details):
+        nonlocal suppressed
+        if event == 'clear':
+            suppressed = True
+            try:
+                from services.metadata_scan_activity import clear_metadata_scan_activity
+                clear_metadata_scan_activity(db_type, library_id)
+            except Exception:
+                pass
+            return
+        if suppressed:
+            return
         status = 'running'
         if event == 'completed':
             status = 'completed'

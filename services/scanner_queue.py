@@ -6,6 +6,7 @@ import hashlib
 import time
 import subprocess
 import datetime
+import threading
 import database
 from services.scan_cancellation import ScanCancelledError
 
@@ -701,6 +702,51 @@ def _update_batch_book_scan_stage(sq, task_id, stage):
         sq.log(f"Failed to update batch book scan progress: {error}")
 
 
+def queue_scanned_books_metadata_hooks(db_type, book_ids_by_library):
+    """Queue narrow metadata collection after an explicit book rescan succeeds."""
+    try:
+        from tools.scanner.engine import _dispatch_scan_completed_to_plugin_hooks
+    except Exception as error:
+        print(f"[Queue] Could not load metadata scan hook: {error}")
+        return 0
+
+    queued = 0
+    for raw_library_id, raw_book_ids in (book_ids_by_library or {}).items():
+        try:
+            library_id = int(raw_library_id)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if library_id <= 0:
+            continue
+        book_ids = []
+        for raw_book_id in raw_book_ids or ():
+            try:
+                book_id = int(raw_book_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if book_id > 0 and book_id not in book_ids:
+                book_ids.append(book_id)
+        if not book_ids:
+            continue
+        event_payload = {
+            'db_type': db_type,
+            'library_id': library_id,
+            'book_ids': book_ids,
+            'new_books_count': 0,
+            'sample_titles': [],
+        }
+        try:
+            threading.Thread(
+                target=_dispatch_scan_completed_to_plugin_hooks,
+                args=(db_type, event_payload),
+                daemon=True,
+            ).start()
+            queued += len(book_ids)
+        except Exception as error:
+            print(f"[Queue] Could not start metadata scan hook for library {library_id}: {error}")
+    return queued
+
+
 def _process_batch_book_scan(
     sq,
     task_id,
@@ -806,6 +852,7 @@ def _process_batch_book_scan(
             document_ids.append(book_id)
 
     succeeded = 0
+    succeeded_book_ids = []
     failures = []
     if document_ids:
         document_label = 'PDF'
@@ -826,6 +873,7 @@ def _process_batch_book_scan(
             for book_id in document_ids:
                 if (document_covers or {}).get(book_id):
                     succeeded += 1
+                    succeeded_book_ids.append(book_id)
                 else:
                     failure = f'{get_title(book_id)}: {document_label} 표지를 추출하지 못했습니다.'
                     failures.append(failure)
@@ -850,6 +898,7 @@ def _process_batch_book_scan(
             success, message, _cover_image = BookScanService.scan_single_book(db_type, book_id)
             if success:
                 succeeded += 1
+                succeeded_book_ids.append(book_id)
             else:
                 failure = f'{title}: {message or "스캔 실패"}'
                 failures.append(failure)
@@ -864,6 +913,21 @@ def _process_batch_book_scan(
     summary = f'선택 도서 스캔 완료{single_title} · 성공 {succeeded}/{total}, 실패 {len(failures)}'
     _update_batch_book_scan_stage(sq, task_id, summary)
     sq.log(summary)
+    if succeeded_book_ids:
+        books_by_library = {}
+        for book_id in succeeded_book_ids:
+            book = books.get(book_id) or {}
+            target_library_id = book.get('library_id') or library_id
+            if target_library_id is None:
+                continue
+            books_by_library.setdefault(int(target_library_id), []).append(book_id)
+        if books_by_library:
+            queued = queue_scanned_books_metadata_hooks(db_type, books_by_library)
+            if queued:
+                sq.log(
+                    f"Automatic metadata hooks queued for {queued} scanned books "
+                    f"in {len(books_by_library)} libraries."
+                )
     if failures:
         failure_details = '; '.join(failures[:5])
         if len(failures) > 5:

@@ -160,6 +160,45 @@ class BatchBookScanProgressTests(unittest.TestCase):
         self.assertIn('테스트 단행본', final_stage)
         self.assertIn('성공 1/1, 실패 0', final_stage)
 
+    def test_successful_batch_scan_dispatches_targeted_metadata_hook(self):
+        queue = Mock()
+        lookup = Mock(return_value={
+            'id': 303, 'library_id': 19, 'title': '테스트 단행본',
+            'file_path': '/books/test.cbz', 'file_format': 'cbz',
+        })
+        scan = Mock(return_value=(True, '완료', None))
+        book_repository_module = types.ModuleType('repositories.book_scan_repository')
+        book_repository_module.BookScanRepository = types.SimpleNamespace(
+            get_book_basic_info_raw=lookup
+        )
+        book_scan_module = types.ModuleType('services.book_scan_service')
+        book_scan_module.BookScanService = types.SimpleNamespace(scan_single_book=scan)
+        queue_repository_module = types.ModuleType('repositories.scanner_queue_repository')
+        queue_repository_module.ScannerQueueRepository = types.SimpleNamespace(
+            update_task_stage=Mock()
+        )
+        dispatch = Mock()
+        engine_module = types.ModuleType('tools.scanner.engine')
+        engine_module._dispatch_scan_completed_to_plugin_hooks = dispatch
+        thread = Mock()
+        thread_factory = Mock(return_value=thread)
+
+        with patch.dict('sys.modules', {
+            'repositories.book_scan_repository': book_repository_module,
+            'services.book_scan_service': book_scan_module,
+            'repositories.scanner_queue_repository': queue_repository_module,
+            'tools.scanner.engine': engine_module,
+        }), patch('services.scanner_queue.threading.Thread', thread_factory):
+            _process_batch_book_scan(
+                queue, task_id=13, db_type='general', book_ids=[303], library_id=19
+            )
+
+        thread.start.assert_called_once_with()
+        args = thread_factory.call_args.kwargs['args']
+        self.assertEqual(args[0], 'general')
+        self.assertEqual(args[1]['library_id'], 19)
+        self.assertEqual(args[1]['book_ids'], [303])
+
     def test_recent_finished_scan_time_window(self):
         now = datetime.datetime(2026, 9, 17, 12, 0, 20)
         just_finished = (now - datetime.timedelta(seconds=10)).strftime('%Y-%m-%d %H:%M:%S')

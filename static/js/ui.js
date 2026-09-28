@@ -12,7 +12,7 @@ import {
   readNextFavoriteStatus, applyFavoriteState, snapshotFavoriteState, restoreFavoriteState,
   isFavoritePending, setFavoritePending,
 } from './favorite_toggle.js';
-import './scan_activity_status.js?rev=20260928-metadata-activity-v1';
+import './scan_activity_status.js?rev=20260928-metadata-activity-v2';
 import './library_auto_refresh.js';
 import './account_menu.js?rev=20260921-theme-mobile-v2';
 import './category_info_popover.js';
