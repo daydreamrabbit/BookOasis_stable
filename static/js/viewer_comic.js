@@ -1,8 +1,8 @@
 // Thin wrapper for backward compatibility — re-export modular viewer APIs
-import * as Viewer from './viewer/viewer_init.js';
+import * as Viewer from './viewer/viewer_init.js?rev=20260928-comic-state-v2';
 import * as Settings from './viewer/reader_settings.js';
-import * as Renderer from './viewer/renderer.js?rev=20260923-reader-session-v45';
-import * as Nav from './viewer/navigation.js?rev=20260927-tts-session-v8';
+import * as Renderer from './viewer/renderer.js?rev=20260928-comic-state-v2';
+import * as Nav from './viewer/navigation.js?rev=20260928-comic-state-v2';
 import { state } from './state.js';
 import { saveProgress } from './viewer_progress.js?rev=20260927-tts-session-v8';
 

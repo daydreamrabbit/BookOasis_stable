@@ -20,6 +20,30 @@
     let downwardDistance = 0;
     let upwardDistance = 0;
     let ticking = false;
+    let userScrolling = false;
+
+    function revealForNavigation() {
+      userScrolling = false;
+      lastScrollTop = scrollEl.scrollTop;
+      downwardDistance = 0;
+      upwardDistance = 0;
+      header.classList.remove('library-header--hidden');
+    }
+    window.addEventListener('bookoasis:view-changing', revealForNavigation);
+    window.addEventListener('popstate', revealForNavigation);
+    for (const eventName of ['wheel', 'touchmove']) {
+      scrollEl.addEventListener(eventName, () => {
+        if (!userScrolling) lastScrollTop = scrollEl.scrollTop;
+        userScrolling = true;
+      }, { passive: true });
+    }
+    scrollEl.addEventListener('keydown', event => {
+      if (event.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      if (['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) {
+        if (!userScrolling) lastScrollTop = scrollEl.scrollTop;
+        userScrolling = true;
+      }
+    });
 
     function onScroll() {
       if (ticking) return;
@@ -28,7 +52,7 @@
         const st = scrollEl.scrollTop;
         const delta = st - lastScrollTop;
 
-        if (st <= revealNearTop) {
+        if (!userScrolling || st <= revealNearTop) {
           header.classList.remove('library-header--hidden');
           downwardDistance = 0;
           upwardDistance = 0;

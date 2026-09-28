@@ -536,6 +536,13 @@
 }
 
 /* 📌 상/하 탭존 모드 (한손 파지 대응: 좌/우 대신 위/아래로 넘기기) */
+#common-viewer-hotspot {
+    /* 페이지 넘김 제스처가 브라우저의 가로 탐색/세로 스크롤로 취소되지 않게 한다.
+       본문 텍스트 선택과 설정 패널의 스크롤은 이 레이어 밖에서 그대로 유지한다. */
+    touch-action: pinch-zoom;
+    overscroll-behavior: contain;
+}
+
 .comic-hotspot-layer.vertical {
     flex-direction: column;
 }

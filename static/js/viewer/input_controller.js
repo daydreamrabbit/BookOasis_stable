@@ -1,5 +1,6 @@
 // input_controller.js - keyboard/wheel/hotspot/click input handlers for viewer
 import { state } from '../state.js';
+import { getTapDirection } from './tap_direction.js';
 
 let _deps = {
   toggleFullscreenViewer: null,
@@ -54,20 +55,10 @@ function isPointOnSelectableText(clientX, clientY) {
   ));
 }
 
-// 만화 뷰어에서 RTL(우->좌) 읽기 방향이 활성화되어 있는지 여부.
-// 화면 좌/우 핫스팟 클릭처럼 물리적 화면 위치에 반응하는 조작에서만 사용한다.
-function isComicRtlActive() {
-  const isComicFormat = ['zip', 'cbz', 'imgdir'].includes((state.currentViewerFormat || '').toLowerCase());
-  if (!isComicFormat) return false;
-  return (typeof window.Settings !== 'undefined' && typeof window.Settings.getComicReadingDirection === 'function')
-    ? window.Settings.getComicReadingDirection() === 'rtl'
-    : localStorage.getItem('comic_reading_direction') === 'rtl';
-}
-
+// 페이지 배치(1|2/2|1)와 입력 방향은 별개 설정이다.
 function isViewerRtlFlowActive() {
-  const modal = document.getElementById('media-viewer-modal');
-  if (modal?.dataset.displayMode === 'two-one') return true;
-  return isComicRtlActive();
+  const { vertical, reverse } = getTapDirection();
+  return !vertical && reverse;
 }
 
 // 높이맞춤 + 1장 보기에서 너비가 화면보다 커져(좌우가 가려짐) 롱프레스+드래그로 팬이 가능한
@@ -679,7 +670,8 @@ export function initViewerClickToggle() {
       if (!viewerModal || viewerModal.style.display !== 'flex') return;
 
       const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
-      const tapDirection = localStorage.getItem('viewer_tap_zone_direction') === 'vertical' ? 'vertical' : 'horizontal';
+      const tapConfig = getTapDirection();
+      const tapDirection = tapConfig.vertical ? 'vertical' : 'horizontal';
 
       // 모바일 네이티브 텍스트 선택은 롱프레스 후 드래그로 확정된다. 긴 텍스트
       // 제스처를 먼저 선택기에 넘겨야 touchend가 페이지 스와이프로 소비하지 않는다.
@@ -726,11 +718,11 @@ export function initViewerClickToggle() {
         if (diffY > 0) {
           // 👆 Swipe Up (아래에서 위로 쓸어올림) → 다음 페이지
           console.log(`[Viewer-Touch-Swipe] Swipe Up detected (diffY=${diffY})`);
-          callDep('movePageByOne', 'next');
+          callDep('movePageByOne', tapConfig.reverse ? 'prev' : 'next');
         } else {
           // 👇 Swipe Down (위에서 아래로 쓸어내림) → 이전 페이지
           console.log(`[Viewer-Touch-Swipe] Swipe Down detected (diffY=${diffY})`);
-          callDep('movePageByOne', 'prev');
+          callDep('movePageByOne', tapConfig.reverse ? 'next' : 'prev');
         }
         return;
       }
@@ -749,12 +741,12 @@ export function initViewerClickToggle() {
       if (absX < TAP_THRESHOLD && absY < TAP_THRESHOLD && duration <= 380) {
         const width = window.innerWidth;
         const height = window.innerHeight;
-        const direction = localStorage.getItem('viewer_tap_zone_direction') === 'vertical' ? 'vertical' : 'horizontal';
+        const direction = tapConfig.vertical ? 'vertical' : 'horizontal';
         const isRtl = isViewerRtlFlowActive();
         let action = null;
         if (direction === 'vertical') {
-          if (endY <= height * EDGE_ZONE_RATIO) action = 'prevPage';
-          else if (endY >= height * (1 - EDGE_ZONE_RATIO)) action = 'nextPage';
+          if (endY <= height * EDGE_ZONE_RATIO) action = tapConfig.reverse ? 'nextPage' : 'prevPage';
+          else if (endY >= height * (1 - EDGE_ZONE_RATIO)) action = tapConfig.reverse ? 'prevPage' : 'nextPage';
         } else {
           if (endX <= width * EDGE_ZONE_RATIO) action = isRtl ? 'nextPage' : 'prevPage';
           else if (endX >= width * (1 - EDGE_ZONE_RATIO)) action = isRtl ? 'prevPage' : 'nextPage';
@@ -838,11 +830,12 @@ export function initViewerClickToggle() {
     const isSelectableText = format === 'epub' || format === 'txt';
     if (scrollMode === 'page' && isSelectableText) {
       if (mouseMoved || mouseStartedOnSelectableText || isPointOnSelectableText(e.clientX, e.clientY)) return;
-      const direction = localStorage.getItem('viewer_tap_zone_direction') === 'vertical' ? 'vertical' : 'horizontal';
+      const tapConfig = getTapDirection();
+      const direction = tapConfig.vertical ? 'vertical' : 'horizontal';
       if (direction === 'vertical') {
         const ratio = e.clientY / Math.max(1, window.innerHeight);
-        if (ratio < EDGE_ZONE_RATIO) callDep('prevPage');
-        else if (ratio > 1 - EDGE_ZONE_RATIO) callDep('nextPage');
+        if (ratio < EDGE_ZONE_RATIO) callDep(tapConfig.reverse ? 'nextPage' : 'prevPage');
+        else if (ratio > 1 - EDGE_ZONE_RATIO) callDep(tapConfig.reverse ? 'prevPage' : 'nextPage');
         else callDep('toggleViewerChrome');
       } else {
         const ratio = e.clientX / Math.max(1, window.innerWidth);

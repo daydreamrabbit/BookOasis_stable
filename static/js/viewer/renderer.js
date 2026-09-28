@@ -261,6 +261,7 @@ function fetchImageWithWorker(url) {
 let isInitializingProgress = false;
 
 export async function initRenderer(bookId, pagesRead, totalPages) {
+  clearComicViewer();
   const sessionSeq = ++rendererSessionSeq;
   const isCurrentSession = () => (
     sessionSeq === rendererSessionSeq
@@ -270,7 +271,6 @@ export async function initRenderer(bookId, pagesRead, totalPages) {
   isInitializingProgress = true;
 
   // 이전 도서 캐시 및 DOM 상태 완전 초기화 (도서간 이미지 교차 오염 방지)
-  clearComicViewer();
   clearBlobCache();
 
   // 뷰어 초기화가 시작되는 즉시 로딩 오버레이를 화면에 노출합니다.
@@ -300,8 +300,15 @@ export async function initRenderer(bookId, pagesRead, totalPages) {
 
   if (!isCurrentSession()) return;
   comicCurrentPage = initialPage;
-  comicTotalPages = await FileLoader.fetchTotalPagesIfNeeded(bookId, totalPages);
+  const resolvedTotalPages = await FileLoader.fetchTotalPagesIfNeeded(bookId, totalPages);
   if (!isCurrentSession()) return;
+  comicTotalPages = resolvedTotalPages;
+  if (!(comicTotalPages > 0)) {
+    isInitializingProgress = false;
+    showViewerError('페이지 정보를 불러오지 못했습니다.', '파일 연결 상태를 확인한 뒤 다시 열어 주세요.');
+    return;
+  }
+  comicCurrentPage = Math.max(0, Math.min(comicCurrentPage, comicTotalPages - 1));
   splitModeActive = false; // 책마다 항상 물리 페이지 공간에서 시작
 
   Settings.initReadingDirection();
@@ -414,6 +421,7 @@ function getComicPageSlots() {
 }
 
 export function loadComicPage() {
+  if (!(comicTotalPages > 0)) return;
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   const wrapper = document.querySelector('.comic-image-wrapper');
   if (!wrapper) return;
@@ -857,6 +865,7 @@ function syncSeekBar() {
   const slider = document.getElementById('viewer-page-slider');
   if (!slider) return;
   slider.max = comicTotalPages || 1;
+  slider.disabled = !(comicTotalPages > 0);
   const visiblePages = getComicPageIndices();
   slider.value = visiblePages.length ? Math.max(...visiblePages) + 1 : comicCurrentPage + 1;
   const first = visiblePages.length ? Math.min(...visiblePages) + 1 : comicCurrentPage + 1;
@@ -980,6 +989,10 @@ function preloadNextPages() {
 }
 
 export function clearComicViewer() {
+  rendererSessionSeq += 1;
+  isInitializingProgress = false;
+  comicCurrentPage = 0;
+  comicTotalPages = 0;
   // 이전 이미지 요청의 onload가 늦게 도착해 새 책/새 페이지 DOM을 덮어쓰지 못하게 한다.
   comicRenderSeq += 1;
   const wrapper = document.querySelector('.comic-image-wrapper');

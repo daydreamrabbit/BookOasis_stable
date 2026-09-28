@@ -716,11 +716,12 @@ function restoreNavigationScroll(scrollTop, libraryId = state.currentLibraryId) 
     if (mainContent) mainContent.scrollTop = value;
     const gridView = document.getElementById('books-grid-view');
     const dashboardView = document.getElementById('library-dashboard-view');
-    if (gridView) gridView.scrollTop = value;
-    if (dashboardView) dashboardView.scrollTop = value;
-    window.scrollTo(0, value);
-    document.documentElement.scrollTop = value;
-    document.body.scrollTop = value;
+    if (gridView) gridView.scrollTop = mainContent ? 0 : value;
+    if (dashboardView) dashboardView.scrollTop = mainContent ? 0 : value;
+    const documentTop = window.matchMedia('(max-width: 1200px)').matches ? 0 : value;
+    window.scrollTo(0, documentTop);
+    document.documentElement.scrollTop = documentTop;
+    document.body.scrollTop = documentTop;
   };
   requestAnimationFrame(apply);
   setTimeout(apply, 80);

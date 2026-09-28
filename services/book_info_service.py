@@ -3,6 +3,7 @@ import os
 from repositories.book_repository import BookRepository
 from utils.cache_helper import get_zip_file_hybrid
 from services.stream_service import get_imgdir_files
+from utils.drive_helper import is_gdrive_url
 
 class BookInfoService:
     @staticmethod
@@ -77,7 +78,12 @@ class BookInfoService:
         file_path = row['file_path']
 
         imgdir_exists = file_format == 'imgdir' and file_path and os.path.isdir(os.path.dirname(file_path))
-        if total_pages == 0 and file_path and (os.path.exists(file_path) or imgdir_exists):
+        # Lazy scans can leave a one-page placeholder. Virtual Drive paths are
+        # resolved by get_zip_file_hybrid, not by os.path.exists().
+        needs_count = total_pages == 0 or (total_pages == 1 and file_format in ('zip', 'cbz', 'imgdir'))
+        if needs_count:
+            total_pages = 0
+        if needs_count and file_path and (os.path.exists(file_path) or imgdir_exists or is_gdrive_url(file_path)):
             if file_format in ('zip', 'cbz'):
                 zf = get_zip_file_hybrid(file_path)
                 if zf:

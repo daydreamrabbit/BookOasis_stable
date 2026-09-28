@@ -28,7 +28,8 @@ function resetViewerSeekbarForOpen() {
     slider.style.setProperty('--seek-progress', '0%');
     slider.dataset.seekMode = 'page';
   }
-  if (label) label.textContent = '– / –';
+  if (slider) slider.disabled = true;
+  if (label) label.textContent = '페이지 불러오는 중…';
   if (tooltip) tooltip.classList.remove('visible');
 }
 
@@ -179,6 +180,8 @@ export function openReader(bookId, format, title, pagesRead, totalPages) {
     if (overlayComicFit) overlayComicFit.style.display = 'flex';
     activeViewerInstance = ComicViewer;
     activeViewerInstance.init(bookId, pagesRead, totalPages).then(() => {
+      if (String(state.activeBookId) !== String(bookId) || activeViewerInstance !== ComicViewer
+          || viewerModal.style.display !== 'flex') return;
       deps.initViewerSeekBar();
     });
   } else if (fmt === 'txt') {
@@ -242,6 +245,8 @@ export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
 
     viewerModal.classList.remove('fullscreen-mode');
     viewerModal.style.display = 'none';
+    const loadingOverlay = document.getElementById('viewer-common-overlay');
+    if (loadingOverlay) loadingOverlay.style.display = 'none';
     document.dispatchEvent(new CustomEvent('viewer-closed'));
     const fullscreenIcon = document.getElementById('fullscreen-icon');
     if (fullscreenIcon) fullscreenIcon.className = 'fa-solid fa-expand';

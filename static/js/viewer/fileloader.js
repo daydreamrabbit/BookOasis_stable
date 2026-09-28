@@ -16,11 +16,12 @@ export async function fetchTotalPagesIfNeeded(bookId, currentTotal) {
       return 0;
     }
     const data = await res.json();
-    if (data && data.success && data.total_pages > 0) {
-      return data.total_pages;
+    if (res.ok && data && data.success) {
+      const count = Number(data.total_pages);
+      return Number.isInteger(count) && count > 0 ? count : 0;
     }
   } catch (e) {
     console.warn('[fileloader] fetchTotalPagesIfNeeded failed', e);
   }
-  return currentTotal || 0;
+  return Number(currentTotal) > 1 ? Number(currentTotal) : 0;
 }

@@ -1,5 +1,6 @@
 // reader_settings.js — 읽기 방향, 페이지 스텝, fit 모드, 스크롤 너비 관리
 import { showViewerLoading, hideViewerLoading } from '../view_manager.js';
+import { TAP_DIRECTIONS, normalizeTapDirection, getTapDirection } from './tap_direction.js';
 
 export let comicReadingDirection = 'ltr';
 export let tapZoneDirection = 'horizontal';
@@ -94,11 +95,11 @@ function syncComicReadingDirectionUI() {
 
 function getStoredTapZoneDirection() {
   const saved = localStorage.getItem('viewer_tap_zone_direction');
-  return saved === 'vertical' ? 'vertical' : 'horizontal';
+  return normalizeTapDirection(saved);
 }
 
 export function setTapZoneDirection(direction) {
-  tapZoneDirection = direction === 'vertical' ? 'vertical' : 'horizontal';
+  tapZoneDirection = normalizeTapDirection(direction);
   localStorage.setItem('viewer_tap_zone_direction', tapZoneDirection);
   syncTapZoneDirectionUI();
   showTapZonePreview();
@@ -110,23 +111,32 @@ export function getTapZoneDirection() {
 }
 
 export function toggleTapZoneDirection() {
-  return setTapZoneDirection(tapZoneDirection === 'vertical' ? 'horizontal' : 'vertical');
+  return setTapZoneDirection(TAP_DIRECTIONS[(TAP_DIRECTIONS.indexOf(tapZoneDirection) + 1) % TAP_DIRECTIONS.length]);
 }
 
 export function syncTapZoneDirectionUI() {
+  const { vertical, reverse, label: directionLabel } = getTapDirection(tapZoneDirection);
   const hotspot = document.getElementById('common-viewer-hotspot');
   if (hotspot) {
-    hotspot.classList.toggle('vertical', tapZoneDirection === 'vertical');
+    hotspot.classList.toggle('vertical', vertical);
+    for (const [selector, forward] of [['.left-zone', reverse], ['.right-zone', !reverse]]) {
+      const zone = hotspot.querySelector(selector);
+      if (!zone) continue;
+      zone.title = forward ? '다음 페이지' : '이전 페이지';
+      zone.setAttribute('data-i18n-title', forward ? 'viewer.next_page' : 'viewer.prev_page');
+      const icon = zone.querySelector('i');
+      if (icon) icon.className = `fa-solid fa-chevron-${vertical ? (selector === '.left-zone' ? 'up' : 'down') : (selector === '.left-zone' ? 'left' : 'right')}`;
+    }
   }
 
   const btn = document.getElementById('btn-tap-zone-direction');
   const label = document.getElementById('tap-zone-direction-label');
   if (btn) {
-    btn.classList.toggle('active', tapZoneDirection === 'vertical');
-    btn.title = tapZoneDirection === 'vertical' ? '상/하 탭으로 넘기기' : '좌/우 탭으로 넘기기';
+    btn.classList.toggle('active', vertical || reverse);
+    btn.title = `${directionLabel} 탭으로 넘기기`;
     const icon = btn.querySelector('i');
     if (icon) {
-      icon.className = tapZoneDirection === 'vertical'
+      icon.className = vertical
         ? 'fa-solid fa-arrows-up-down'
         : 'fa-solid fa-arrows-left-right';
     }
@@ -134,10 +144,8 @@ export function syncTapZoneDirectionUI() {
   if (label) {
     // 언어 변경기가 과거의 고정 "좌/우" 키로 다시 덮어쓰지 않도록 현재 상태에
     // 맞는 키도 함께 갱신한다.
-    label.setAttribute('data-i18n', tapZoneDirection === 'vertical'
-      ? 'viewer.tap_zone_vertical'
-      : 'viewer.tap_zone_horizontal');
-    label.textContent = tapZoneDirection === 'vertical' ? '상/하' : '좌/우';
+    label.removeAttribute('data-i18n');
+    label.textContent = directionLabel;
   }
   document.querySelectorAll('[data-tap-zone-direction]').forEach((button) => {
     const active = button.dataset.tapZoneDirection === tapZoneDirection;

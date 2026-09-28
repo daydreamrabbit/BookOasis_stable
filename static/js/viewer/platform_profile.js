@@ -41,8 +41,7 @@ export function shouldShowMobileFullscreenButton(profile = getViewerPlatformProf
 }
 
 export function shouldAutoFullscreenForFormat(format, profile = getViewerPlatformProfile()) {
-  if (!profile.isLikelyMobileContext) return false;
-  const fmt = String(format || '').toLowerCase();
-  // Keep EPUB/TXT out of auto-fullscreen because they are sensitive to relayout on fullscreen exit.
-  return ['zip', 'cbz', 'imgdir', 'pdf'].includes(fmt);
+  // Android Back exits native fullscreen before traversing app history.
+  // Enter fullscreen only from its explicit button, not on opening a book.
+  return false;
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 const source=fs.readFileSync('static/js/viewer/input_controller.js','utf8');
-const fn=source.slice(source.indexOf('function isPointOnSelectableText('),source.indexOf('// 만화 뷰어에서'));
+const fn=source.slice(source.indexOf('function isPointOnSelectableText('),source.indexOf('function isViewerRtlFlowActive('));
 test('reader margin does not select invisible text from an adjacent column',()=>{
  const c=vm.createContext({document:{elementFromPoint:()=>({closest:()=>null}),caretRangeFromPoint:()=>{throw Error('must not snap to hidden text');}}});
  assert.equal(vm.runInContext(fn+'isPointOnSelectableText(1270,400)',c),false);

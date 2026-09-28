@@ -1,5 +1,5 @@
 // navigation.js — 페이지 이동 관련 API
-import * as Renderer from './renderer.js';
+import * as Renderer from './renderer.js?rev=20260928-comic-state-v2';
 import * as Settings from './reader_settings.js';
 import { saveProgress } from '../viewer_progress.js?rev=20260927-tts-session-v8';
 import { state } from '../state.js'; // window.state 대신 ES 모듈 import 사용
@@ -27,14 +27,18 @@ export function suppressOverlayReopenFor(ms = OVERLAY_REOPEN_GUARD_MS) {
 }
 
 export function comicSliderInput(slider, val) {
+  if (!(Renderer.getComicTotalPages() > 0)) return;
   Renderer.showSeekbarTooltip(slider, val);
   const badge = document.getElementById('comic-overlay-page-info');
   if (badge) badge.textContent = `${val} / ${Renderer.comicTotalPages}`;
 }
 
 export function comicSliderChange(slider, val) {
+  const total = Renderer.getComicTotalPages();
+  const requestedPage = Number(val);
+  if (!(total > 0) || !Number.isFinite(requestedPage)) return;
   Renderer.hideSeekbarTooltip();
-  Renderer.setComicCurrentPage(val - 1);
+  Renderer.setComicCurrentPage(Math.max(0, Math.min(total - 1, Math.trunc(requestedPage) - 1)));
   Renderer.loadComicPage();
 }
 
@@ -339,6 +343,8 @@ export function markAsCompleted() {
 
 
 export function nextComicPage() {
+  // 로딩 중이거나 이미 닫힌 뷰어의 0페이지를 마지막 페이지로 판단하지 않는다.
+  if (!(Renderer.getComicTotalPages() > 0)) return;
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   if (scrollMode === 'scroll') {
     const wrapper = document.querySelector('.comic-image-wrapper');
@@ -377,6 +383,7 @@ export function nextComicPage() {
 
 
 export function prevComicPage() {
+  if (!(Renderer.getComicTotalPages() > 0)) return;
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   if (scrollMode === 'scroll') {
     const wrapper = document.querySelector('.comic-image-wrapper');
@@ -406,6 +413,7 @@ export function prevComicPage() {
 // 모바일 제스처는 2쪽 보기에서도 한 번에 물리 페이지 한 장만 이동한다.
 // 펼침면 기준을 홀/짝에 맞춰 바꾸면 (1,2) -> (2,3)처럼 한 장씩 겹쳐 넘길 수 있다.
 export function moveComicPageByOne(direction) {
+  if (!(Renderer.getComicTotalPages() > 0)) return;
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   if (scrollMode !== 'page') {
     return direction === 'prev' ? prevComicPage() : nextComicPage();

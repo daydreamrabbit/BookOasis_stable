@@ -143,6 +143,7 @@ export function switchActiveView(viewName) {
  */
 
 export function showViewerLoading(message = i18n.t("viewer.loading_title_default"), subMessage = i18n.t("viewer.loading_sub_default")) {
+  if (document.getElementById('media-viewer-modal')?.style.display === 'none') return;
   const overlay = document.getElementById('viewer-common-overlay');
   const spinner = document.getElementById('viewer-common-spinner');
   const textEl = document.getElementById('viewer-common-text');
@@ -153,9 +154,11 @@ export function showViewerLoading(message = i18n.t("viewer.loading_title_default
     overlay.style.display = 'flex';
     if (spinner) spinner.style.display = 'block';
     if (textEl) textEl.innerHTML = message;
+    if (textEl) textEl.removeAttribute('data-i18n');
     if (subEl) {
       subEl.style.display = 'block';
       subEl.innerHTML = subMessage;
+      subEl.removeAttribute('data-i18n');
     }
     if (closeBtn) closeBtn.style.display = 'none'; // 로딩 중에는 닫기 버튼 가림
   }
@@ -169,6 +172,7 @@ export function hideViewerLoading() {
 }
 
 export function showViewerError(message = i18n.t("viewer.error_title_default"), subMessage = i18n.t("viewer.error_sub_default")) {
+  if (document.getElementById('media-viewer-modal')?.style.display === 'none') return;
   const overlay = document.getElementById('viewer-common-overlay');
   const spinner = document.getElementById('viewer-common-spinner');
   const textEl = document.getElementById('viewer-common-text');
@@ -270,11 +274,13 @@ export function showViewerBoundaryNotice(boundary = 'start') {
     host.appendChild(notice);
   }
 
-  const vertical = localStorage.getItem('viewer_tap_zone_direction') === 'vertical';
+  const vertical = String(localStorage.getItem('viewer_tap_zone_direction') || '').startsWith('vertical');
   const isStart = boundary !== 'end';
+  const reverse = String(localStorage.getItem('viewer_tap_zone_direction') || '').endsWith('-reverse');
+  const leadingSide = reverse ? !isStart : isStart;
   const iconClass = vertical
-    ? (isStart ? 'fa-arrow-up' : 'fa-arrow-down')
-    : (isStart ? 'fa-arrow-left' : 'fa-arrow-right');
+    ? (leadingSide ? 'fa-arrow-up' : 'fa-arrow-down')
+    : (leadingSide ? 'fa-arrow-left' : 'fa-arrow-right');
   notice.innerHTML = `<i class="fa-solid ${iconClass}"></i><span>${isStart ? '첫 페이지입니다' : '마지막 페이지입니다'}</span>`;
   notice.classList.remove('visible');
   void notice.offsetWidth;

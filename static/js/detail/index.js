@@ -372,7 +372,9 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
         returnState,
       };
 
-      if (!window.location.hash.startsWith('#detail')) {
+      if (history.state?.view === 'viewer') {
+        // A delayed detail refresh must not append a route above an open reader.
+      } else if (!window.location.hash.startsWith('#detail')) {
         history.pushState(detailHistoryState, '', detailHash);
       } else {
         history.replaceState(detailHistoryState, '', detailHash);
@@ -585,6 +587,10 @@ function renderDetailSidebarWidgetItem(item, fallbackLibraryId) {
 // 상세 뷰 → 그리드 뷰/대시보드 복귀
 export function goBackToList(triggerBack = true) {
   ++detailRequestSerial;
+  if (triggerBack && history.state?.view === 'detail' && history.state.returnState) {
+    history.back();
+    return;
+  }
   const mainContent = document.querySelector('.library-main-content');
   const detailView = document.getElementById('book-detail-view');
   if (mainContent) mainContent.classList.remove('detail-plugin-view');
@@ -596,7 +602,7 @@ export function goBackToList(triggerBack = true) {
   updateCurrentCategoryIndicator(state.currentLibraryId);
 
   const isMobileLayout = window.matchMedia('(max-width: 1200px)').matches;
-  const avoidDocumentScrollRestore = !triggerBack && isMobileLayout;
+  const avoidDocumentScrollRestore = isMobileLayout;
 
   const targetScroll = (state.scrollPositions && (
     state.scrollPositions['last_pos'] ?? 
@@ -628,11 +634,11 @@ export function goBackToList(triggerBack = true) {
     if (mainContent) mainContent.scrollTop = pos;
     const gridView = document.getElementById('books-grid-view');
     const dashView = document.getElementById('library-dashboard-view');
-    if (gridView) gridView.scrollTop = pos;
-    if (dashView) dashView.scrollTop = pos;
+    if (gridView) gridView.scrollTop = mainContent ? 0 : pos;
+    if (dashView) dashView.scrollTop = mainContent ? 0 : pos;
   };
 
-  if (targetScroll > 0) {
+  if (targetScroll >= 0) {
     try {
       doScroll(targetScroll);
       requestAnimationFrame(() => doScroll(targetScroll));

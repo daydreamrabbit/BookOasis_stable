@@ -1,5 +1,6 @@
 // viewer.js – 미디어 뷰어 라이프사이클 및 단축키 코어 조율기
 import { state } from './state.js';
+import { getTapZoneDirection } from './viewer_comic.js';
 import { nextComicPage, prevComicPage, setComicFitMode, toggleComicOverlay, markAsCompleted as markComicAsCompleted, getComicReadingDirection, initReadingDirection, toggleComicReadingDirection, toggleComicPageStep, comicJumpToFirstPage, comicJumpToLastPage, setTapZoneDirection, toggleTapZoneDirection, initTapZoneDirection, toggleComicSplitSpread, toggleSpreadShiftOffset, loadComicPage, initPageStep, resetSpreadShiftOffset } from './viewer_comic.js';
 import { prevTxtPage, nextTxtPage, applyTxtSettings, txtJumpToFirstPage, txtJumpToLastPage } from './viewer_txt.js?rev=20260927-tts-session-v8';
 import { openEpubTocPanel } from './viewer/txt_toc.js?rev=20260922-reader-session-v45';
@@ -756,9 +757,7 @@ function initMediaViewerDelegation() {
     // 화면 좌/우 핫스팟 존은 물리적 화면 위치를 클릭하는 공간적(spatial) 조작이라,
     // 만화 RTL(우->좌) 읽기 방향에서는 좌/우 클릭 시 넘어가는 스토리 방향도 반대가 되어야 한다.
     // (메뉴의 '이전'/'다음' 버튼처럼 항상 스토리 순서를 가리키는 조작과는 구분됨)
-    const isComicFormat = ['zip', 'cbz', 'imgdir'].includes((state.currentViewerFormat || '').toLowerCase());
-    const modalDisplayMode = document.getElementById('media-viewer-modal')?.dataset.displayMode;
-    const isRtlFlow = (isComicFormat && getComicReadingDirection() === 'rtl') || modalDisplayMode === 'two-one';
+    const isRtlFlow = String(getTapZoneDirection()).endsWith('-reverse');
     if (isRtlFlow && (action === 'prev-page' || action === 'next-page') && target.closest('#common-viewer-hotspot')) {
       if (isRtlFlow) {
         action = action === 'prev-page' ? 'next-page' : 'prev-page';
@@ -781,6 +780,7 @@ function initMediaViewerDelegation() {
     if (action === 'viewer-display-mode') return setViewerDisplayMode(value || ViewerDisplayMode.ONE);
     if (action === 'open-toc') return openEpubTocPanel('toc');
     if (action === 'open-reading-notes') {
+      const isComicFormat = ['zip', 'cbz', 'imgdir'].includes(String(state.currentViewerFormat || '').toLowerCase());
       return isComicFormat ? openImageReadingNotesPanel() : openEpubTocPanel('notes');
     }
     if (action === 'open-viewer-search') return openViewerSearchPanel();

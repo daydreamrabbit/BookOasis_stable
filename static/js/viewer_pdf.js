@@ -384,6 +384,7 @@ export function updatePdfPageInfo() {
   const slider = document.getElementById('viewer-page-slider');
   if (slider) {
     slider.max = pdfTotalPages || 1;
+    slider.disabled = !(pdfTotalPages > 0);
     slider.value = pdfCurrentPage;
     const ratio = (pdfCurrentPage - 1) / Math.max(1, pdfTotalPages - 1);
     slider.style.setProperty('--seek-progress', `${Math.max(0, Math.min(100, ratio * 100))}%`);

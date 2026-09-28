@@ -76,7 +76,7 @@ test('mobile swipe and edge taps use one unified non-passive handler', () => {
   assert.doesNotMatch(inputSource, /androidTapBound/);
   assert.match(inputSource, /SWIPE_MIN_DISTANCE = 18/);
   assert.match(inputSource, /EDGE_ZONE_RATIO = 0\.35/);
-  assert.match(inputSource, /const direction = localStorage\.getItem\('viewer_tap_zone_direction'\)/);
+  assert.match(inputSource, /const tapConfig = getTapDirection\(\)/);
   assert.match(inputSource, /tapDirection === 'horizontal'/);
   assert.match(inputSource, /tapDirection === 'vertical'/);
   assert.match(inputSource, /callDep\('movePageByOne'/);
@@ -101,10 +101,10 @@ test('detail-card drag preserves selection and suppresses the synthetic open cli
   assert.match(detailInteractionsSource, /draggedTarget/);
 });
 
-test('two-one mode reverses physical horizontal page navigation and hides stale comic pages', () => {
+test('explicit tap direction overrides page layout and stale comic pages remain hidden', () => {
   assert.match(inputSource, /function isViewerRtlFlowActive/);
   assert.match(inputSource, /const isRtl = isViewerRtlFlowActive\(\)/);
-  assert.match(viewerSource, /modalDisplayMode === 'two-one'/);
+  assert.match(viewerSource, /getTapZoneDirection\(\)\)\.endsWith\('-reverse'\)/);
   assert.match(viewerSource, /isRtlFlow && \(action === 'prev-page' \|\| action === 'next-page'\)/);
   assert.match(comicRendererSource, /previousPair\.style\.visibility = 'hidden'/);
   assert.match(comicRendererSource, /let comicRenderSeq = 0/);

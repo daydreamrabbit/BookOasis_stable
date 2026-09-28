@@ -74,8 +74,10 @@
                 <div class="ridi-image-setting-row ridi-page-direction-settings" id="ridi-page-direction-settings" hidden>
                     <span><i class="fa-solid fa-hand-pointer"></i> 페이지 이동</span>
                     <div class="ridi-choice-grid ridi-direction-choices">
-                        <button type="button" data-role="viewer-action" data-action="tap-zone-direction" data-value="horizontal" data-tap-zone-direction="horizontal"><i class="fa-solid fa-arrows-left-right"></i> 좌우</button>
-                        <button type="button" data-role="viewer-action" data-action="tap-zone-direction" data-value="vertical" data-tap-zone-direction="vertical"><i class="fa-solid fa-arrows-up-down"></i> 상하</button>
+                        <button type="button" data-role="viewer-action" data-action="tap-zone-direction" data-value="horizontal" data-tap-zone-direction="horizontal">좌→우</button>
+                        <button type="button" data-role="viewer-action" data-action="tap-zone-direction" data-value="horizontal-reverse" data-tap-zone-direction="horizontal-reverse">우→좌</button>
+                        <button type="button" data-role="viewer-action" data-action="tap-zone-direction" data-value="vertical" data-tap-zone-direction="vertical">상→하</button>
+                        <button type="button" data-role="viewer-action" data-action="tap-zone-direction" data-value="vertical-reverse" data-tap-zone-direction="vertical-reverse">하→상</button>
                     </div>
                 </div>
                 <div class="ridi-spread-settings" id="ridi-spread-settings" hidden>
@@ -287,8 +289,8 @@
         <div id="viewer-common-overlay" class="comic-loading-overlay" style="display:none; z-index: 10003;">
             <div class="comic-loading-content">
                 <div id="viewer-common-spinner" class="comic-loading-spinner"></div>
-                <p id="viewer-common-text" class="comic-loading-text" data-i18n="viewer.downloading">다운로드 중...</p>
-                <p id="viewer-common-sub" class="comic-loading-sub" data-i18n="viewer.downloading_sub">Google Drive에서 파일을 가져오고 있습니다.<br>잠시만 기다려 주세요.</p>
+                <p id="viewer-common-text" class="comic-loading-text" data-i18n="viewer.loading_title_default">파일을 불러오는 중...</p>
+                <p id="viewer-common-sub" class="comic-loading-sub" data-i18n="viewer.loading_sub_default">파일을 준비하고 있습니다.<br>잠시만 기다려 주세요.</p>
                 <button id="viewer-common-close-btn" class="btn-overlay-fit" style="display: none; margin-top: 1rem; border: 1px solid rgba(255,255,255,0.2); padding: 0.5rem 1rem; background: rgba(255,255,255,0.1); color: #f1f5f9; cursor: pointer; border-radius: 4px;" data-role="viewer-action" data-action="close" data-i18n="common.close">닫기</button>
             </div>
         </div>
