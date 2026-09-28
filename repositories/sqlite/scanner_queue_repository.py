@@ -208,14 +208,11 @@ class ScannerQueueRepository:
 
     @staticmethod
     def update_task_to_pending(task_id, task_type, kwargs_json, now_str, force_requeue=False):
-        """완료되었거나 취소된 기존 태스크(또는 force_requeue 시 running/exit_pending 상태 포함)를 다시 pending으로 대기 상태 갱신"""
+        """완료/취소된 태스크만 재등록한다. 강제 요청도 진행 중인 작업을 보존한다."""
         conn = database.get_connection('general')
         cursor = conn.cursor()
         try:
-            if force_requeue:
-                where_clause = "WHERE id = ?"
-            else:
-                where_clause = "WHERE id = ? AND status NOT IN ('pending', 'running')"
+            where_clause = "WHERE id = ? AND status NOT IN ('pending', 'running', 'exit_pending')"
 
             cursor.execute(
                 f"""

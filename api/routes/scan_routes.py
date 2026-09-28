@@ -374,6 +374,7 @@ def trigger_library_scan(library_id):
             print(f"[API-ScanTrigger WARNING] ❌ Enqueue rejected for library_id={library_id}")
             return jsonify({
                 'success': False,
+                'already_queued': True,
                 'error': '동일 라이브러리 스캔이 이미 실행 중이거나 대기 중입니다.'
             }), 409
         

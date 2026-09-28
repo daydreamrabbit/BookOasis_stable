@@ -493,8 +493,15 @@ def get_fallback_cover_image():
 def cache_stats():
     """RAM 캐시 사용량 모니터링"""
     from api.cache import image_cache, zip_cache, namelist_cache
+    from services import series_service
     return jsonify({
         'success'              : True,
+        'worker_pid'           : os.getpid(),
+        'list_caches'          : {
+            name: getattr(series_service, attr).stats()
+            for name, attr in [('list', '_LIST_QUERY_CACHE'), ('jump', '_JUMP_INDEX_CACHE'),
+                               ('all_books', '_ALL_BOOKS_CACHE'), ('totals', '_TOTALS_CACHE')]
+        },
         'image_cache'          : image_cache.stats(),
         'zip_cache_count'      : len(zip_cache.cache),
         'namelist_cache_count' : len(namelist_cache.cache),
@@ -742,4 +749,3 @@ def preload_next_book_api():
     except Exception as e:
         print(f"[Preload API Error] {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
-

@@ -86,7 +86,7 @@ class RecommendationService:
     @staticmethod
     def get_similar_series(db_type, series_name, library_id=None, user_id=1, limit=RECOMMEND_LIMIT, content_rating_max=None):
         rating_key = content_rating_max if db_type in ('general', 'adult') and content_rating_max is not None else 'unrestricted'
-        cache_key = f"cache:smart_rec:v4:{db_type}:{library_id}:{series_name}:{limit}:{rating_key}"
+        cache_key = f"cache:smart_rec:v5:{db_type}:{library_id}:{series_name}:{limit}:{rating_key}"
 
         def filter_result(result):
             if db_type not in ('general', 'adult') or content_rating_max is None:

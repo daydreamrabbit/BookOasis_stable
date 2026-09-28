@@ -150,6 +150,11 @@ class ContentRatingService:
         effective_level = ContentRatingService.compute_effective_level(
             row.get('books_lv'), row.get('genre'), row.get('tags')
         )
+        if db_type in ('general', 'adult'):
+            from repositories.rated_series_page import level_for_book
+            series_level = level_for_book(db_type, book_id)
+            if series_level is not None:
+                effective_level = max(effective_level, int(series_level))
         try:
             max_level = int(user_max_level)
         except (TypeError, ValueError):

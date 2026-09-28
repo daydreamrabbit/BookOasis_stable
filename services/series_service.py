@@ -4,8 +4,13 @@ import re
 import hashlib
 import json
 import time
+import threading
+from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 from utils.cover_helper import get_cover_image_with_t, resolve_series_cover
 from repositories.series_repository import SeriesRepository
+from repositories import rated_series_page
+from utils.bounded_cache import BoundedCache
 
 _CHOSEONG = [
     'ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ',
@@ -85,7 +90,7 @@ def _normalize_content_rating_max(value):
 def _content_rating_filter_active(db_type, content_rating_max):
     from services.content_rating_service import LEVEL_PORN
     max_level = _normalize_content_rating_max(content_rating_max)
-    return db_type in ('general', 'adult') and max_level is not None and max_level < LEVEL_PORN
+    return db_type in ('general', 'adult') and max_level is not None and max_level <= LEVEL_PORN
 
 
 def _row_value(row, key, default=''):
@@ -98,25 +103,18 @@ def _row_value(row, key, default=''):
 
 
 def _filter_rows_by_content_rating(db_type, rows, content_rating_max):
-    """등급 제한을 실제 도서 행에 적용한다.
-
-    시리즈 대표 행만 검사하면 같은 시리즈의 다른 권이 대표 행에 의해
-    잘못 노출되거나 숨겨질 수 있으므로, 이 함수는 그룹핑 전에 실행된다.
-    """
+    """검색으로 일부 권만 조회해도 시리즈 전체의 최고 등급으로 제한한다."""
     max_level = _normalize_content_rating_max(content_rating_max)
     if not _content_rating_filter_active(db_type, max_level):
         return rows
 
-    from services.content_rating_service import ContentRatingService
-    adult_keywords = ContentRatingService.get_adult_keywords()
+    levels = rated_series_page.levels_for_libraries(db_type, [_row_value(r, 'library_id') for r in (rows or [])])
     return [
-        row for row in (rows or [])
-        if ContentRatingService.compute_effective_level(
-            _row_value(row, 'books_lv'),
-            _row_value(row, 'genre'),
-            _row_value(row, 'tags'),
-            adult_keywords,
-        ) <= max_level
+        dict(row, series_level=levels.get((_row_value(row, 'library_id'), _row_value(row, 'series_name') or '기타 단행본',
+                                         _comparison_dir_for_book(_row_value(row, 'file_path'), _row_value(row, 'file_format'))), 20))
+        for row in (rows or [])
+        if levels.get((_row_value(row, 'library_id'), _row_value(row, 'series_name') or '기타 단행본',
+                       _comparison_dir_for_book(_row_value(row, 'file_path'), _row_value(row, 'file_format'))), 20) <= max_level
     ]
 
 
@@ -262,6 +260,104 @@ def _strip_series_entry_internal_fields(entries):
     return entries
 
 
+def _visible_list_page(db_type, entries, offset, limit, user_id):
+    # Cache metadata, not reading progress. Copy before hydration so one reader's
+    # current page and response cleanup cannot mutate the reusable index.
+    page = [dict(entry) for entry in entries[offset:offset + limit + 1]] if limit > 0 else []
+    if db_type in ('general', 'adult'):
+        _apply_series_reading_progress(db_type, page, user_id)
+    return _strip_series_entry_internal_fields(page)
+
+
+_LIST_BUILD_LOCKS = [threading.RLock() for _ in range(32)]
+
+
+def _single_list_build(fn):
+    @wraps(fn)
+    def wrapped(db_type, library_id, *args, **kwargs):
+        if kwargs.get('_refresh_index'):
+            # A background rebuild must not hold the foreground request lock.
+            return fn(db_type, library_id, *args, **kwargs)
+        # Fixed-size lock table: concurrent list/count requests reuse one build.
+        with _LIST_BUILD_LOCKS[hash((db_type, str(library_id))) % len(_LIST_BUILD_LOCKS)]:
+            return fn(db_type, library_id, *args, **kwargs)
+    return wrapped
+
+
+def _list_security_scope(db_type, user_id):
+    """Revalidate access before using a long-lived metadata index."""
+    from services.content_rating_service import ContentRatingService
+    keywords = tuple(ContentRatingService.get_adult_keywords())
+    if not user_id:
+        return ((), keywords)
+    import database
+    conn = None
+    try:
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        placeholder = '%s' if database.is_mariadb_mode() else '?'
+        cursor.execute(f'SELECT library_id FROM user_category_permissions WHERE user_id = {placeholder} AND has_access = 1', (int(user_id),))
+        return (tuple(sorted(int(row['library_id']) for row in cursor.fetchall())), keywords)
+    except Exception:
+        # No cached authorization decision if the permission lookup fails.
+        return (time.time_ns(), keywords)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _store_list_index(key, entries, generation=None):
+    if generation is not None and generation != _INDEX_GENERATION:
+        return
+    # Bound memory even when many users/searches build large indexes.
+    now = time.time()
+    for old_key, (created, _) in list(_LIST_QUERY_CACHE.items()):
+        if now - created >= _LIST_QUERY_CACHE_TTL:
+            _LIST_QUERY_CACHE.pop(old_key, None)
+    while len(_LIST_QUERY_CACHE) >= 8 and key not in _LIST_QUERY_CACHE:
+        _LIST_QUERY_CACHE.pop(next(iter(_LIST_QUERY_CACHE)), None)
+    _LIST_QUERY_CACHE[key] = (now, entries)
+
+
+def _find_count_index(db_type, library_id, search, genres, tags, user_id, role, rating, scope):
+    for key, (created, entries) in list(_LIST_QUERY_CACHE.items()):
+        if (time.time() - created < _LIST_QUERY_CACHE_TTL
+                and key[:3] == (db_type, library_id, str(search or ''))
+                and key[4:] == (tuple(genres), tuple(tags), int(user_id) if user_id else 0,
+                                str(role or ''), '', '', False, rating, scope)):
+            return entries
+    return None
+
+
+_INDEX_REFRESH_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix='series-index')
+_INDEX_REFRESH_PENDING = set()
+_INDEX_REFRESH_LOCK = threading.Lock()
+
+
+def _refresh_list_index_later(key, created, kwargs):
+    if time.time() - created < 120:
+        return
+    with _INDEX_REFRESH_LOCK:
+        if key in _INDEX_REFRESH_PENDING or len(_INDEX_REFRESH_PENDING) >= 2:
+            return
+        _INDEX_REFRESH_PENDING.add(key)
+
+    def refresh():
+        try:
+            SeriesService.get_books_list(**kwargs, _refresh_index=True)
+        except Exception as error:
+            print(f'[SeriesService] background index refresh failed: {type(error).__name__}')
+        finally:
+            with _INDEX_REFRESH_LOCK:
+                _INDEX_REFRESH_PENDING.discard(key)
+
+    try:
+        _INDEX_REFRESH_POOL.submit(refresh)
+    except RuntimeError:
+        with _INDEX_REFRESH_LOCK:
+            _INDEX_REFRESH_PENDING.discard(key)
+
+
 def _build_series_entries(db_type, rows, user_id=None):
     from services.content_rating_service import ContentRatingService
 
@@ -358,7 +454,7 @@ def _build_series_entries(db_type, rows, user_id=None):
             'genre': genre,
             'tags': tags,
             'books_lv': books_lv,
-            'content_rating_level': ContentRatingService.compute_effective_level(books_lv, genre, tags, adult_keywords) if db_type in ('general', 'adult') else 0,
+            'content_rating_level': max((int(b['series_level']) if b.get('series_level') is not None else ContentRatingService.compute_effective_level(b.get('books_lv'), b.get('genre'), b.get('tags'), adult_keywords) for b in books), default=0) if db_type in ('general', 'adult') else 0,
             'publication_status': publication_status,
             'publication_status_label': {'0': '연재', '1': '휴재', '2': '완결'}.get(publication_status, '알 수 없음'),
             'anchor_dir': comp_dir,
@@ -552,12 +648,13 @@ def _sort_entries(entries, sort='asc'):
     entries.sort(key=lambda x: str(x.get('latest_added') or ''), reverse=True)
 
 
-_ALL_BOOKS_CACHE = {}
+_ALL_BOOKS_CACHE = BoundedCache(ttl=60)
 _ALL_BOOKS_CACHE_TTL = 60.0  # 60초 인메모리 캐싱
-_LIST_QUERY_CACHE = {}
+_LIST_QUERY_CACHE = BoundedCache(ttl=120)
+_INDEX_GENERATION = 0
 _LIST_QUERY_CACHE_TTL = 120.0
-_JUMP_INDEX_CACHE = {}
-_TOTALS_CACHE = {}
+_JUMP_INDEX_CACHE = BoundedCache(ttl=120)
+_TOTALS_CACHE = BoundedCache(ttl=30, max_bytes=2 * 1024 * 1024, max_items=256)
 _TOTALS_CACHE_TTL = 30.0
 _TOTALS_REDIS_TTL = 300
 
@@ -625,6 +722,7 @@ def _sync_local_books_cache_with_shared_epoch(db_type):
     """이 프로세스의 로컬 캐시가 다른 프로세스의 무효화를 놓치지 않았는지 확인한다.
     매 요청마다 확인하면 로컬 캐시를 두는 의미가 없어지므로
     _BOOKS_CACHE_EPOCH_CHECK_INTERVAL 간격으로만 저렴하게 확인(스로틀링)한다."""
+    global _INDEX_GENERATION
     now = time.time()
     if now - _local_epoch_checked_at.get(db_type, 0.0) < _BOOKS_CACHE_EPOCH_CHECK_INTERVAL:
         return
@@ -632,6 +730,7 @@ def _sync_local_books_cache_with_shared_epoch(db_type):
     current_epoch = _read_shared_books_cache_epoch(db_type)
     seen_epoch = _local_epoch_seen.get(db_type)
     if seen_epoch is not None and seen_epoch != current_epoch:
+        _INDEX_GENERATION += 1
         _ALL_BOOKS_CACHE.clear()
         _LIST_QUERY_CACHE.clear()
         _JUMP_INDEX_CACHE.clear()
@@ -644,7 +743,8 @@ class SeriesService:
     def invalidate_all_books_cache(db_type=None):
         """도서 목록 캐시를 비운다. db_type을 넘기면 다른 프로세스(스캐너 워커 등)에도
         전달되도록 공유 epoch를 갱신한다 - 위 "크로스 프로세스 캐시 무효화 신호" 참고."""
-        global _ALL_BOOKS_CACHE, _LIST_QUERY_CACHE, _JUMP_INDEX_CACHE, _TOTALS_CACHE
+        global _ALL_BOOKS_CACHE, _LIST_QUERY_CACHE, _JUMP_INDEX_CACHE, _TOTALS_CACHE, _INDEX_GENERATION
+        _INDEX_GENERATION += 1
         _ALL_BOOKS_CACHE.clear()
         _LIST_QUERY_CACHE.clear()
         _JUMP_INDEX_CACHE.clear()
@@ -658,10 +758,12 @@ class SeriesService:
             _bump_shared_books_cache_epoch(db_type)
 
     @staticmethod
-    def get_books_list(db_type, library_id, page, limit, search_query, sort='asc', genre_filters=None, tag_filters=None, user_id=None, role=None, group_by=None, author_key=None, include_has_metadata=False, return_has_more=False, content_rating_max=None):
+    @_single_list_build
+    def get_books_list(db_type, library_id, page, limit, search_query, sort='asc', genre_filters=None, tag_filters=None, user_id=None, role=None, group_by=None, author_key=None, include_has_metadata=False, return_has_more=False, content_rating_max=None, _refresh_index=False, _totals_only=False):
         import time
         t0 = time.perf_counter()
         _sync_local_books_cache_with_shared_epoch(db_type)
+        index_generation = _INDEX_GENERATION
         library_id = _normalize_library_id(library_id)
         favorite_only = library_id == 'favorite'
         normalized_genres = [str(v).strip() for v in (genre_filters or []) if str(v).strip()]
@@ -672,6 +774,21 @@ class SeriesService:
         rating_filter_active = _content_rating_filter_active(db_type, content_rating_max)
 
         offset = max(0, (page - 1) * limit)
+        if rated_series_page.supported(db_type, content_rating_max, search_query,
+                                      normalized_genres, normalized_tags, group_by, author_key) and not include_has_metadata and sort in ('asc', 'desc', 'date_asc', 'date_desc'):
+            if _totals_only:
+                return rated_series_page.fetch(db_type, library_id, user_id, content_rating_max, totals=True)
+            rows = rated_series_page.fetch(db_type, library_id, user_id, content_rating_max,
+                                          limit=limit + 1 if limit > 0 else 0, offset=offset, sort=sort)
+            entries = _build_series_entries(db_type, rows)
+            progress_by_id = {r['id']: r for r in rows}
+            for entry in entries:
+                progress = progress_by_id[entry['representative_book_id']]
+                entry['is_completed'] = int(progress['all_completed'] or 0)
+                entry['has_progress'] = int(progress['has_progress'] or 0)
+                entry['has_unfinished_siblings'] = int(not entry['is_completed'])
+            _strip_series_entry_internal_fields(entries)
+            return (entries, len(rows) > limit) if return_has_more else entries
         # 작가별 그룹핑/작가 드릴다운은 인덱스 없는 파이썬 그룹핑이라 항상 전체스캔 경로를 탄다.
         # date_asc/date_desc(최신/과거 추가순)는 SQL의 series_latest_added(MAX(created_at))
         # 집계로 ORDER BY + LIMIT/OFFSET을 걸 수 있으므로 asc/desc와 동일하게 SQL 페이지네이션
@@ -700,7 +817,19 @@ class SeriesService:
             author_key,
             bool(include_has_metadata),
             content_rating_max if rating_filter_active else None,
+            _list_security_scope(db_type, user_id),
         )
+
+        # Revalidate aged metadata off the request path. Permission/rating scope
+        # and shared mutation epoch have already been checked above.
+        cached_index = _LIST_QUERY_CACHE.get(cache_key)
+        if cached_index and not _refresh_index:
+            _refresh_list_index_later(cache_key, cached_index[0], dict(
+                db_type=db_type, library_id=library_id, page=1, limit=0,
+                search_query=search_query, sort=sort, genre_filters=normalized_genres,
+                tag_filters=normalized_tags, user_id=user_id, role=role,
+                group_by=group_by, author_key=author_key,
+                include_has_metadata=include_has_metadata, content_rating_max=content_rating_max))
 
         if not requires_full_scan:
             # find_jump_position()이 남긴 신선한 전체스캔 캐시가 있으면 그걸 그대로 슬라이스해서
@@ -708,9 +837,11 @@ class SeriesService:
             # ORDER BY는 원본 제목 기준이라 서로 순서가 다르다. 점프 직후 이 캐시를 안 쓰면
             # 초성 바로가기가 계산해준 page/offset과 실제로 렌더링되는 카드가 어긋난다.
             cached = _LIST_QUERY_CACHE.get(cache_key)
-            if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
+            if cached and not _refresh_index and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
                 entries = cached[1]
-                paged = entries[offset:offset + limit + 1]
+                if _totals_only:
+                    return {'total_series_count': len(entries), 'total_book_count': sum(int(e.get('book_count') or 0) for e in entries)}
+                paged = _visible_list_page(db_type, entries, offset, limit, user_id)
                 return (paged, len(paged) > limit) if return_has_more else paged
 
             # 초성 이동이 먼저 실행된 경우에는 전체 카드 데이터를 다시 만들지 않고,
@@ -733,9 +864,11 @@ class SeriesService:
                 return (paged, len(page_entries) > limit) if return_has_more else paged
         else:
             cached = _LIST_QUERY_CACHE.get(cache_key)
-            if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
+            if cached and not _refresh_index and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
                 entries = cached[1]
-                paged = entries[offset:offset + limit + 1]
+                if _totals_only:
+                    return {'total_series_count': len(entries), 'total_book_count': sum(int(e.get('book_count') or 0) for e in entries)}
+                paged = _visible_list_page(db_type, entries, offset, limit, user_id)
                 t_cached = time.perf_counter()
                 print(f"[PERF-PROFILE] get_books_list(lib={library_id}, page={page}) QUERY-CACHE HIT ({len(entries)}entries): {(t_cached-t0)*1000:.1f}ms")
                 return (paged, len(paged) > limit) if return_has_more else paged
@@ -765,21 +898,19 @@ class SeriesService:
                 from repositories.series_search_query import normalize_author_key
                 rows = [r for r in rows if normalize_author_key(r['author']) == author_key]
                 entries = _build_series_entries(db_type, rows)
-                entries = _apply_series_reading_progress(db_type, entries, user_id)
-                _strip_series_entry_internal_fields(entries)
             elif group_by == 'author':
                 entries = _build_author_entries(db_type, rows)
             else:
                 entries = _build_series_entries(db_type, rows)
-                entries = _apply_series_reading_progress(db_type, entries, user_id)
-                _strip_series_entry_internal_fields(entries)
             t3 = time.perf_counter()
 
             _sort_entries(entries, sort=sort)
             t4 = time.perf_counter()
 
-            _LIST_QUERY_CACHE[cache_key] = (now, entries)
-            paged = entries[offset:offset + limit + 1]
+            _store_list_index(cache_key, entries, index_generation)
+            if _totals_only:
+                return {'total_series_count': len(entries), 'total_book_count': sum(int(e.get('book_count') or 0) for e in entries)}
+            paged = _visible_list_page(db_type, entries, offset, limit, user_id)
             print(f"[PERF-PROFILE] get_books_list(lib={library_id}, page={page}) FULL-SCAN CACHE BUILD TOTAL: {(t4-t0)*1000:.1f}ms | SQL-Fetch({len(rows)}rows): {(t2-t1)*1000:.1f}ms | BuildSeries({len(entries)}entries): {(t3-t2)*1000:.1f}ms | Sort: {(t4-t3)*1000:.1f}ms")
             return (paged, len(paged) > limit) if return_has_more else paged
 
@@ -840,6 +971,32 @@ class SeriesService:
         if sort_key not in ('asc', 'desc'):
             sort_key = 'asc'
 
+        if rated_series_page.supported(db_type, content_rating_max, search_query, normalized_genres, normalized_tags):
+            rows = rated_series_page.fetch(db_type, library_id, user_id, content_rating_max, sort=sort_key, index=True)
+            if selection_anchors is not None:
+                positions = []
+                for anchor in selection_anchors:
+                    position = next((i for i, row in enumerate(rows) if str(row['id']) == str(anchor['id'])
+                                     and str(row['library_id']) == str(anchor['libraryId'])), None)
+                    if position is None:
+                        raise ValueError('선택한 작품이 현재 목록에서 변경되었습니다. 다시 선택해 주세요.')
+                    positions.append(position)
+                first, last = sorted(positions)
+                return {'targets': [dict(id=r['id'], libraryId=r['library_id'], title=r['title_alias'] or r['title'],
+                                        seriesName=r['series_name'], fileFormat=r['file_format'],
+                                        markUnreadScope='series', isVolumeDetail=False) for r in rows[first:last + 1]]}
+            found = next((i for i, row in enumerate(rows) if _get_initial(_strip_leading_bracket_tags(row['series_name'])) == str(target_char).strip()), -1)
+            total = len(rows)
+            if found < 0:
+                return {'found': False, 'total': total}
+            safe_limit = max(1, int(limit or 1))
+            page = found // safe_limit + 1
+            del rows
+            entries = SeriesService.get_books_list(db_type, library_id, page, safe_limit, '', sort_key,
+                                                   user_id=user_id, role=role, content_rating_max=content_rating_max)
+            return {'found': True, 'index': found, 'page': page, 'offset_in_page': found % safe_limit,
+                    'total': total, 'series': entries[:safe_limit], 'has_more': page * safe_limit < total}
+
         now = time.time()
         cache_key = (
             db_type,
@@ -854,6 +1011,7 @@ class SeriesService:
             '',  # author_key: 작가 드릴다운 목록은 초성 인덱스를 사용하지 않음
             False,  # include_has_metadata: jump index is a lightweight base-list cache
             content_rating_max if rating_filter_active else None,
+            _list_security_scope(db_type, user_id),
         )
         cached = _LIST_QUERY_CACHE.get(cache_key)
         if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
@@ -876,10 +1034,8 @@ class SeriesService:
             )
             rows = _filter_rows_by_content_rating(db_type, rows, content_rating_max)
             entries = _build_series_entries(db_type, rows)
-            entries = _apply_series_reading_progress(db_type, entries, user_id)
-            _strip_series_entry_internal_fields(entries)
             _sort_entries(entries, sort=sort_key)
-            _LIST_QUERY_CACHE[cache_key] = (now, entries)
+            _store_list_index(cache_key, entries)
             lightweight = False
         else:
             jump_cached = _JUMP_INDEX_CACHE.get(cache_key)
@@ -973,7 +1129,7 @@ class SeriesService:
                 role,
             )
         else:
-            page_series = entries[page_start:page_end]
+            page_series = _visible_list_page(db_type, entries, page_start, safe_limit, user_id)[:safe_limit]
         return {
             'found': True,
             'index': found_index,
@@ -986,6 +1142,7 @@ class SeriesService:
         }
 
     @staticmethod
+    @_single_list_build
     def get_books_totals(db_type, library_id, search_query='', genre_filters=None, tag_filters=None, user_id=None, role=None, content_rating_max=None):
         import time
         _sync_local_books_cache_with_shared_epoch(db_type)
@@ -995,6 +1152,10 @@ class SeriesService:
         normalized_tags = [str(value).strip() for value in (tag_filters or []) if str(value).strip()]
         content_rating_max = _normalize_content_rating_max(content_rating_max)
         rating_filter_active = _content_rating_filter_active(db_type, content_rating_max)
+        if rated_series_page.supported(db_type, content_rating_max, search_query, normalized_genres, normalized_tags):
+            totals = rated_series_page.fetch(db_type, library_id, user_id, content_rating_max, totals=True)
+            return {key: int(value or 0) for key, value in totals.items()}
+        scope = _list_security_scope(db_type, user_id)
         cache_payload = json.dumps({
             'db_type': db_type,
             'library_id': library_id,
@@ -1003,7 +1164,9 @@ class SeriesService:
             'tags': normalized_tags,
             'user_id': int(user_id) if user_id else 0,
             'role': str(role or ''),
+            'rating_policy': 'series-max-v1',
             'content_rating_max': content_rating_max if rating_filter_active else None,
+            'access_scope': scope,
         }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         cache_digest = hashlib.sha256(cache_payload.encode('utf-8')).hexdigest()
         cache_key = f"cache:series_totals:{db_type}:{cache_digest}"
@@ -1030,25 +1193,18 @@ class SeriesService:
                 return cached[1]
 
         if rating_filter_active:
-            rows = SeriesRepository.fetch_books_for_grouping(
-                db_type,
-                library_id,
-                search_query=search_query or '',
-                favorite_only=favorite_only,
-                genre_filters=normalized_genres,
-                tag_filters=normalized_tags,
-                user_id=user_id,
-                role=role,
-                limit=None,
-                offset=None,
-                include_all_rows=True,
-            )
-            rows = _filter_rows_by_content_rating(db_type, rows, content_rating_max)
-            entries = _build_series_entries(db_type, rows)
-            totals = {
-                'total_series_count': len(entries),
-                'total_book_count': sum(int(entry.get('book_count') or 0) for entry in entries),
-            }
+            entries = _find_count_index(db_type, library_id, search_query, normalized_genres,
+                                       normalized_tags, user_id, role, content_rating_max, scope)
+            if entries is None:
+                totals = SeriesService.get_books_list(
+                    db_type, library_id, 1, 0, search_query,
+                    genre_filters=normalized_genres, tag_filters=normalized_tags,
+                    user_id=user_id, role=role, content_rating_max=content_rating_max, _totals_only=True)
+            else:
+                totals = {
+                    'total_series_count': len(entries),
+                    'total_book_count': sum(int(entry.get('book_count') or 0) for entry in entries),
+                }
         else:
             totals = SeriesRepository.fetch_grouping_totals(
                 db_type,
@@ -1096,8 +1252,9 @@ class SeriesService:
         # 즐겨찾기 카테고리는 유저별 개별 데이터이므로 글로벌 통캐시에서 제외하거나 유저 키 적용
         rating_cache_key = content_rating_max if rating_filter_active else 'unrestricted'
         cache_key = f"user:{user_id}:{db_type}:{library_id}:{rating_cache_key}" if favorite_only else f"global:{db_type}:{library_id}:{rating_cache_key}"
-        if not favorite_only and cache_key in _ALL_BOOKS_CACHE:
-            cache_ts, cached_entries = _ALL_BOOKS_CACHE[cache_key]
+        cached = _ALL_BOOKS_CACHE.get(cache_key) if not favorite_only else None
+        if cached is not None:
+            cache_ts, cached_entries = cached
             if now - cache_ts < 300.0:
                 print(f"[PERF-PROFILE] get_all_books_list(lib={library_id}) GLOBAL IN-MEMORY CACHE HIT! ({len(cached_entries)} entries) - {(time.perf_counter()-t0)*1000:.1f}ms")
                 return cached_entries

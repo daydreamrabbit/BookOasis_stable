@@ -15,6 +15,8 @@ import time
 
 def format_library_scan_progress(phase, *, count=0, completed=0, total=0, current='', event=None, **_extra):
     """스캔 활동창에 보여줄 한 줄 진행 문구. 전체 경로는 노출하지 않고 폴더 이름만 쓴다."""
+    if phase == 'metadata':
+        return str(_extra.get('message') or '자동 메타데이터 수집 중')
     if phase == 'discover':
         return f'폴더 탐색 중 · {max(0, int(count)):,}개 방문'
 

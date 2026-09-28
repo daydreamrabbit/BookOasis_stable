@@ -270,13 +270,11 @@ class BookDetailService:
                 max_level = max(0, min(20, int(content_rating_max)))
             except (TypeError, ValueError):
                 max_level = 18
-            adult_keywords = ContentRatingService.get_adult_keywords()
-            books_rows = [
-                row for row in books_rows
-                if ContentRatingService.compute_effective_level(
-                    row.get('books_lv'), row.get('genre'), row.get('tags'), adult_keywords
-                ) <= max_level
-            ]
+            from services.series_service import _filter_rows_by_content_rating
+            had_books = bool(books_rows)
+            books_rows = _filter_rows_by_content_rating(db_type, books_rows, max_level)
+            if had_books and not books_rows:
+                return {}, []
 
         # 실제 covers 폴더 내 시리즈 이미지 갱신 타임스탬프 쿼리
         latest_updated = BookRepository.get_series_latest_updated(db_type, series_name, perm_clause, perm_params)
@@ -357,6 +355,7 @@ class BookDetailService:
 
         from services.content_rating_service import ContentRatingService
         effective_level = ContentRatingService.compute_effective_level(meta['books_lv'], meta['genre'], meta['tags'])
+        effective_level = max([effective_level] + [int(b.get('series_level') or 0) for b in books_rows])
         meta['content_rating_level'] = effective_level
         meta['content_rating_label'] = ContentRatingService.get_level_label(effective_level)
 

@@ -289,9 +289,13 @@ export function initPageStep() {
 }
 
 export function syncReaderSettingsUI() {
+  comicReadingDirection = getStoredComicReadingDirection();
+  const storedFit = localStorage.getItem('comic_fit_mode');
+  comicFitMode = VALID_FIT_MODES.has(storedFit) ? storedFit : 'height';
   comicPageStep = getStoredComicPageStep();
   tapZoneDirection = getStoredTapZoneDirection();
   syncComicPageStepUI();
+  syncComicReadingDirectionUI();
   syncTapZoneDirectionUI();
   syncSpreadShiftOffsetUI();
   syncFitUI();

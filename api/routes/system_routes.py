@@ -151,6 +151,12 @@ def get_system_status():
         tuning_active = database.is_db_tuning(db_type)
         from services.scanner_queue import scanner_queue
         status = scanner_queue.get_queue_status()
+        try:
+            from services.metadata_scan_activity import list_metadata_scan_activities
+            metadata_activities = list_metadata_scan_activities()
+        except Exception:
+            metadata_activities = []
+        status['metadata_activities'] = metadata_activities
         if status.get('running'):
             running = status['running']
             running['elapsed_seconds'] = _elapsed_seconds_from_server_timestamp(
@@ -207,8 +213,16 @@ def get_system_status():
             is_active = True
             running_tasks.append("데이터베이스 파일 물리 파편화 압축 정리 및 인덱스 정밀 튜닝 실행 중...")
 
-        # 실행 중인 스캔 태스크, 대기열(pending) 태스크, DB 튜닝 작업 중 하나라도 존재하면 활성화
-        is_active = bool(has_running or has_pending or tuning_active)
+        active_metadata = [
+            activity for activity in metadata_activities
+            if activity.get('status') == 'running'
+        ]
+        for activity in active_metadata:
+            label = activity.get('library_name') or f"Library {activity.get('library_id')}"
+            running_tasks.append(f"[{label}] {activity.get('stage') or '자동 메타데이터 수집 중'}")
+
+        # 메타데이터 플러그인 훅도 스캔 활동에서 진행 중인 작업으로 보여준다.
+        is_active = bool(has_running or has_pending or tuning_active or active_metadata)
 
         def _add_library_name(task):
             if not task:
@@ -232,6 +246,8 @@ def get_system_status():
             _add_library_name(recent_task)
         for recent_task in status.get('recent_library_scans', []):
             _add_library_name(recent_task)
+        for activity in metadata_activities:
+            _add_library_name(activity)
 
         response = jsonify({
             'success': True,

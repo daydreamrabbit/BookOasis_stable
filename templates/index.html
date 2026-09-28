@@ -16,6 +16,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#090d16">
     <title>BookOasis - 도서 보관함</title>
+    <!-- Resolve even cached parent-module imports to the deployed scan code.
+         Both aliases must share one URL so polling/event state is a singleton. -->
+    <script type="importmap">
+    {{ {'imports': {
+        '/static/js/scan_activity_status.js': static_asset_url('js/scan_activity_status.js'),
+        '/static/js/scan_activity_status.js?rev=20260928-metadata-activity-v1': static_asset_url('js/scan_activity_status.js'),
+        '/static/js/api.js': static_asset_url('js/api.js')
+    }} | tojson }}
+    </script>
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="{{ static_asset_url('images/icon-192.png', sig='boe-favicon-b28e4d1') }}">
     <!-- PWA 매니페스트 + 홈 화면 아이콘 (여백 없이 꽉 채운 전용 아이콘 — logo.png는 여백이

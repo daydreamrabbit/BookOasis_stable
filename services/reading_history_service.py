@@ -128,7 +128,7 @@ class ReadingHistoryService:
 
         # 설정별로 캐시를 분리해 노출 개수 변경을 즉시 반영한다.
         rating_key = content_rating_max if db_type in ('general', 'adult') and content_rating_max is not None else 'unrestricted'
-        cache_key = f"cache:history:v9:{db_type}:{user_id}:{limit}:{int(hide_completed)}:{rating_key}"
+        cache_key = f"cache:history:v10:{db_type}:{user_id}:{limit}:{int(hide_completed)}:{rating_key}"
         cached_data = redis_get(cache_key)
         if cached_data:
             try:
@@ -191,7 +191,7 @@ class ReadingHistoryService:
     def get_recently_added(db_type, user_id=None, role=None, content_rating_max=None):
         # 1. Redis 캐시 확인 (구형 캐시에 series_alias 없으면 DB 재조회)
         rating_key = content_rating_max if db_type in ('general', 'adult') and content_rating_max is not None else 'unrestricted'
-        cache_key = f"cache:recent_added:v4:{db_type}:{user_id}:{role}:{rating_key}"
+        cache_key = f"cache:recent_added:v5:{db_type}:{user_id}:{role}:{rating_key}"
         cached_data = redis_get(cache_key)
         if cached_data:
             try:

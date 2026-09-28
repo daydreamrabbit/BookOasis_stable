@@ -61,6 +61,23 @@ function isViewerRtlFlowActive() {
   return !vertical && reverse;
 }
 
+export function isViewerTextPoint(x, y) {
+  const format = String(state.currentViewerFormat || '').toLowerCase();
+  return ((format === 'epub' || format === 'txt') && isPointOnSelectableText(x, y))
+    || (format === 'pdf' && Boolean(window.isPointOnPdfText?.(x, y)));
+}
+
+export function dismissViewerChromeOnContentTap(target, x, y) {
+  const modal = document.getElementById('media-viewer-modal');
+  if (!modal || modal.style.display !== 'flex' || modal.classList.contains('viewer-chrome-hidden')) return false;
+  if (!target?.closest?.('#viewer-body-container')) return false;
+  if (target.closest('button, input, select, textarea, a, [contenteditable="true"], .viewer-controls, .viewer-side-panel, .ridi-view-settings')) return false;
+  if (isViewerTextPoint(x, y)) return false;
+  if (window.getSelection?.()?.toString().trim()) return false;
+  callDep('toggleViewerChrome');
+  return true;
+}
+
 // 높이맞춤 + 1장 보기에서 너비가 화면보다 커져(좌우가 가려짐) 롱프레스+드래그로 팬이 가능한
 // 상태인지 확인한다. 팬 대상이 없으면(너비맞춤 모드, 스크롤 모드, 페이지가 이미 화면 안에
 // 다 들어오는 경우 등) null을 반환해 롱프레스가 그냥 평범한 탭/스와이프로 흘러가게 둔다.
@@ -632,6 +649,17 @@ export function initViewerClickToggle() {
       const absX = Math.abs(diffX);
       const absY = Math.abs(diffY);
 
+      if (!startedOnControl && absX < TAP_THRESHOLD && absY < TAP_THRESHOLD
+          && isViewerTextPoint(endX, endY)) return;
+
+      if (absX < TAP_THRESHOLD && absY < TAP_THRESHOLD && duration <= 380
+          && !startedOnControl && dismissViewerChromeOnContentTap(target, endX, endY)) {
+        if (e.cancelable) e.preventDefault();
+        lastTouchEndTime = Date.now();
+        window.__viewerSuppressClickUntil = Date.now() + 700;
+        return;
+      }
+
       // EPUB/TXT의 텍스트에서 시작한 가로·세로 드래그는 페이지 제스처가
       // 아니라 네이티브 텍스트 선택이다. 선택 중 손가락을 옆으로 길게 밀어도
       // 페이지가 함께 넘어가면 선택 범위가 끊기고, 손을 뗀 순간 엉뚱한 페이지로
@@ -805,6 +833,9 @@ export function initViewerClickToggle() {
     if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
     if (e.pointerType === 'touch') return;
     if (Date.now() - lastTouchEndTime < 500) return;
+    if (isViewerTextPoint(e.clientX, e.clientY)) return;
+    if (!mouseMoved && !mouseStartedOnSelectableText
+        && dismissViewerChromeOnContentTap(e.target, e.clientX, e.clientY)) return;
 
     if (handleOverlayBlankTap(e.target)) {
       return;

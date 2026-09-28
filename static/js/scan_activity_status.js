@@ -18,15 +18,18 @@ let pollingScanType = null;
 let pollingStartedAt = 0;
 let observedActiveScan = false;
 let consecutiveIdlePolls = 0;
+let statusPollGeneration = 0;
+let pollingProbe = false;
 
 const STATUS_POLL_INTERVAL_MS = 2000;
 const QUEUE_VISIBILITY_GRACE_MS = 8000;
 
 export function refreshSystemStatus() {
-  return refreshStatusPoll ? refreshStatusPoll() : Promise.resolve();
+  return refreshStatusPoll ? refreshStatusPoll() : startSystemStatusPolling(undefined, { probe: true });
 }
 
 export function stopSystemStatusPolling() {
+  statusPollGeneration++;
   if (statusIntervalId) clearInterval(statusIntervalId);
   statusIntervalId = null;
   refreshStatusPoll = null;
@@ -63,6 +66,7 @@ function getScanActivityTaskInfo(task, isPending = false, isRecent = false) {
   const stage = rawStage === 'book_scan' ? '도서 파일 처리 중' : rawStage;
   const names = {
     library_scan: '카테고리 스캔',
+    metadata_auto_collect: '자동 메타데이터 수집',
     folder_watch: '폴더 감시 스캔',
     cover_scan: '표지 스캔',
     lazy_scan: '미디어 검색',
@@ -119,6 +123,9 @@ function renderScanActivity(data) {
   const recentLibraryScans = Array.isArray(data?.raw_status?.recent_library_scans)
     ? data.raw_status.recent_library_scans
     : [];
+  const metadataActivities = Array.isArray(data?.raw_status?.metadata_activities)
+    ? data.raw_status.metadata_activities
+    : [];
   const isActive = Boolean(data?.success && data?.is_active);
   button.classList.toggle('is-active', isActive);
 
@@ -127,6 +134,11 @@ function renderScanActivity(data) {
   pending.forEach(task => tasks.push({ task, pending: true }));
   recentLibraryScans.forEach(task => tasks.push({ task, pending: false, recent: true }));
   recentBookScans.forEach(task => tasks.push({ task, pending: false, recent: true }));
+  metadataActivities.forEach(task => tasks.push({
+    task,
+    pending: false,
+    recent: task?.status !== 'running',
+  }));
   if (tasks.length === 0 && isActive && Array.isArray(data?.tasks)) {
     data.tasks.forEach(detail => tasks.push({
       task: { type: 'background', library_name: '시스템 유지보수', stage: detail },
@@ -134,8 +146,10 @@ function renderScanActivity(data) {
     }));
   }
   button.title = tasks.length > 0 ? `스캔 활동 ${tasks.length}건` : '스캔 활동';
+  const activeMetadataCount = metadataActivities.filter(task => task?.status === 'running').length;
   summary.textContent = running
     ? `실행 중 · 대기열 ${pending.length}건`
+    : activeMetadataCount ? `자동 메타데이터 수집 ${activeMetadataCount}건`
     : pending.length ? `대기열 ${pending.length}건`
       : recentLibraryScans.length ? `최근 카테고리 스캔 ${recentLibraryScans.length}건`
         : recentBookScans.length ? `최근 도서 스캔 ${recentBookScans.length}건`
@@ -199,7 +213,10 @@ function setScanActivityPopoverOpen(open) {
   popover.hidden = !open;
   button.setAttribute('aria-expanded', open ? 'true' : 'false');
   if (open && latestSystemStatus) renderScanActivity(latestSystemStatus);
-  if (open) positionScanActivityPopover();
+  if (open) {
+    positionScanActivityPopover();
+    refreshSystemStatus();
+  }
 }
 
 function initScanActivityPopover() {
@@ -493,17 +510,24 @@ window.addEventListener('library:categories-rendered', () => {
   applyCategoryScanSpinnersState();
 });
 
-export function startSystemStatusPolling(type = state.currentLibraryType || 'general') {
+export function startSystemStatusPolling(type = state.currentLibraryType || 'general', { probe = false } = {}) {
+  if (!probe) pollingProbe = false;
   pollingScanType = String(type || state.currentLibraryType || 'general');
   pollingStartedAt = Date.now();
   observedActiveScan = false;
   consecutiveIdlePolls = 0;
-  if (statusIntervalId) return;
+  if (statusIntervalId) return refreshStatusPoll?.();
+  pollingProbe = probe;
+  const generation = ++statusPollGeneration;
+  let inFlight = false;
 
   const poll = async () => {
+    if (inFlight || generation !== statusPollGeneration) return;
+    inFlight = true;
     try {
       const res = await fetch(`/api/system/status?type=${encodeURIComponent(pollingScanType || 'general')}`, { cache: 'no-store' });
       const body = await res.text();
+      if (generation !== statusPollGeneration) return;
       let data;
       try {
         data = JSON.parse(body);
@@ -532,6 +556,13 @@ export function startSystemStatusPolling(type = state.currentLibraryType || 'gen
       });
       renderScanActivity(data);
 
+      // Initial load/open is a one-shot check when idle; queued requests retain
+      // their visibility grace period. Active work always continues polling.
+      if (pollingProbe && !data.is_active) {
+        stopSystemStatusPolling();
+        return;
+      }
+
       const pollingState = evaluateScanPollingState({
         isActive: Boolean(data.is_active),
         observedActive: observedActiveScan,
@@ -549,26 +580,28 @@ export function startSystemStatusPolling(type = state.currentLibraryType || 'gen
         console.warn('[ScanSpinner] 상태 조회 실패:', err);
         lastStatusErrorAt = now;
       }
+    } finally {
+      inFlight = false;
     }
   };
 
   refreshStatusPoll = poll;
-  // 코어 스캔 요청이 성공한 경우에만 최초 1회 즉시 실행하고,
-  // 실행/대기열이 사라지면 stopSystemStatusPolling()에서 주기를 해제한다.
-  poll();
+  // Reload/open checks resume existing work without enqueueing a scan.
   statusIntervalId = setInterval(poll, STATUS_POLL_INTERVAL_MS);
+  return poll();
 }
 
 window.addEventListener('bookoasis:scan-queued', event => {
   startSystemStatusPolling(event?.detail?.type || state.currentLibraryType || 'general');
 });
 
-// 스크립트 로드 시에는 UI 이벤트만 연결한다. 상태 폴링은 스캔 대기열 등록 성공
-// 이벤트(bookoasis:scan-queued)를 받은 뒤에만 시작한다.
+// Recover server-owned work after reload; idle pages do not keep polling.
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     initScanActivityPopover();
+    refreshSystemStatus();
   });
 } else {
   initScanActivityPopover();
+  refreshSystemStatus();
 }

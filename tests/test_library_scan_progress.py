@@ -22,6 +22,12 @@ def test_discover_phase_text():
     assert format_library_scan_progress('discover', count=12345) == '폴더 탐색 중 · 12,345개 방문'
 
 
+def test_metadata_phase_displays_plugin_progress_message():
+    assert format_library_scan_progress(
+        'metadata', message='자동 메타데이터 검색 3/8개 · 매칭 2개 · 적용 1개'
+    ) == '자동 메타데이터 검색 3/8개 · 매칭 2개 · 적용 1개'
+
+
 def test_process_phase_shows_counts_percent_remaining_and_only_the_folder_name():
     text = format_library_scan_progress(
         'process', completed=250, total=1000, current='/mnt/library/만화/원피스/'

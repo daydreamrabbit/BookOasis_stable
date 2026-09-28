@@ -48,7 +48,8 @@ def test_permission_inputs_and_filters_forwarded(rows):
 
 def test_rating_filtered_full_entries(rows):
     entries = [dict(representative_book_id=i, library_id=7, series_name=f'Series {i:03}') for i in [1, 3, 5]]
-    with patch.object(module, '_filter_rows_by_content_rating', return_value=rows[::2]) as filtered, \
+    with patch.object(module.rated_series_page, 'supported', return_value=False), \
+         patch.object(module, '_filter_rows_by_content_rating', return_value=rows[::2]) as filtered, \
          patch.object(module, '_build_series_entries', return_value=entries), \
          patch.object(module, '_apply_series_reading_progress', side_effect=lambda db, data, user: data):
         assert [t['id'] for t in select(1, 5, content_rating_max=12)] == [1, 3, 5]

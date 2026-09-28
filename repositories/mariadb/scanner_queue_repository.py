@@ -194,10 +194,8 @@ class ScannerQueueRepository:
         conn = database.get_connection('general')
         cursor = conn.cursor()
         try:
-            if force_requeue:
-                where_clause = "WHERE id = %s"
-            else:
-                where_clause = "WHERE id = %s AND status NOT IN ('pending', 'running')"
+            # Force may restart a finished job, never overwrite a live worker.
+            where_clause = "WHERE id = %s AND status NOT IN ('pending', 'running', 'exit_pending')"
 
             cursor.execute(
                 f"""

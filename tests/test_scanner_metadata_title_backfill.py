@@ -4,10 +4,48 @@ import unittest
 import zipfile
 from unittest.mock import patch
 
+from tools.scanner.metadata import _base_meta
 from tools.scanner.tasks import process_folder_task
 
 
 class ScannerMetadataTitleBackfillTests(unittest.TestCase):
+    def test_force_scan_skips_comicinfo_when_kavita_yaml_exists(self):
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, 'kavita.yaml'), 'w', encoding='utf-8') as sidecar:
+                sidecar.write('Title: 작품\n')
+            path = os.path.join(root, '01.cbz')
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr(
+                    'ComicInfo.xml',
+                    '<ComicInfo><Publisher>Must be ignored</Publisher></ComicInfo>',
+                )
+                archive.writestr('page.jpg', b'not-an-image')
+
+            folder_metadata = _base_meta()
+            folder_metadata.update({'author': 'Kavita author', 'has_yaml': True})
+            with (
+                patch('tools.scanner.tasks.merge_local_metadata', return_value=folder_metadata),
+                patch('tools.scanner.tasks.parse_comicinfo_from_cbz',
+                      side_effect=AssertionError('ComicInfo should be ignored with Kavita.yaml')),
+                patch('tools.scanner.tasks.get_folder_banner', return_value=None),
+                patch('tools.scanner.tasks.get_series_cover_fallback', return_value=None),
+                patch('tools.scanner.tasks._compute_offsets', return_value=[]),
+            ):
+                result = process_folder_task(
+                    root,
+                    ['kavita.yaml', '01.cbz'],
+                    True,
+                    {path},
+                    {path},
+                    {},
+                    library_id=1,
+                )
+
+            item = result['results'][0]
+            self.assertEqual(item['merged_meta']['author'], 'Kavita author')
+            self.assertNotEqual(item['merged_meta']['publisher'], 'Must be ignored')
+            self.assertTrue(item['embedded_metadata_checked'])
+
     def test_normal_scan_rechecks_unchanged_book_for_current_embedded_metadata(self):
         with tempfile.TemporaryDirectory() as root:
             path = os.path.join(root, '01.cbz')

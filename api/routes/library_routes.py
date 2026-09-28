@@ -258,17 +258,19 @@ def add_media_library():
         return jsonify({'success': False, 'error': str(e)}), 500
     
     # 즉시 스캔 비동기 수행
+    scan_queued = False
     try:
         db_path = get_db_path_for_scan(db_type)
         from services.scanner_queue import scanner_queue
-        scanner_queue.enqueue('library_scan', db_type=db_type, db_path=db_path, 
+        scan_queued = scanner_queue.enqueue('library_scan', db_type=db_type, db_path=db_path,
                              library_id=library_id, physical_path=physical_path, force=False,
                              initial_add_scan=True, trigger_type='manual', is_cron=False)
         SchedulerService.reload_all_jobs()
     except Exception as e:
         print(f"[API] Background scan failed: {e}")
     
-    return jsonify({'success': True, 'library_id': library_id, 'message': _t('api.msg_library_added')})
+    return jsonify({'success': True, 'library_id': library_id, 'scan_queued': scan_queued,
+                    'message': _t('api.msg_library_added')})
 
 @library_bp.route('/api/media/libraries/edit', methods=['POST'])
 @admin_required

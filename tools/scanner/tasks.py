@@ -546,7 +546,12 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                     'locations', 'characters', 'publisher', 'summary',
                     'release_date', 'genre', 'tags', 'books_lv', 'link',
                 )
-                if file_format in ('cbz', 'zip') and can_read_comicinfo and any(
+                # Kavita's folder sidecar is the metadata source of record for
+                # this folder.  Do not reopen every volume during a forced
+                # scan to look for optional ComicInfo fallbacks; this is
+                # especially costly on rclone/FUSE mounts.  The sidecar's
+                # presence is enough to suppress archive metadata probing.
+                if file_format in ('cbz', 'zip') and can_read_comicinfo and not has_yaml and any(
                     not book_meta.get(key) for key in comicinfo_fields
                 ):
                     try:
@@ -563,6 +568,10 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                     except Exception as ce:
                         print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml parsing skipped: {ce}")
                 elif file_format in ('cbz', 'zip') and can_read_comicinfo:
+                    # Also mark Kavita-backed rows as checked so later normal
+                    # scans do not keep treating their embedded metadata as
+                    # pending.  A force scan still follows the branch above,
+                    # which intentionally skips the archive when has_yaml.
                     embedded_metadata_checked = True
 
                 defer_local_epub_metadata = (

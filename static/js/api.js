@@ -16,7 +16,7 @@ async function safeFetch(url, options = {}) {
 // 응답 처리 단계에서 ReferenceError가 발생한다.
 async function finishScanRequest(res, type = state.currentLibraryType || 'general') {
   const data = await res.json();
-  if (data?.success) {
+  if ((data?.success && data.scan_queued !== false) || data?.already_queued) {
     window.dispatchEvent(new CustomEvent('bookoasis:scan-queued', {
       detail: { type: String(type || 'general') }
     }));
@@ -191,7 +191,7 @@ export async function addLibrary(formData) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  return finishScanRequest(res, formData.get('type'));
 }
 
 export async function editLibrary(formData) {

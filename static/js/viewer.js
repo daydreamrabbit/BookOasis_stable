@@ -1,6 +1,8 @@
 // viewer.js – 미디어 뷰어 라이프사이클 및 단축키 코어 조율기
 import { state } from './state.js';
+import { restoreViewerPreferences } from './viewer/preference_restore.js';
 import { getTapZoneDirection } from './viewer_comic.js';
+import { dismissViewerChromeOnContentTap, isViewerTextPoint } from './viewer/input_controller.js?rev=20260927-tts-session-v8';
 import { nextComicPage, prevComicPage, setComicFitMode, toggleComicOverlay, markAsCompleted as markComicAsCompleted, getComicReadingDirection, initReadingDirection, toggleComicReadingDirection, toggleComicPageStep, comicJumpToFirstPage, comicJumpToLastPage, setTapZoneDirection, toggleTapZoneDirection, initTapZoneDirection, toggleComicSplitSpread, toggleSpreadShiftOffset, loadComicPage, initPageStep, resetSpreadShiftOffset } from './viewer_comic.js';
 import { prevTxtPage, nextTxtPage, applyTxtSettings, txtJumpToFirstPage, txtJumpToLastPage } from './viewer_txt.js?rev=20260927-tts-session-v8';
 import { openEpubTocPanel } from './viewer/txt_toc.js?rev=20260922-reader-session-v45';
@@ -171,18 +173,8 @@ async function hydrateViewerPreferences() {
     const result = await fetchUserSettings();
     if (!result?.success || !result.settings) return;
     const settings = result.settings;
-    state.systemSettings = { ...state.systemSettings, ...settings };
-    if (settings.VIEWER_FONT_SIZE) localStorage.setItem('viewer_font_size', (Number(settings.VIEWER_FONT_SIZE) / 16).toFixed(2));
-    if (settings.VIEWER_FONT_FAMILY) {
-      const fontFamily = settings.VIEWER_FONT_FAMILY === 'sans-serif'
-        ? 'pretendard'
-        : (settings.VIEWER_FONT_FAMILY === 'serif' ? 'batang' : settings.VIEWER_FONT_FAMILY);
-      localStorage.setItem('viewer_font_family', fontFamily);
-      state.systemSettings.VIEWER_FONT_FAMILY = fontFamily;
-    }
-    if (settings.VIEWER_THEME) localStorage.setItem('viewer_theme', settings.VIEWER_THEME);
-    if (settings.VIEWER_LINE_HEIGHT) localStorage.setItem('viewer_line_height', settings.VIEWER_LINE_HEIGHT);
-    if (settings.VIEWER_PARAGRAPH_SPACING) localStorage.setItem('viewer_paragraph_spacing', settings.VIEWER_PARAGRAPH_SPACING);
+    const effective = restoreViewerPreferences(settings);
+    state.systemSettings = { ...state.systemSettings, ...settings, ...effective };
     syncViewerThemeUI();
     syncViewerSettingsUI();
     getActiveViewerInstance()?.applySettings?.({ skipSavedPositionRestore: true });
@@ -750,9 +742,12 @@ function initMediaViewerDelegation() {
       return;
     }
 
+    if (target.closest('#common-viewer-hotspot') && isViewerTextPoint(event.clientX, event.clientY)) return;
     event.preventDefault();
     let action = target.getAttribute('data-action');
     const value = target.getAttribute('data-value');
+    if (target.closest('#common-viewer-hotspot')
+        && dismissViewerChromeOnContentTap(target, event.clientX, event.clientY)) return;
 
     // 화면 좌/우 핫스팟 존은 물리적 화면 위치를 클릭하는 공간적(spatial) 조작이라,
     // 만화 RTL(우->좌) 읽기 방향에서는 좌/우 클릭 시 넘어가는 스토리 방향도 반대가 되어야 한다.

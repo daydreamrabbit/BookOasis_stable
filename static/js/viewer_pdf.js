@@ -1,5 +1,6 @@
 // viewer_pdf.js – PDF 뷰어 로직
 import { state } from './state.js';
+import { pdfTextRects } from './viewer/pdf_text_hit.js';
 import { showViewerLoading, hideViewerLoading, showViewerError, showViewerBoundaryNotice } from './view_manager.js';
 import { saveProgress } from './viewer_progress.js?rev=20260927-tts-session-v8';
 import { getComicPageStep, getComicReadingDirection, getSpreadShiftOffset, resetSpreadShiftOffset } from './viewer_comic.js';
@@ -16,6 +17,18 @@ let pdfObserver = null;
 // 그대로 보여주기 위한 세대(generation) 번호. 사용자가 렌더 완료 전에 또 페이지를 넘기면
 // 값이 올라가므로, 뒤늦게 도착한 이전 세대의 렌더 결과가 최신 화면을 덮어쓰지 않도록 막는다.
 let pdfRenderGeneration = 0;
+
+window.isPointOnPdfText = (x, y) => {
+  for (const canvas of document.querySelectorAll('#pdf-render-area canvas')) {
+    const box = canvas.getBoundingClientRect();
+    if (!box.width || !box.height || x < box.left || x > box.right || y < box.top || y > box.bottom) continue;
+    // Don't dismiss the toolbar while the text map for this page is loading.
+    if (!canvas._pdfTextRects) return true;
+    const px = (x-box.left)*canvas.width/box.width, py=(y-box.top)*canvas.height/box.height;
+    return canvas._pdfTextRects.some(r => px>=r.left && px<=r.right && py>=r.top && py<=r.bottom);
+  }
+  return false;
+};
 
 export async function initPdfViewer(bookId, pagesRead, totalPages) {
   isInitializingPdfProgress = true;
@@ -346,6 +359,10 @@ function renderSinglePdfCanvas(pageNum, canvas, availWidth, availHeight) {
     canvas.style.width = `${viewport.width / dpr}px`;
     canvas.style.height = `${viewport.height / dpr}px`;
     canvas.style.flex = '0 0 auto';
+    canvas._pdfTextRects = null;
+    page.getTextContent().then(content => {
+      canvas._pdfTextRects = pdfTextRects(content, viewport);
+    }).catch(() => { /* Keep text taps protected if extraction fails. */ });
 
     if (ctx) {
       ctx.imageSmoothingEnabled = true;

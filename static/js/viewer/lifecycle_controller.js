@@ -1,5 +1,6 @@
 // lifecycle_controller.js - open/close orchestration for viewer modal
 import { state } from '../state.js';
+import { syncReaderSettingsUI } from './reader_settings.js';
 import { ComicViewer, clearComicViewer } from '../viewer_comic.js';
 import { TxtViewer } from '../viewer_txt.js?rev=20260927-tts-session-v8';
 import { PdfViewer, clearPdfViewer } from '../viewer_pdf.js';
@@ -73,6 +74,7 @@ export function openReader(bookId, format, title, pagesRead, totalPages) {
   }).catch(() => {});
 
   state.activeBookId = bookId;
+  syncReaderSettingsUI();
   const viewerModal = document.getElementById('media-viewer-modal');
   if (!viewerModal) return;
   // 텍스트 뷰어는 도구 모음 표시 여부와 무관하게 첫 입력부터 본문이 직접 포인터를 받는다.

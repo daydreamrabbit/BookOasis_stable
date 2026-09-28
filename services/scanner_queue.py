@@ -102,7 +102,7 @@ class ScannerQueue:
         try:
             from repositories.scanner_queue_repository import ScannerQueueRepository
             existing = ScannerQueueRepository.get_task_by_key(task_key)
-            if existing and existing['status'] in ('pending', 'running', 'exit_pending') and not force_requeue:
+            if existing and existing['status'] in ('pending', 'running', 'exit_pending'):
                 self.log(f"Task '{task_key}' is already in state '{existing['status']}'. Rejecting duplicate.")
                 return False
 
@@ -115,23 +115,9 @@ class ScannerQueue:
                     existing['id'], task_type, kwargs_json, now_str, force_requeue=force_requeue
                 )
                 if not success:
-                    # [버그픽스] update_task_to_pending()이 False를 반환한 경우:
-                    # existing row가 pending/running 상태여서 WHERE 조건이 불충족된 것.
-                    # (get_task_by_key 조회 후 status가 바뀐 race condition 또는 exit_pending 등 예외 상태)
-                    # → 새 row를 INSERT하여 확실히 대기열에 추가한다.
-                    self.log(
-                        f"Task '{task_key}': update_task_to_pending failed (row id={existing['id']}, "
-                        f"status={existing['status']}). Falling back to INSERT new row."
-                    )
-                    try:
-                        success = ScannerQueueRepository.insert_task(task_type, task_key, kwargs_json, now_str)
-                    except Exception as insert_err:
-                        # INSERT도 실패한 경우: 이미 pending/running인 동일 키 row가 있다는 의미이므로 중복 거부
-                        self.log(
-                            f"Task '{task_key}': INSERT fallback also failed ({insert_err}). "
-                            f"Treating as already queued."
-                        )
-                        return False
+                    # Another request may have requeued/acquired this row after our read.
+                    # Never bypass the repository's atomic guard with a second INSERT.
+                    return False
             else:
                 success = ScannerQueueRepository.insert_task(task_type, task_key, kwargs_json, now_str)
 

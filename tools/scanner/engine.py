@@ -208,11 +208,85 @@ def _dispatch_scan_completed_to_plugin_hooks(db_type, event_payload):
             hook = getattr(provider, 'on_scan_completed', None)
             if not callable(hook):
                 continue
-            result = hook(db_type, dict(event_payload))
+            hook_payload = dict(event_payload)
+            if provider_id == 'rabbit_plugins':
+                hook_payload['_rabbit_progress_callback'] = _make_metadata_scan_progress_callback(
+                    db_type, hook_payload)
+            result = hook(db_type, hook_payload)
             _publish_plugin_metadata_changes(db_type, result)
             print(f"[Scanner-PluginHook] provider={provider_id} completion result={result}")
+            if provider_id == 'rabbit_plugins' and isinstance(result, dict):
+                callback = hook_payload.get('_rabbit_progress_callback')
+                if callable(callback) and not result.get('skipped'):
+                    event = 'completed' if result.get('success') else 'failed'
+                    try:
+                        callback(event, **(result.get('stats') or {}))
+                    except Exception as progress_err:
+                        print(f"[Scanner-PluginHook] metadata progress publish failed: {progress_err}")
         except Exception as hook_error:
             print(f"[Scanner-PluginHook] provider={meta.get('id')} completion failed: {hook_error}")
+            if meta.get('id') == 'rabbit_plugins':
+                try:
+                    callback = locals().get('hook_payload', {}).get('_rabbit_progress_callback')
+                    if callable(callback):
+                        callback('failed')
+                except Exception:
+                    pass
+
+
+def _make_metadata_scan_progress_callback(db_type, event_payload):
+    """Publish scan-hook metadata progress for the Scan Activity popover."""
+    library_id = event_payload.get('library_id')
+    if library_id is None:
+        return None
+    library_name = str(event_payload.get('library_name') or '').strip()
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    activity_key = f'metadata_auto_collect_{db_type}_{library_id}'
+
+    def report(event, **details):
+        status = 'running'
+        if event == 'completed':
+            status = 'completed'
+            message = (
+                '자동 메타데이터 수집 완료 · '
+                f"검색 {int(details.get('processed') or 0)}개 · "
+                f"매칭 {int(details.get('matched') or 0)}개 · "
+                f"적용 {int(details.get('updated') or 0)}개"
+            )
+        elif event == 'failed':
+            status = 'failed'
+            message = '자동 메타데이터 수집 실패'
+        elif event == 'progress':
+            message = (
+                '자동 메타데이터 검색 '
+                f"{int(details.get('completed') or 0)}/{int(details.get('total') or 0)}개 · "
+                f"매칭 {int(details.get('matched') or 0)}개 · "
+                f"적용 {int(details.get('updated') or 0)}개"
+            )
+        else:
+            message = '자동 메타데이터 수집 준비 중'
+
+        activity = {
+            'type': 'metadata_auto_collect',
+            'key': activity_key,
+            'status': status,
+            'db_type': db_type,
+            'library_id': library_id,
+            'library_name': library_name,
+            'kwargs': {'db_type': db_type, 'library_id': library_id},
+            'stage': message,
+            'started_at': started_at,
+            'updated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        if status != 'running':
+            activity['finished_at'] = activity['updated_at']
+        try:
+            from services.metadata_scan_activity import save_metadata_scan_activity
+            save_metadata_scan_activity(activity)
+        except Exception as error:
+            print(f"[Scanner-PluginHook] metadata activity update failed: {error}")
+
+    return report
 
 def _scan_library_internal(
     conn, db_path, library_id, physical_path, force, db_type, target_paths,
