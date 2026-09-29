@@ -3,6 +3,7 @@
 db_writer_mariadb.py – MariaDB Native 스캐너 DB 업서트/배치 라이터
 """
 import os
+from utils.filename_page_count import filename_page_count, with_filename_page_counts
 
 def clear_book_banners(cursor, library_id, full_paths):
     """Clear scanner-owned banner references after their source disappears."""
@@ -91,7 +92,7 @@ def insert_new_book_v2(cursor, library_id, full_path, filename, file_format, ser
         merged_meta.get('isbn', ''),
         full_path, 
         file_format, 
-        100 if file_format == 'epub' else 0, 
+        100 if file_format == 'epub' else filename_page_count(full_path, file_format),
         cover_image,
         merged_meta['publisher'],
         merged_meta['link'],
@@ -214,6 +215,7 @@ def bulk_update_book_covers(cursor, cover_update_list):
 def bulk_insert_books(cursor, insert_data_list):
     """Bulk insert or upsert new books when file_path conflicts in Native MariaDB"""
     if not insert_data_list: return
+    insert_data_list = with_filename_page_counts(insert_data_list)
     cursor.executemany("""
         INSERT INTO books
         (library_id, title, metadata_title, series_name, author, isbn, file_path, file_format, total_pages, cover_image, banner_image, publisher, link, score, summary, release_date, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, localized_series, document_series_name, document_volume_index, document_volume_count, file_mtime, file_size, is_deleted)

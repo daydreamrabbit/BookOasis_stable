@@ -18,6 +18,30 @@ system_bp = Blueprint('system', __name__)
 _LIB_NAME_MEM_CACHE = {}
 
 
+@system_bp.route('/api/system/metadata-history', methods=['GET'])
+@admin_required
+def metadata_collection_history():
+    from services.metadata_collection_history import get_history
+    try:
+        page = max(1, min(100000, int(request.args.get('page', 1))))
+        library_id = request.args.get('library_id') or None
+        if library_id is not None:
+            library_id = int(library_id)
+    except ValueError:
+        return jsonify(success=False, error='잘못된 페이지 또는 카테고리입니다.'), 400
+    result = get_history(request.args.get('run_id', '')[:64], page,
+                         request.args.get('q', ''), request.args.get('status', ''),
+                         library_id, request.args.get('type', '')[:30])
+    if result is None:
+        return jsonify(success=False, error='이력이 없거나 보관 기간이 지났습니다.'), 404
+    for row in ([result['run']] if 'run' in result else result['items']) + result.get('libraries', []):
+        if not row.get('library_name'):
+            row['library_name'] = get_library_name(row['db_type'], row['library_id']) or ''
+    response = jsonify(success=True, **result)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @system_bp.route('/api/system/library-events', methods=['GET'])
 @login_required
 def library_events():

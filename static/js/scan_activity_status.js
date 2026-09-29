@@ -86,7 +86,7 @@ function getScanActivityTaskInfo(task, isPending = false, isRecent = false) {
   const statusLabel = task?.status === 'failed' ? '실패' : task?.status === 'cancelled' ? '취소' : '완료';
   const detail = isRecent
     ? (stage || (statusLabel === '완료' ? '스캔 완료' : `스캔 ${statusLabel}`))
-    : isPending ? `${taskName} 대기 중` : stage || `${taskName} 진행 중`;
+    : isPending ? (stage || `${taskName} 대기 중`) : stage || `${taskName} 진행 중`;
   return { title, detail };
 }
 

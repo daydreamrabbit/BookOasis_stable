@@ -562,6 +562,25 @@ class ScannerQueueRepository:
         return row is not None
 
     @staticmethod
+    def requeue_yielded_task(task_id):
+        """Keep the same task/checkpoint; cancellation wins over resumption."""
+        conn = database.get_connection('general')
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE scanner_tasks SET status='pending', worker_pid=NULL,
+                   stage='우선순위 작업 양보 · 자동 이어서 처리 대기'
+                   WHERE id=? AND status IN ('running','exit_pending')
+                   AND COALESCE(cancel_requested,0)=0""", (task_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
     def try_acquire_task(task_id, now_str):
         """경합 선점을 극복하여 태스크를 running 상태로 원자적 갱신 시도 (워커 PID 함께 기록)"""
         import os

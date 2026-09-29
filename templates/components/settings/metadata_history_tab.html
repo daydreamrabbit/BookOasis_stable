@@ -1,0 +1,24 @@
+<style>
+#settings-tab-metadata-history button, #settings-tab-metadata-history input, #settings-tab-metadata-history select {font:inherit;color:var(--app-text-primary);background:var(--app-bg-secondary, #282b30);border:1px solid var(--app-border-color, #777);border-radius:6px;padding:.45rem .65rem;max-width:100%}
+#settings-tab-metadata-history button {cursor:pointer}
+#settings-tab-metadata-history button:disabled {opacity:.4;cursor:default}
+#settings-tab-metadata-history td {border-bottom:1px solid #8883;overflow-wrap:anywhere}
+#settings-tab-metadata-history [hidden] {display:none!important}
+</style>
+<div id="settings-tab-metadata-history" class="settings-tab-content" style="display:none;flex-direction:column;min-width:0;width:100%;padding-bottom:4rem">
+  <h3>메타데이터 수집 이력</h3>
+  <p>적용 이후 자동 수집부터 기록됩니다. 이력은 30일, 종료된 작업 최대 1,000건까지 보관합니다.</p>
+  <form id="metadata-history-filters" style="display:flex;gap:.5rem;flex-wrap:wrap;margin:1rem 0">
+    <input name="q" aria-label="작품명 검색" placeholder="작품명 검색" maxlength="200">
+    <select name="type" aria-label="도서 유형"><option value="">전체 유형</option><option value="general">일반도서</option><option value="adult">성인도서</option><option value="audiobook">오디오북</option><option value="video">영상강좌</option></select>
+    <select name="library_id" aria-label="카테고리"><option value="">전체 카테고리</option></select>
+    <select name="status" aria-label="처리 상태"></select>
+    <button type="submit">검색 / 새로고침</button>
+    <button type="button" id="metadata-history-back" hidden>작업 목록</button>
+  </form>
+  <p id="metadata-history-summary" role="status"></p>
+  <div style="overflow:auto;max-height:65vh"><table style="width:100%;text-align:left;min-width:600px"><thead id="metadata-history-head"></thead><tbody id="metadata-history-rows"></tbody></table></div>
+  <div style="display:flex;gap:1rem;align-items:center;margin-top:1rem">
+    <button id="metadata-history-prev" type="button">이전</button><span id="metadata-history-page"></span><button id="metadata-history-next" type="button">다음</button>
+  </div>
+</div>

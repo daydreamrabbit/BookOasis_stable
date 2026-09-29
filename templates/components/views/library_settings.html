@@ -4,6 +4,7 @@
                 <!-- 관리자 전용 탭들은 JS(applySettingsTabAccessControl, tab_media_library.js에서 호출)가
                      role를 확인해 노출 여부를 결정하기 전까지 일반 사용자에게 잠깐이라도 보이지 않도록
                      기본값을 display:none으로 잡아둔다(fail-closed). 관리자는 JS가 즉시 다시 보여준다. -->
+                <button class="settings-tab-btn" data-settings-tab="metadata-history" style="display: none;">메타데이터 수집 이력</button>
                 <button class="settings-tab-btn active" data-settings-tab="schedule" style="display: none;">
                     <i class="fa-solid fa-calendar-days"></i> <span data-i18n="settings.tab_schedule">스캔 스케줄 &amp; 대기열</span>
                 </button>
@@ -48,6 +49,7 @@
                 </button>
             </div>
 
+            {% include "components/settings/metadata_history_tab.html" %}
             <!-- 1. 스캔 스케줄 및 대기열 통합 탭 -->
             <div id="settings-tab-schedule" class="settings-tab-content active" style="display: flex; flex-direction: column; gap: 2rem; width: 100%; padding-bottom: 6rem;">
                 {% include "components/settings/schedule_tab.html" %}

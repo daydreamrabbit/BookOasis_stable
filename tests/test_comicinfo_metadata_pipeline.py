@@ -112,7 +112,7 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
                     cover_image TEXT, cover_updated_at TEXT, banner_image TEXT,
                     banner_updated_at TEXT, author TEXT, isbn TEXT,
                     publisher TEXT, link TEXT, score REAL, summary TEXT,
-                    release_date TEXT, genre TEXT, tags TEXT, books_lv TEXT,
+                    release_date TEXT, genre TEXT, tags TEXT, books_lv TEXT, publication_status TEXT,
                     cover_artist TEXT, teams TEXT, locations TEXT, characters TEXT,
                     localized_series TEXT,
                     document_series_name TEXT, document_volume_index REAL,
@@ -273,12 +273,13 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
                 {
                     'author': '', 'isbn': '', 'publisher': '', 'link': '', 'score': 0,
                     'summary': '', 'release_date': '', 'genre': '', 'tags': '',
-                    'books_lv': 'M', 'cover_artist': 'Artist', 'teams': 'Team',
+                    'books_lv': 'M', 'publication_status': 0, 'cover_artist': 'Artist', 'teams': 'Team',
                     'locations': 'Location', 'characters': 'Character',
                 },
             )
 
         query, parameters = connection.recording_cursor.calls[0]
         self.assertEqual(query.count('%s'), len(parameters))
-        for field in ('cover_artist', 'teams', 'locations', 'characters'):
+        self.assertIn('0', parameters)
+        for field in ('publication_status', 'cover_artist', 'teams', 'locations', 'characters'):
             self.assertRegex(query, rf'{field}\s*=\s*CASE')

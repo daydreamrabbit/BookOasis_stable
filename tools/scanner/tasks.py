@@ -227,6 +227,17 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             print(f"[Scanner-DEBUG-Task] ⚠️ Failed to get mtime for folder '{root}': {e}")
             dir_mtime = None
 
+    # A new/edited local sidecar must invalidate per-file shortcuts even when
+    # the book itself has not changed. Remote metadata keeps its existing policy.
+    cached_mtimes = (db_folder_mtimes or {}).get(root)
+    meta_changed = bool(
+        (has_yaml or has_xml) and not is_remote and dir_mtime is not None
+        and meta_mtime and (
+            not cached_mtimes
+            or int(cached_mtimes[1] or 0) != int(meta_mtime)
+        )
+    )
+
     # rclone/CIFS/NFS mounts expose ordinary filesystem paths and can read small
     # sidecar images directly. gdrive:// is an API-backed virtual path, not a
     # mounted directory, so keep its staged-metadata behavior.
@@ -278,7 +289,7 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
     # 2. Early skip if files are unchanged (mtime & size match DB cache)
     skipped_files = set()
     imgdir_skip = False
-    if not force and db_files_cache:
+    if not force and not meta_changed and db_files_cache:
         for filename in media_files:
             full_path = _full_path_for(root, filename, gdrive_file_ids)
             if full_path in db_files_cache:
@@ -467,6 +478,7 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
         skip = False
         if (
             not force
+            and not meta_changed
             and not meta_has_data
             and full_path in db_meta_full
             and full_path in db_offsets_cached
@@ -496,6 +508,7 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
 
         elif (
             not force and
+            not meta_changed and
             not meta_has_data and
             full_path in db_meta_full and
             full_path not in db_offsets_cached and

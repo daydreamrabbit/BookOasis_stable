@@ -14,6 +14,32 @@ from repositories.sqlite.scanner_queue_repository import ScannerQueueRepository 
 
 
 class BatchBookScanProgressTests(unittest.TestCase):
+    def test_detected_scanned_paths_resolve_to_book_ids(self):
+        from tools.scanner.engine import _lookup_detected_book_ids
+
+        class Cursor:
+            def __init__(self):
+                self.sql = ''
+                self.params = ()
+
+            def execute(self, sql, params):
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self):
+                return [{'id': 28677}, {'id': 28678}]
+
+        cursor = Cursor()
+        book_ids = _lookup_detected_book_ids(cursor, 19, [
+            {'file_path': '/books/a.epub'},
+            {'file_path': '/books/b.epub'},
+            {'file_path': '/books/a.epub'},
+        ])
+
+        self.assertEqual(book_ids, [28677, 28678])
+        self.assertIn('file_path IN (?,?)', cursor.sql)
+        self.assertEqual(cursor.params, (19, '/books/a.epub', '/books/b.epub'))
+
     def test_pdf_and_remote_epub_are_processed_in_one_isolated_batch(self):
         queue = Mock()
         books = {

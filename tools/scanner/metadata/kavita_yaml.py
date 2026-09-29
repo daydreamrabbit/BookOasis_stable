@@ -166,19 +166,29 @@ def _normalize_misaligned_sequence_siblings(content):
         content_col = len(m.group(1)) + 1 + len(m.group(2))  # '-' + 뒤따르는 공백들 이후 컬럼
 
         j = i + 1
+        shifting_value = False
         while j < n:
             line = lines[j]
             if not line.strip():
-                break
+                # A quoted/block scalar may span paragraphs. Blank lines do
+                # not end the sequence item or its following mapping keys.
+                j += 1
+                continue
             sibling_indent = len(line) - len(line.lstrip(' \t'))
-            if sibling_indent != seq_indent:
+            if sibling_indent < seq_indent:
                 break
+            if sibling_indent > seq_indent:
+                if shifting_value:
+                    out[j] = (' ' * (content_col - seq_indent)) + line
+                j += 1
+                continue
             if line.lstrip(' \t').startswith('-'):
                 break
             if not re.match(r'^\s*[^:]+:.*$', line):
                 break
             out[j] = (' ' * content_col) + line.lstrip(' \t')
             changed = True
+            shifting_value = True
             j += 1
 
         i = j if j > i + 1 else i + 1

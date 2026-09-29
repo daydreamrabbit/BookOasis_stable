@@ -82,6 +82,12 @@ class BookInfoService:
         # resolved by get_zip_file_hybrid, not by os.path.exists().
         needs_count = total_pages == 0 or (total_pages == 1 and file_format in ('zip', 'cbz', 'imgdir'))
         if needs_count:
+            from utils.filename_page_count import filename_page_count
+            declared_pages = filename_page_count(file_path, file_format)
+            if declared_pages:
+                BookRepository.update_book_pages(db_type, book_id, declared_pages)
+                return declared_pages
+        if needs_count:
             total_pages = 0
         if needs_count and file_path and (os.path.exists(file_path) or imgdir_exists or is_gdrive_url(file_path)):
             if file_format in ('zip', 'cbz'):

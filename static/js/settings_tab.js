@@ -5,6 +5,7 @@ import { initReportsTab, loadReportList, loadReportDetail } from './settings/rep
 import { loadUsersList } from './settings/users.js';
 import { loadPermissionsMatrix } from './settings/permissions.js?rev=20260921-admin-permissions-v1';
 import { loadQueueStatus } from './settings/queue.js';
+import { openMetadataHistory, stopMetadataHistory } from './settings/metadata_history.js';
 import { loadMcpPendingChanges } from './settings/mcp_pending.js';
 import { loadExternalDomainsSettings } from './settings/external_domains.js';
 
@@ -71,7 +72,7 @@ function setAboutVersionLoadError(dashEl, latestEl, stateEl, messageKey, fallbac
 // 관리자 전용 설정 탭 목록. switchSettingsTab()의 접근 차단과 applySettingsTabAccessControl()의
 // 탭 버튼 노출 여부가 이 목록 하나를 공유한다 - 둘이 따로 놀면 "버튼은 보이는데 눌러보면
 // 차단"되거나 반대로 "버튼은 없는데 URL 직접 조작하면 열림" 같은 불일치가 생긴다.
-export const ADMIN_ONLY_SETTINGS_TABS = ['schedule', 'general', 'plugins', 'reports', 'trash', 'users', 'permissions', 'mcp-pending', 'external-domains'];
+export const ADMIN_ONLY_SETTINGS_TABS = ['schedule', 'metadata-history', 'general', 'plugins', 'reports', 'trash', 'users', 'permissions', 'mcp-pending', 'external-domains'];
 const SETTINGS_TAB_STORAGE_KEY = 'bookoasis:settings:activeTab';
 
 function isAdminUser() {
@@ -201,6 +202,8 @@ export function switchSettingsTab(tabId) {
     loadAboutInfo();
   } else if (tabId === 'changelog') {
     loadChangelog();
+  } else if (tabId === 'metadata-history') {
+    openMetadataHistory();
   } else if (tabId === 'schedule') {
     refreshScheduleTabData();
     if (!window.queueRefreshInterval && (window.loadQueueStatus || window.loadLibrarySchedules)) {
@@ -209,6 +212,7 @@ export function switchSettingsTab(tabId) {
   }
 
   // Handle queue refresh interval clearing if leaving schedule tab
+  if (tabId !== 'metadata-history') stopMetadataHistory();
   if (tabId !== 'schedule') {
     if (window.queueRefreshInterval) {
       clearInterval(window.queueRefreshInterval);

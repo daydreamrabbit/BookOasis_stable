@@ -365,6 +365,8 @@ def run_scanner_worker_loop():
             task = None
             if task_key_popped:
                 task = ScannerQueueRepository.get_pending_task_by_key(task_key_popped)
+                if task and task['task_type'] == 'lazy_scan' and ScannerQueueRepository.has_pending_priority_task():
+                    task = None  # DB queue priority also applies to Redis wakeups.
 
             # Fallback
             if not task:
@@ -405,10 +407,11 @@ def run_scanner_worker_loop():
             # 3. 작업 유형별 실행 분기
             error_message = None
             cancelled = False
+            yielded = False
             try:
                 try:
                     if task_type == 'lazy_scan':
-                        _process_lazy_scan(sq, task_id, **kwargs)
+                        yielded = _process_lazy_scan(sq, task_id, **kwargs) is True
                     elif task_type == 'batch_book_scan':
                         _process_batch_book_scan(sq, task_id, **kwargs)
                     elif task_type == 'library_scan':
@@ -434,7 +437,7 @@ def run_scanner_worker_loop():
             finally:
                 # 4. 작업 결과 반영 (예외 발생 시에도 반드시 실행 보장)
                 finished_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                result_status = 'cancelled' if cancelled else ('failed' if error_message else 'completed')
+                result_status = 'cancelled' if cancelled else ('failed' if error_message else ('pending' if yielded else 'completed'))
                 sq.log(f"Task finishing: key={task_key}, type={task_type}, id={task_id}, status={result_status}")
                 sq.log(f"Task result update begin: key={task_key}, type={task_type}, id={task_id}")
                 from utils.redis_helper import redis_acquire_lock, redis_release_lock
@@ -444,7 +447,13 @@ def run_scanner_worker_loop():
                     if not queue_gate_token:
                         sq.log(f"Task result update gate busy: key={task_key}, type={task_type}, id={task_id}")
                         queue_gate_token = None
-                    if cancelled:
+                    if yielded and not cancelled and not error_message:
+                        if not ScannerQueueRepository.requeue_yielded_task(task_id):
+                            # A cancel request may arrive at the batch boundary.
+                            cancelled = True
+                            result_status = 'cancelled'
+                            ScannerQueueRepository.mark_task_cancelled(task_id, finished_str)
+                    elif cancelled:
                         ScannerQueueRepository.mark_task_cancelled(task_id, finished_str)
                     else:
                         ScannerQueueRepository.update_task_result(task_id, finished_str, error_message)
@@ -650,6 +659,8 @@ def _process_lazy_scan(sq, task_id, **kwargs):
             active_subprocess = None
 
         if cancelled_now:
+            if stop_requested and not ScannerQueueRepository.is_cancel_requested(task_id):
+                return True
             raise ScanCancelledError(f"사용자 요청으로 lazy scan이 중지되었습니다 (서브-배치 #{sub_batch_count}).")
 
         if returncode == 'TIMEOUT':
@@ -666,7 +677,7 @@ def _process_lazy_scan(sq, task_id, **kwargs):
             except Exception as st_err:
                 sq.log(f"[Lazy-Scanner] Intermediate status update warning: {st_err}")
             if _lazy_scan_should_yield_to_priority_task(sq, sub_batch_count):
-                break
+                return True
             continue
         elif returncode == 10:
             sq.log(f"⚡ 서브-배치 세션 #{sub_batch_count} 마감 (RAM 환수 완료). 다음 분량을 계속 처리합니다.")
@@ -678,15 +689,19 @@ def _process_lazy_scan(sq, task_id, **kwargs):
             except Exception as st_err:
                 sq.log(f"[Lazy-Scanner] Intermediate status update warning: {st_err}")
             if _lazy_scan_should_yield_to_priority_task(sq, sub_batch_count):
-                break
+                return True
             continue
-        elif returncode in (0, -15, -9, None):
+        elif returncode == 0:
             sq.log(f"✅ lazy_scanner completed gracefully (code: {returncode})")
             break
         else:
+            if stop_requested:
+                return True  # Worker shutdown is not scan completion.
             err_msg = f"lazy_scanner failed with exit code {returncode}. Stderr: {stderr_data}"
             sq.log(f"❌ {err_msg}")
             raise RuntimeError(err_msg)
+
+    return bool(stop_requested)
 
 def _process_library_scan(sq, task_id, **kwargs):
     from services.scheduler_service import run_scan_job

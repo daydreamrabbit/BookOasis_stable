@@ -234,6 +234,32 @@ def _dispatch_scan_completed_to_plugin_hooks(db_type, event_payload):
                     pass
 
 
+def _lookup_detected_book_ids(cursor, library_id, detected_books):
+    """Resolve freshly inserted scanner paths to committed books row IDs."""
+    paths = list(dict.fromkeys(
+        str(book.get('file_path') or '').strip()
+        for book in (detected_books or [])
+        if str(book.get('file_path') or '').strip()
+    ))
+    book_ids = []
+    for offset in range(0, len(paths), 500):
+        batch = paths[offset:offset + 500]
+        placeholders = ','.join('?' for _ in batch)
+        cursor.execute(
+            f'SELECT id FROM books WHERE library_id = ? AND file_path IN ({placeholders})',
+            (library_id, *batch),
+        )
+        for row in cursor.fetchall():
+            book_id = row.get('id') if isinstance(row, dict) else row[0]
+            try:
+                book_id = int(book_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if book_id > 0 and book_id not in book_ids:
+                book_ids.append(book_id)
+    return book_ids
+
+
 def _make_metadata_scan_progress_callback(db_type, event_payload):
     """Publish scan-hook metadata progress for the Scan Activity popover."""
     library_id = event_payload.get('library_id')
@@ -242,10 +268,20 @@ def _make_metadata_scan_progress_callback(db_type, event_payload):
     library_name = str(event_payload.get('library_name') or '').strip()
     started_at = time.strftime('%Y-%m-%d %H:%M:%S')
     activity_key = f'metadata_auto_collect_{db_type}_{library_id}'
+    import uuid
+    history_run_id = uuid.uuid4().hex
     suppressed = False
 
     def report(event, **details):
         nonlocal suppressed
+        if not suppressed:
+            try:
+                from services.metadata_collection_history import record_event
+                record_event(history_run_id, db_type, library_id, library_name, event, details)
+            except Exception as history_error:
+                print(f'[Scanner-PluginHook] metadata history write failed: {history_error}')
+        if event in ('item_started', 'item_result'):
+            return  # Detailed titles belong only in the admin history page.
         if event == 'clear':
             suppressed = True
             try:
@@ -1303,6 +1339,13 @@ def _scan_library_internal(
                 except Exception:
                     pass
         print(f"[Scanner-DB] scan-end-cleanup commit done db={db_type} library_id={library_id}")
+    detected_new_book_ids = []
+    if detected_new_books:
+        try:
+            detected_new_book_ids = _lookup_detected_book_ids(
+                cursor, library_id, detected_new_books)
+        except Exception as lookup_error:
+            print(f"[Scanner-PluginHook] New scanned book ID lookup failed: {lookup_error}")
     conn.close()
     log_pool_stats('scan-end')
     gc.collect()
@@ -1375,6 +1418,8 @@ def _scan_library_internal(
         'new_books_count': len(detected_new_books),
         'sample_titles': [book['title'] for book in detected_new_books[:10]],
     }
+    if detected_new_book_ids:
+        completion_payload['book_ids'] = detected_new_book_ids
     completion_thread = threading.Thread(
         target=_dispatch_scan_completed_to_plugin_hooks,
         args=(db_type, completion_payload),
