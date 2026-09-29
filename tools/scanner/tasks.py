@@ -133,7 +133,8 @@ def _merge_comicinfo_fallback(target, comicinfo):
     for key in (
         'title', 'author', 'localized_series', 'cover_artist', 'teams', 'locations',
         'characters', 'publisher', 'summary', 'release_date', 'genre', 'tags',
-        'books_lv', 'link',
+        'books_lv', 'link', 'document_series_name', 'document_volume_index',
+        'document_volume_count',
     ):
         value = comicinfo.get(key)
         if not value:
@@ -558,6 +559,8 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                     'title', 'author', 'localized_series', 'cover_artist', 'teams',
                     'locations', 'characters', 'publisher', 'summary',
                     'release_date', 'genre', 'tags', 'books_lv', 'link',
+                    'document_series_name', 'document_volume_index',
+                    'document_volume_count',
                 )
                 # Kavita's folder sidecar is the metadata source of record for
                 # this folder.  Do not reopen every volume during a forced

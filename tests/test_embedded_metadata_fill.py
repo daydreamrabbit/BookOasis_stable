@@ -115,6 +115,7 @@ class ComicInfoMetadataTests(unittest.TestCase):
                     'ComicInfo.xml',
                     '<ComicInfo><Writer>글 작가</Writer><Penciller>그림 작가</Penciller>'
                     '<Publisher>출판사</Publisher><Summary>줄거리</Summary><Genre>액션, 판타지</Genre>'
+                    '<Series>작품</Series><Volume>1</Volume><Count>3</Count>'
                     '<Year>2021</Year><Month>4</Month><Day>2</Day></ComicInfo>',
                 )
                 cbz.writestr('001.jpg', b'x')
@@ -125,6 +126,9 @@ class ComicInfoMetadataTests(unittest.TestCase):
         self.assertEqual(metadata['cover_artist'], '그림 작가')
         self.assertEqual(metadata['publisher'], '출판사')
         self.assertEqual(metadata['release_date'], '2021-04-02')
+        self.assertEqual(metadata['document_series_name'], '작품')
+        self.assertEqual(metadata['document_volume_index'], '1.0')
+        self.assertEqual(metadata['document_volume_count'], '3')
         self.assertIn('액션', metadata['genre'])
         self.assertNotIn('teams', metadata)
         self.assertNotIn('books_lv', metadata)

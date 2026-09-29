@@ -80,6 +80,30 @@ def normalize_metadata_list_field(value):
     return ', '.join(normalized)
 
 
+def _parse_volume_index(value):
+    """Parse ComicInfo's per-book Volume value into the DB's numeric index."""
+    match = re.match(r'^\s*(\d+(?:\.\d+)?)\s*$', str(value or ''))
+    if not match:
+        return None
+    try:
+        number = float(match.group(1))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if 0 < number < float('inf') else None
+
+
+def _parse_volume_count(value):
+    """Parse ComicInfo's series Count when it is a positive whole number."""
+    match = re.match(r'^\s*(\d+)\s*$', str(value or ''))
+    if not match:
+        return None
+    try:
+        count = int(match.group(1))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return count if count > 0 else None
+
+
 def _empty_meta():
     return {
         'title': '',
@@ -94,6 +118,9 @@ def _empty_meta():
         'publisher': '',
         'summary': '',
         'release_date': '',
+        'document_series_name': '',
+        'document_volume_index': None,
+        'document_volume_count': None,
         'genre': '',
         'tags': '',
         'cover_b64': None,
@@ -149,6 +176,9 @@ def _parse_comicinfo_from_cbz_local(file_path):
             meta['title'] = _get('Title')
             meta['author'] = _get('Writer')
             meta['localized_series'] = _get('LocalizedSeries')
+            meta['document_series_name'] = _get('Series')
+            meta['document_volume_index'] = _parse_volume_index(_get('Volume'))
+            meta['document_volume_count'] = _parse_volume_count(_get('Count'))
 
             # 명시적 <CoverArtist> 태그가 있으면 우선 사용하고, 없으면 <Penciller>를
             # 호환값으로 사용한다(존재하는 쪽 우선) - 일부 저작 도구는 CoverArtist 개념을

@@ -9,6 +9,40 @@ from tools.scanner.tasks import process_folder_task
 
 
 class ScannerMetadataTitleBackfillTests(unittest.TestCase):
+    def test_scan_persists_comicinfo_series_volume_and_count_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, '01.cbz')
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr(
+                    'ComicInfo.xml',
+                    '<ComicInfo><Series>작품</Series><Volume>1.5</Volume><Count>8</Count>'
+                    '<Year>2026</Year><Month>9</Month><Day>3</Day></ComicInfo>',
+                )
+                archive.writestr('page.jpg', b'not-an-image')
+
+            with (
+                patch('tools.scanner.tasks.get_folder_banner', return_value=None),
+                patch('tools.scanner.tasks.get_series_cover_fallback', return_value=None),
+                patch('tools.scanner.tasks._compute_offsets', return_value=[]),
+            ):
+                result = process_folder_task(
+                    root,
+                    ['01.cbz'],
+                    True,
+                    set(),
+                    set(),
+                    {},
+                    library_id=1,
+                )
+
+            item = result['results'][0]
+            metadata = item['merged_meta']
+            self.assertEqual(metadata['document_series_name'], '작품')
+            self.assertEqual(metadata['document_volume_index'], 1.5)
+            self.assertEqual(metadata['document_volume_count'], 8)
+            self.assertEqual(metadata['release_date'], '2026-09-03')
+            self.assertTrue(item['embedded_metadata_checked'])
+
     def test_force_scan_skips_comicinfo_when_kavita_yaml_exists(self):
         with tempfile.TemporaryDirectory() as root:
             with open(os.path.join(root, 'kavita.yaml'), 'w', encoding='utf-8') as sidecar:

@@ -22,6 +22,7 @@ from tools.scanner.metadata import clean_html_tags, parse_comicinfo_from_cbz
 COMICINFO_FIELDS = (
     'author', 'cover_artist', 'teams', 'locations', 'characters', 'books_lv',
     'publisher', 'summary', 'release_date', 'genre', 'tags',
+    'document_series_name', 'document_volume_index', 'document_volume_count',
 )
 # EPUB은 장르(dc:subject)가 분류 문자열이라 잡음이 많아 제외한다.
 EPUB_FIELDS = ('author', 'publisher', 'summary', 'release_date', 'isbn')

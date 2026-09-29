@@ -48,7 +48,7 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
             LEVEL_18,
         )
 
-    def test_comicinfo_parser_reads_artist_age_rating_and_related_link(self):
+    def test_comicinfo_parser_reads_artist_age_rating_link_and_volume(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             archive_path = Path(temporary_dir) / 'volume.cbz'
             xml = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -57,6 +57,10 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
               <Penciller>Comic Artist</Penciller>
               <AgeRating>M</AgeRating>
               <Web>https://example.com/work</Web>
+              <Series>Embedded Series</Series>
+              <Volume>1.5</Volume>
+              <Count>8</Count>
+              <Year>2026</Year><Month>9</Month><Day>3</Day>
             </ComicInfo>'''
             with zipfile.ZipFile(archive_path, 'w') as archive:
                 archive.writestr('ComicInfo.xml', xml)
@@ -67,6 +71,10 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
         self.assertEqual(meta['cover_artist'], 'Comic Artist')
         self.assertEqual(meta['books_lv'], 'M')
         self.assertEqual(meta['link'], 'https://example.com/work')
+        self.assertEqual(meta['document_series_name'], 'Embedded Series')
+        self.assertEqual(meta['document_volume_index'], 1.5)
+        self.assertEqual(meta['document_volume_count'], 8)
+        self.assertEqual(meta['release_date'], '2026-09-03')
 
     def test_single_scan_comicinfo_merge_includes_link_and_creator_fields(self):
         target = {'title': '', 'author': '', 'link': 'https://sidecar.example/work'}
@@ -74,6 +82,9 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
             'title': 'ComicInfo volume title',
             'author': 'Writer',
             'cover_artist': 'Artist',
+            'document_series_name': 'Embedded Series',
+            'document_volume_index': 1,
+            'document_volume_count': 12,
             'teams': 'Team A',
             'locations': 'Location A',
             'characters': 'Character A',
@@ -88,18 +99,51 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
         self.assertEqual(target['teams'], 'Team A')
         self.assertEqual(target['locations'], 'Location A')
         self.assertEqual(target['characters'], 'Character A')
+        self.assertEqual(target['document_series_name'], 'Embedded Series')
+        self.assertEqual(target['document_volume_index'], 1)
+        self.assertEqual(target['document_volume_count'], 12)
         self.assertEqual(target['link'].splitlines(), [
             'https://sidecar.example/work', 'https://comicinfo.example/work'
         ])
 
     def test_full_scan_comicinfo_merge_adds_link_without_dropping_sidecar_link(self):
-        target = {'link': 'https://sidecar.example/work'}
+        target = {
+            'link': 'https://sidecar.example/work',
+            'document_series_name': '',
+            'document_volume_index': None,
+            'document_volume_count': None,
+        }
 
-        _merge_comicinfo_fallback(target, {'link': 'https://comicinfo.example/work'})
+        _merge_comicinfo_fallback(target, {
+            'link': 'https://comicinfo.example/work',
+            'document_series_name': 'Embedded Series',
+            'document_volume_index': 1,
+            'document_volume_count': 10,
+        })
 
         self.assertEqual(target['link'].splitlines(), [
             'https://sidecar.example/work', 'https://comicinfo.example/work'
         ])
+        self.assertEqual(target['document_series_name'], 'Embedded Series')
+        self.assertEqual(target['document_volume_index'], 1)
+        self.assertEqual(target['document_volume_count'], 10)
+
+    def test_comicinfo_fallback_keeps_folder_sidecar_volume_metadata(self):
+        target = {
+            'document_series_name': 'Sidecar Series',
+            'document_volume_index': 7,
+            'document_volume_count': 9,
+        }
+
+        _merge_comicinfo_fallback(target, {
+            'document_series_name': 'Embedded Series',
+            'document_volume_index': 1,
+            'document_volume_count': 12,
+        })
+
+        self.assertEqual(target['document_series_name'], 'Sidecar Series')
+        self.assertEqual(target['document_volume_index'], 7)
+        self.assertEqual(target['document_volume_count'], 9)
 
     def test_single_scan_repository_persists_comicinfo_fields(self):
         with tempfile.TemporaryDirectory() as temporary_dir:

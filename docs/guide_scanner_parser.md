@@ -52,8 +52,9 @@
 | `Locations` | `locations` | 등장 배경/장소. 쉼표 구분 텍스트 |
 | `Characters` | `characters` | 등장 캐릭터. 쉼표 구분 텍스트 |
 | `AgeRating` | `books_lv` | 원문 그대로 저장 - `services/content_rating_service.py`의 `_BOOKS_LV_LEVEL_MAP`이 ComicInfo 표준 어휘(M/MA15+/R18+/Teen 등)를 이미 대소문자 무시하고 인식하므로 별도 매핑 테이블 불필요 |
+| `Series` / `Volume` / `Count` | `document_series_name` / `document_volume_index` / `document_volume_count` | 권 번호와 작품 내 권수를 도서별 DB 필드에 저장. `Volume=1`과 발행일이 있으면 상세 화면의 연재 시작일 계산에 사용 |
 
-이미 스캔된 도서에 이 필드들을 채우려면 **강제 재스캔**이 필요합니다 - 일반 스캔은 DB에 메타데이터가 이미 있는 CBZ 파일의 ComicInfo.xml을 다시 열지 않는 최적화 경로(`tools/scanner/tasks.py`의 offset-only fast path)를 타기 때문입니다. 신규 추가되는 CBZ는 자동으로 반영됩니다.
+이미 스캔된 도서에 이 필드들을 채우려면 **강제 재스캔**이 필요합니다 - 일반 스캔은 DB에 메타데이터가 이미 있는 CBZ 파일의 ComicInfo.xml을 다시 열지 않는 최적화 경로(`tools/scanner/tasks.py`의 offset-only fast path)를 타기 때문입니다. 신규 추가되는 CBZ는 자동으로 반영됩니다. `kavita.yaml`이 있는 폴더는 기존 원칙대로 YAML을 기준으로 삼고 ComicInfo.xml을 열지 않습니다.
 
 권 또는 시리즈 카드의 **"즉시 스캔 (표지/메타)"**(우클릭 메뉴)로도 같은 필드를 채울 수 있습니다. 이 경로는 사용자가 직접 요청한 범위의 파일만 열고, **DB에 이미 값이 있는 필드는 덮어쓰지 않고 비어 있는 필드만 채웁니다**(폴더 사이드카 > 기존 DB 값 > 파일 내장값 순, 메타데이터 잠금 도서는 변경하지 않음). EPUB은 OPF에서 작가·출판사·줄거리·출간일·ISBN만 채웁니다(장르는 제외). PDF는 표지만 처리하고 메타데이터는 읽지 않습니다. 일반/예약 스캔은 이 동작을 하지 않으므로 대량 라이브러리에서 기존 파일을 다시 여는 부하가 생기지 않습니다.
 

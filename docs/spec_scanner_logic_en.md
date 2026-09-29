@@ -138,7 +138,7 @@ graph TD
   - Built-in parsers today: `audio_json.py`, `comicinfo_xml.py` (excluded from folder-level merging, used separately per file), `info_xml.py`, `kavita_yaml.py`, `series_json.py` (webtoon-oriented `series.json`, supports a remote cover URL).
   - **Merge rule**: modules are loaded in alphabetical filename order; text fields are merged "first writer wins". `genre`/`tags` are comma-split, normalized, and deduplicated across sources; `cover_b64_map` is dict-merged (update); `is_webtoon`/`has_yaml` are OR-combined. Because `info_xml` sorts before `kavita_yaml` alphabetically, `info.xml` currently wins in practice — but this is an alphabetical side effect, not a hardcoded priority rule.
   - All text metadata is passed through HTML tag stripping and entity un-escaping.
-* **ComicInfo.xml fallback**: `ComicInfo.xml` embedded inside a CBZ/ZIP is excluded from folder-level merging and is instead parsed per-file in `tasks.py`, only used to backfill author/publisher/summary/release_date/genre/tags fields that are still empty.
+* **ComicInfo.xml fallback**: `ComicInfo.xml` embedded inside a CBZ/ZIP is excluded from folder-level merging and is instead parsed per file in `tasks.py` to fill blank metadata. `Series`/`Volume`/`Count` are persisted to `document_series_name`/`document_volume_index`/`document_volume_count`; a folder with `kavita.yaml` keeps YAML as the source of record and does not open ComicInfo.xml.
 * **Remote-path resilience**: parsers requiring remote I/O (e.g. `info_xml.py`) apply a circuit breaker (blocks requests for 60s after 3 failures) and a 10s thread-join timeout, so an unresponsive remote file cannot stall the entire scan.
 
 ### ⑨ Staged Cover Image Extraction and Mapping Strategy

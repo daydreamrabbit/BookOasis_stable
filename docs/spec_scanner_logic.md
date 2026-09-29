@@ -138,7 +138,7 @@ graph TD
   - 현재 기본 내장 파서: `audio_json.py`, `comicinfo_xml.py`(폴더 병합에서는 제외, 파일별 경로에서 별도 사용), `info_xml.py`, `kavita_yaml.py`, `series_json.py`(웹툰용 `series.json`, 원격 표지 URL 지원).
   - **병합 규칙**: 파일명 알파벳 순으로 로드되며, 텍스트 필드는 "첫 값 우선(first writer wins)" 방식으로 병합됩니다. `genre`/`tags`는 콤마 분리 후 정규화·중복 제거되어 합쳐지고, `cover_b64_map`은 딕셔너리 병합(update)되며, `is_webtoon`/`has_yaml`은 OR 결합됩니다. `info_xml`이 `kavita_yaml`보다 알파벳상 먼저 오기 때문에 오늘 기준으로는 `info.xml`이 실질적으로 우선 적용되지만, 이는 알파벳 순서에 따른 결과이지 하드코딩된 우선순위 규칙이 아닙니다.
   - 모든 텍스트 메타데이터는 HTML 태그 제거 및 특수 문자 엔티티 복원 가공을 거칩니다.
-* **ComicInfo.xml 폴백**: CBZ/ZIP 내부에 임베드된 `ComicInfo.xml`은 폴더 병합 대상에서 제외되고, 개별 파일 처리 단계(`tasks.py`)에서 작가/출판사/줄거리/발행일/장르/태그가 비어 있을 때만 보충용으로 파싱됩니다.
+* **ComicInfo.xml 폴백**: CBZ/ZIP 내부에 임베드된 `ComicInfo.xml`은 폴더 병합 대상에서 제외되고, 개별 파일 처리 단계(`tasks.py`)에서 빈 메타데이터를 보충합니다. `Series`/`Volume`/`Count`는 도서별 `document_series_name`/`document_volume_index`/`document_volume_count`에 저장하며, `kavita.yaml`이 있는 폴더는 YAML을 우선하고 ComicInfo.xml을 열지 않습니다.
 * **원격 경로 안정성**: `info_xml.py` 등 원격 I/O가 필요한 파서는 3회 실패 시 60초간 요청을 차단하는 서킷 브레이커와, 스레드 조인 10초 타임아웃을 적용해 응답 없는 원격 파일이 스캔 전체를 지연시키지 않도록 합니다.
 
 ### ⑨ 단계별 표지 이미지 추출 및 매핑 전략

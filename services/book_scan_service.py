@@ -21,7 +21,8 @@ _DOCUMENT_SCAN_MAX_TIMEOUT_SECONDS = 3600
 _COMICINFO_SINGLE_BOOK_FIELDS = (
     'title', 'author', 'localized_series', 'cover_artist', 'teams', 'locations',
     'characters', 'publisher', 'summary', 'release_date', 'genre', 'tags',
-    'books_lv', 'link',
+    'books_lv', 'link', 'document_series_name', 'document_volume_index',
+    'document_volume_count',
 )
 
 
