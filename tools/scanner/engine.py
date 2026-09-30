@@ -26,7 +26,12 @@ from tools.scanner.memory_helper import check_memory_exceeded
 from tools.scanner.path_utils import canonical_path, join_canonical
 from tools.scanner.db_writer import update_book_metadata, insert_new_book_v2, save_book_offsets, bulk_update_books, bulk_update_book_covers, clear_book_banners, bulk_insert_books, bulk_save_book_offsets
 from tools.scanner.tasks import process_folder_task, process_folder_covers, SUPPORTED_FORMATS, SUPPORTED_IMAGE_FORMATS, SUPPORTED_METADATA_TITLE_FORMATS, IMGDIR_VIRTUAL_FILENAME
-from embedded_metadata_version import CURRENT_EMBEDDED_METADATA_VERSION, EMBEDDED_METADATA_EXTENSIONS
+from embedded_metadata_version import (
+    COMICINFO_RATING_METADATA_VERSION,
+    CURRENT_EMBEDDED_METADATA_VERSION,
+    is_embedded_metadata_outdated,
+    needs_comicinfo_rating_refresh,
+)
 from utils.library_scan_progress import LibraryScanProgress, count_scan_units
 from tools.scanner.folder_image import clear_folder_listing_cache
 from tools.scanner.sync_detector import detect_and_handle_book_movement, handle_deleted_books
@@ -104,6 +109,7 @@ _METADATA_FIELD_MAX_LEN = {
     'metadata_title': 500,
     'series_name': 500,
     'author': 500,
+    'translator': 500,
     'isbn': 100,
     'publisher': 255,
     'release_date': 100,
@@ -426,7 +432,7 @@ def _scan_library_internal(
         SELECT id, file_path, has_offsets,
                cover_image, author, publisher, summary, file_mtime, file_size, banner_image,
                metadata_title, metadata_title_checked, metadata_locked,
-               embedded_metadata_version
+               embedded_metadata_version, books_lv, translator
         FROM books WHERE library_id = ?{scope_clause}
     """, scope_params)
     all_rows = cursor.fetchall()
@@ -436,6 +442,7 @@ def _scan_library_internal(
     db_files_cache = {}
     db_metadata_title_unchecked = set()
     db_embedded_metadata_outdated = set()
+    db_comicinfo_rating_outdated = set()
     db_cover_images = {}
     db_banner_images = {}
     banner_cache_cleanup_candidates = set()
@@ -459,11 +466,18 @@ def _scan_library_internal(
             and str(row['file_path']).lower().endswith(SUPPORTED_METADATA_TITLE_FORMATS)
         ):
             db_metadata_title_unchecked.add(norm_path)
-        if (
-            str(row['file_path']).lower().endswith(EMBEDDED_METADATA_EXTENSIONS)
-            and int(row['embedded_metadata_version'] or 0) < CURRENT_EMBEDDED_METADATA_VERSION
+        # Version 3 preserves the earlier extraction migration and selectively
+        # rechecks legacy CBZs with a missing or generic adult-only rating.
+        if is_embedded_metadata_outdated(
+            row['file_path'], row['embedded_metadata_version'], row['books_lv'], row['translator']
         ):
             db_embedded_metadata_outdated.add(norm_path)
+        if (
+            str(row['file_path']).lower().endswith(('.cbz', '.zip'))
+            and int(row['embedded_metadata_version'] or 0) < COMICINFO_RATING_METADATA_VERSION
+            and needs_comicinfo_rating_refresh(row['books_lv'])
+        ):
+            db_comicinfo_rating_outdated.add(norm_path)
         if row['has_offsets'] == 1:
             db_offsets_cached.add(norm_path)
         if (row['cover_image'] and not row['cover_image'].startswith('series_') and
@@ -692,15 +706,17 @@ def _scan_library_internal(
                     _clamp_text(meta.get('books_lv', ''), _METADATA_FIELD_MAX_LEN['books_lv']),
                     _clamp_text(meta.get('publication_status', ''), _METADATA_FIELD_MAX_LEN['publication_status']),
                     _clamp_text(meta.get('cover_artist', ''), _METADATA_FIELD_MAX_LEN['cover_artist']),
+                    _clamp_text(meta.get('translator', ''), _METADATA_FIELD_MAX_LEN['translator']),
                     _clamp_text(meta.get('teams', ''), _METADATA_FIELD_MAX_LEN['teams']),
                     _clamp_text(meta.get('locations', ''), _METADATA_FIELD_MAX_LEN['locations']),
                     _clamp_text(meta.get('characters', ''), _METADATA_FIELD_MAX_LEN['characters']),
                     # MariaDB/SQLite bulk upsert SQL also updates document-level
-                    # series/volume metadata.  Keep these four values in the
+                    # series/number metadata. Keep these five values in the
                     # same order as db_writer_{mariadb,sqlite}.py.
                     meta.get('localized_series', ''),
                     meta.get('document_series_name', ''),
                     meta.get('document_volume_index'),
+                    meta.get('document_number'),
                     meta.get('document_volume_count'),
                     d.get('file_mtime', 0.0), d.get('file_size', 0),
                     canonical_path(d['full_path'])
@@ -744,12 +760,14 @@ def _scan_library_internal(
                     _clamp_text(meta.get('books_lv', ''), _METADATA_FIELD_MAX_LEN['books_lv']),
                     _clamp_text(meta.get('publication_status', ''), _METADATA_FIELD_MAX_LEN['publication_status']),
                     _clamp_text(meta.get('cover_artist', ''), _METADATA_FIELD_MAX_LEN['cover_artist']),
+                    _clamp_text(meta.get('translator', ''), _METADATA_FIELD_MAX_LEN['translator']),
                     _clamp_text(meta.get('teams', ''), _METADATA_FIELD_MAX_LEN['teams']),
                     _clamp_text(meta.get('locations', ''), _METADATA_FIELD_MAX_LEN['locations']),
                     _clamp_text(meta.get('characters', ''), _METADATA_FIELD_MAX_LEN['characters']),
                     meta.get('localized_series', ''),
                     meta.get('document_series_name', ''),
                     meta.get('document_volume_index'),
+                    meta.get('document_number'),
                     meta.get('document_volume_count'),
                     d.get('file_mtime', 0.0), d.get('file_size', 0)
                 ))
@@ -1006,6 +1024,7 @@ def _scan_library_internal(
                 progress_callback=make_task_progress_callback(task_index),
                 db_metadata_title_unchecked=db_metadata_title_unchecked,
                 db_embedded_metadata_outdated=db_embedded_metadata_outdated,
+                db_comicinfo_rating_outdated=db_comicinfo_rating_outdated,
             )
             futures[future] = root
             future_task_indexes[future] = task_index

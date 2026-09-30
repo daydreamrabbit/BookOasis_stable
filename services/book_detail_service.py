@@ -318,6 +318,7 @@ class BookDetailService:
             'series_alias': _val(meta_row, 'series_alias', ''),
             'localized_series': next((b.get('localized_series') for b in books_rows if b.get('localized_series')), ''),
             'author'   : _val(meta_row, 'author',    '-'),
+            'translator': _val(meta_row, 'translator', ''),
             'isbn'     : _val(meta_row, 'isbn',      ''),
             'web_id'   : '',
             'publisher': _val(meta_row, 'publisher', '-'),
@@ -344,7 +345,7 @@ class BookDetailService:
         # summary 채워진 쪽을 우선 선택하므로, 그 행에 값이 하나도 없으면 시리즈 전체에
         # 실제 메타데이터가 없다고 봐도 무방하다).
         _metadata_fields = (
-            'author', 'isbn', 'publisher', 'link', 'summary', 'genre', 'tags',
+            'author', 'translator', 'isbn', 'publisher', 'link', 'summary', 'genre', 'tags',
             'books_lv', 'publication_status', 'cover_artist', 'teams', 'locations',
             'characters', 'series_alias',
         )

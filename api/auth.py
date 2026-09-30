@@ -230,7 +230,7 @@ def check_authentication():
     
     # static 폴더, health 체크, OPDS/cover, 웹훅 경로 예외
     if (request.path.startswith('/static/')
-            or request.path == '/health'
+            or request.path in ('/health', '/favicon.ico')
             or request.path.startswith('/opds')
             or request.path.startswith('/app-opds')   # 타치요미 전용 엔드포인트 (자체 인증 처리)
             or request.path.startswith('/covers')

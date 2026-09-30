@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import * as api from './api.js?rev=20260920-scan-response-v1';
-import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js?v=20260922-series-progress-v1';
+import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js?v=20260929-cover-url-cache-fix-v1';
 import { openReader } from './viewer.js?rev=20260927-tts-session-v8';
 import { initInfiniteScrollObserver } from './infinite_scroll.js';
 import { stripLeadingBracketTags } from './series_display.js';

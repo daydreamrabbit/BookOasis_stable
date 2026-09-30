@@ -12,6 +12,9 @@ import './volume_context_menu.js';
 
 bindDetailInteractions();
 let detailRequestSerial = 0;
+window.addEventListener('bookoasis:view-changing', event => {
+  if (event.detail?.viewName !== 'detail') ++detailRequestSerial;
+});
 
 if (!document.body.dataset.detailBackDelegated) {
   document.body.dataset.detailBackDelegated = '1';
@@ -58,6 +61,33 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
   }
 
   try {
+    // Load the renderer in parallel with the book query, not one network
+    // round-trip later. Handle rejection immediately on abandoned navigation.
+    const detailViewPluginId = (state.detailViewProviders && state.detailViewProviders[state.currentLibraryType]) || 'core';
+    const requestType = state.currentLibraryType || 'general';
+    const loadInitialData = async (bundle, bookId) => {
+      const params = new URLSearchParams({type: requestType, book_id: String(bookId), mode: bundle.initial_data_mode, limit: '18'});
+      const response = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(detailViewPluginId)}/data?${params}`, {
+        cache: 'no-store', signal: AbortSignal.timeout(60000),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error('상세정보 준비에 실패했습니다.');
+      return result;
+    };
+    const bundlePromise = detailViewPluginId === 'core' ? Promise.resolve(null)
+      : api.fetchPluginDetailUiBundle(detailViewPluginId).then(result =>
+        result?.success && result.bundle ? result.bundle : null
+      ).catch(err => {
+        console.error(`[Detail] 플러그인 상세뷰 번들 로드 실패 (${detailViewPluginId}):`, err);
+        return null;
+      });
+    // Cards normally supply the representative ID. Its metadata can be
+    // prepared without waiting for the core series query to finish.
+    const preparedPromise = bundlePromise.then(async bundle => {
+      if (!bundle?.initial_data_mode || !representativeBookId || requestSerial !== detailRequestSerial) return null;
+      try { return {bookId: String(representativeBookId), data: await loadInitialData(bundle, representativeBookId)}; }
+      catch (error) { return {bookId: String(representativeBookId), error}; }
+    });
     const data = await api.fetchMediaDetail(state.currentLibraryType, activeLibId, safeSeriesName, representativeBookId);
     if (requestSerial !== detailRequestSerial) return;
 
@@ -71,8 +101,6 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
       state.detailBookIds = books.map(book => Number(book.id)).filter(Number.isFinite);
       state.detailDisplayTitle = safeDisplayTitle;
       state.detailMeta = meta;
-      updateCurrentCategoryIndicator(actualLibraryId);
-
       const detailViewKey = `${state.currentLibraryType || 'general'}:${actualLibraryId}:${safeSeriesName}`;
       if (detailVolumeViewState.key !== detailViewKey) {
         detailVolumeViewState.key = detailViewKey;
@@ -83,35 +111,22 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
       // 상세페이지 본문 렌더러 결정: 이 세션에 코어가 아닌 플러그인이 지정돼 있으면
       // 그 플러그인의 detail_view UI 번들로 header+volumes 영역을 통째로 대체한다.
       // 실패/미지정 시 항상 기존 코어 렌더링으로 폴백한다 (기본값 100% 유지).
-      const detailViewPluginId = (state.detailViewProviders && state.detailViewProviders[state.currentLibraryType]) || 'core';
-      let pluginDetailBundle = null;
-      if (detailViewPluginId !== 'core') {
-        try {
-          const bundleRes = await api.fetchPluginDetailUiBundle(detailViewPluginId);
-          if (bundleRes && bundleRes.success && bundleRes.bundle) {
-            pluginDetailBundle = bundleRes.bundle;
-          }
-        } catch (err) {
-          console.error(`[Detail] 플러그인 상세뷰 번들 로드 실패 (${detailViewPluginId}):`, err);
-        }
-      }
+      const pluginDetailBundle = await bundlePromise;
       if (requestSerial !== detailRequestSerial) return;
 
       // Opt-in providers can prepare their authoritative metadata before the
       // detail DOM is replaced, so exclusions and dates never flash old values.
       let initialDetailData = null;
       if (pluginDetailBundle?.initial_data_mode) {
-        const params = new URLSearchParams({
-          type: state.currentLibraryType || 'general',
-          book_id: String(books[0]?.id || meta.id || ''),
-          mode: pluginDetailBundle.initial_data_mode,
-          limit: '18',
-        });
-        const response = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(detailViewPluginId)}/data?${params}`, {
-          cache: 'no-store', signal: AbortSignal.timeout(60000),
-        });
-        initialDetailData = await response.json();
-        if (!response.ok || !initialDetailData.success) throw new Error('상세정보 준비에 실패했습니다.');
+        const bookId = String(books[0]?.id || meta.id || '');
+        const prepared = await preparedPromise;
+        if (requestSerial !== detailRequestSerial) return;
+        if (prepared?.bookId === bookId) {
+          if (prepared.error) throw prepared.error;
+          initialDetailData = prepared.data;
+        } else {
+          initialDetailData = await loadInitialData(pluginDetailBundle, bookId);
+        }
         if (requestSerial !== detailRequestSerial) return;
       }
 

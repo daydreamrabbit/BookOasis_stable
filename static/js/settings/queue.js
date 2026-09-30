@@ -1,6 +1,7 @@
 // settings/queue.js - 스캔 대기열(Queue) 상태 조회 및 관리 모듈
 
 window.queueRefreshInterval = null;
+const escapeQueueText = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function initQueueDelegation() {
     if (window.__queueDelegationBound) return;
@@ -158,7 +159,7 @@ function buildQueueRowInnerHtml(task, index, t) {
             <td style="padding: 1rem; color: var(--app-text-primary);">${index}</td>
             <td style="padding: 1rem;">${statusHtml}</td>
             <td style="padding: 1rem; color: var(--app-text-primary);">${getQueueTaskTypeName(task.type, t)}</td>
-            <td style="padding: 1rem; color: var(--app-text-primary); font-weight: 500;">${task.library_name || t('queue.system')}</td>
+            <td style="padding: 1rem; color: var(--app-text-primary); font-weight: 500;">${escapeQueueText(task.library_name || t('queue.system'))}</td>
             <td style="padding: 1rem; color: var(--app-text-muted); font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
                 <span>시작: ${task.started_at || '-'}</span>
                 ${cancelButton}
@@ -170,7 +171,7 @@ function buildQueueRowInnerHtml(task, index, t) {
         <td style="padding: 1rem; color: var(--app-text-muted);">${index}</td>
         <td style="padding: 1rem; display: flex; align-items: center; gap: 8px;">${statusHtml}${cancelButton}</td>
         <td style="padding: 1rem; color: var(--app-text-primary);">${getQueueTaskTypeName(task.type, t)}</td>
-        <td style="padding: 1rem; color: var(--app-text-primary);">${task.library_name || t('queue.system')}</td>
+        <td style="padding: 1rem; color: var(--app-text-primary);">${escapeQueueText(task.library_name || t('queue.system'))}</td>
         <td style="padding: 1rem; color: var(--app-text-muted); font-size: 0.85rem;">등록: ${task.enqueued_at || '-'}</td>
     `;
 }

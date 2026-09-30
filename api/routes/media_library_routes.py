@@ -109,6 +109,7 @@ def get_media_list():
         )
         if has_more:
             series_list = series_list[:limit]
+        series_list = SeriesService.annotate_recent_additions(db_type, series_list)
         t_end = time.perf_counter()
         print(f"[API-PROFILE] GET /api/media/list (type={db_type}, lib={library_id}, page={page}) -> TOTAL HTTP RESPONSE: {(t_end - t_start)*1000:.1f}ms")
         return jsonify({'success': True, 'series': series_list, 'has_more': has_more})
@@ -346,6 +347,7 @@ def get_media_history():
             user_id=user_id,
             content_rating_max=session.get('content_rating_max', 18),
         )
+        history = SeriesService.annotate_recent_additions(db_type, history)
         return jsonify({'success': True, 'books': history})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -390,6 +392,7 @@ def get_media_recently_added():
             role=role,
             content_rating_max=session.get('content_rating_max', 18),
         )
+        books = SeriesService.annotate_recent_additions(db_type, books)
         return jsonify({'success': True, 'books': books})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

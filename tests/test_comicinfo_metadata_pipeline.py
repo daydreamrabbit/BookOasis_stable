@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from embedded_metadata_version import CURRENT_EMBEDDED_METADATA_VERSION
+from embedded_metadata_version import (
+    COMICINFO_RATING_METADATA_VERSION,
+    COMICINFO_TRANSLATOR_METADATA_VERSION,
+    CURRENT_EMBEDDED_METADATA_VERSION,
+    is_embedded_metadata_outdated,
+    needs_comicinfo_rating_refresh,
+)
 from repositories.series_metadata_utils import merge_series_metadata_rows
 from repositories.sqlite.book_repository import BookRepository as SQLiteBookRepository
 from repositories.sqlite.book_scan_repository import BookScanRepository
@@ -22,7 +28,11 @@ from services.content_rating_service import (
     get_user_content_rating_max,
 )
 from tools.scanner.metadata.comicinfo_xml import parse_comicinfo_from_cbz
-from tools.scanner.tasks import _merge_comicinfo_fallback
+from tools.scanner.tasks import (
+    _merge_comicinfo_fallback,
+    _merge_comicinfo_rating,
+    _should_read_comicinfo,
+)
 
 
 class ComicInfoMetadataPipelineTests(unittest.TestCase):
@@ -31,12 +41,65 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
         self.assertEqual(ContentRatingService.normalize_books_lv('MA15+'), LEVEL_15)
         self.assertEqual(ContentRatingService.normalize_books_lv('R18'), LEVEL_ADULT_MANGA)
         self.assertEqual(ContentRatingService.normalize_books_lv('R18+'), LEVEL_ADULT_MANGA)
+        self.assertEqual(ContentRatingService.normalize_books_lv('adult only'), LEVEL_18)
+        self.assertEqual(ContentRatingService.normalize_books_lv('Adults Only'), LEVEL_18)
         self.assertEqual(ContentRatingService.normalize_books_lv('Adult Only 18+'), LEVEL_PORN)
         self.assertEqual(ContentRatingService.normalize_books_lv('X18+'), LEVEL_PORN)
         self.assertEqual(ContentRatingService.get_level_label(LEVEL_ADULT_MANGA), '성인망가')
         self.assertEqual(ContentRatingService.get_level_label(LEVEL_PORN), '포르노')
         self.assertEqual(ContentRatingService.normalize_books_lv('unrecognized rating'), LEVEL_PORN)
         self.assertEqual(SUPPORTED_CONTENT_RATING_LEVELS, (0, 15, 18, 19, 20))
+
+    def test_legacy_generic_ratings_are_rechecked_against_comicinfo_once(self):
+        self.assertTrue(needs_comicinfo_rating_refresh(''))
+        self.assertTrue(needs_comicinfo_rating_refresh('adult only'))
+        self.assertFalse(needs_comicinfo_rating_refresh('R18+'))
+        self.assertFalse(needs_comicinfo_rating_refresh('M'))
+        self.assertLess(COMICINFO_RATING_METADATA_VERSION, CURRENT_EMBEDDED_METADATA_VERSION)
+        self.assertEqual(COMICINFO_TRANSLATOR_METADATA_VERSION, CURRENT_EMBEDDED_METADATA_VERSION)
+        self.assertTrue(is_embedded_metadata_outdated('/Series/01.cbz', 2, 'adult only'))
+        self.assertTrue(is_embedded_metadata_outdated('/Series/01.cbz', 2, 'R18+'))
+        self.assertTrue(is_embedded_metadata_outdated('/Series/01.cbz', 3, 'M'))
+        self.assertTrue(is_embedded_metadata_outdated('/Series/01.cbz', 3, 'adult only'))
+        self.assertTrue(is_embedded_metadata_outdated('/Series/01.cbz', 1, 'R18+'))
+
+    def test_kavita_cbz_comicinfo_read_is_limited_to_new_or_flagged_rows(self):
+        args = ('cbz', True, True, '/library/Series/01.cbz', {}, set(),
+                {'books_lv': 'm'}, ('books_lv',))
+        self.assertTrue(_should_read_comicinfo(*args))
+
+        existing = ('cbz', True, True, '/library/Series/01.cbz',
+                    {'/library/Series/01.cbz': 1}, {'/library/Series/01.cbz'},
+                    {'books_lv': 'adult only'}, ('books_lv',))
+        self.assertTrue(_should_read_comicinfo(*existing))
+
+        already_checked = ('cbz', True, True, '/library/Series/01.cbz',
+                           {'/library/Series/01.cbz': 1}, set(),
+                           {'books_lv': 'R18+'}, ('books_lv',))
+        self.assertFalse(_should_read_comicinfo(*already_checked))
+
+        old_precise = ('cbz', True, True, '/library/Series/01.cbz',
+                       {'/library/Series/01.cbz': 1}, {'/library/Series/01.cbz'},
+                       {'books_lv': 'R18+'}, ('books_lv',))
+        # A valid stored rating must not block the one-time Translator
+        # backfill for a legacy sidecar-backed book whose translator is empty.
+        self.assertTrue(_should_read_comicinfo(*old_precise))
+        sidecar_has_translator = (
+            *old_precise[:6],
+            {'books_lv': 'R18+', 'translator': 'Kavita translator'},
+            old_precise[7],
+        )
+        self.assertFalse(_should_read_comicinfo(*sidecar_has_translator))
+        old_generic_db = (*old_precise, {'/library/Series/01.cbz'})
+        self.assertTrue(_should_read_comicinfo(*old_generic_db))
+
+    def test_kavita_comicinfo_merge_changes_only_the_per_volume_rating(self):
+        target = {'books_lv': 'adult only', 'publisher': 'Kavita publisher'}
+        _merge_comicinfo_rating(target, {
+            'books_lv': 'R18+', 'publisher': 'Archive publisher',
+        })
+        self.assertEqual(target['books_lv'], 'R18+')
+        self.assertEqual(target['publisher'], 'Kavita publisher')
 
     def test_content_rating_max_uses_the_saved_value_for_every_role(self):
         self.assertEqual(
@@ -55,6 +118,7 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
             <ComicInfo>
               <Title>ComicInfo volume title</Title>
               <Penciller>Comic Artist</Penciller>
+              <Translator>박경용</Translator>
               <AgeRating>M</AgeRating>
               <Web>https://example.com/work</Web>
               <Series>Embedded Series</Series>
@@ -69,6 +133,7 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
 
         self.assertEqual(meta['title'], 'ComicInfo volume title')
         self.assertEqual(meta['cover_artist'], 'Comic Artist')
+        self.assertEqual(meta['translator'], '박경용')
         self.assertEqual(meta['books_lv'], 'M')
         self.assertEqual(meta['link'], 'https://example.com/work')
         self.assertEqual(meta['document_series_name'], 'Embedded Series')
@@ -77,10 +142,14 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
         self.assertEqual(meta['release_date'], '2026-09-03')
 
     def test_single_scan_comicinfo_merge_includes_link_and_creator_fields(self):
-        target = {'title': '', 'author': '', 'link': 'https://sidecar.example/work'}
+        target = {
+            'title': '', 'author': '', 'books_lv': 'adult only',
+            'link': 'https://sidecar.example/work',
+        }
         comicinfo = {
             'title': 'ComicInfo volume title',
             'author': 'Writer',
+            'translator': '박경용',
             'cover_artist': 'Artist',
             'document_series_name': 'Embedded Series',
             'document_volume_index': 1,
@@ -89,12 +158,15 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
             'locations': 'Location A',
             'characters': 'Character A',
             'link': 'https://comicinfo.example/work',
+            'books_lv': 'R18+',
         }
 
         _merge_comicinfo_metadata(target, comicinfo)
 
         self.assertEqual(target['title'], 'ComicInfo volume title')
         self.assertEqual(target['author'], 'Writer')
+        self.assertEqual(target['translator'], '박경용')
+        self.assertEqual(target['books_lv'], 'R18+')
         self.assertEqual(target['cover_artist'], 'Artist')
         self.assertEqual(target['teams'], 'Team A')
         self.assertEqual(target['locations'], 'Location A')
@@ -109,6 +181,8 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
     def test_full_scan_comicinfo_merge_adds_link_without_dropping_sidecar_link(self):
         target = {
             'link': 'https://sidecar.example/work',
+            'books_lv': 'adult only',
+            'translator': '',
             'document_series_name': '',
             'document_volume_index': None,
             'document_volume_count': None,
@@ -116,6 +190,8 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
 
         _merge_comicinfo_fallback(target, {
             'link': 'https://comicinfo.example/work',
+            'books_lv': 'R18+',
+            'translator': '박경용',
             'document_series_name': 'Embedded Series',
             'document_volume_index': 1,
             'document_volume_count': 10,
@@ -124,6 +200,8 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
         self.assertEqual(target['link'].splitlines(), [
             'https://sidecar.example/work', 'https://comicinfo.example/work'
         ])
+        self.assertEqual(target['books_lv'], 'R18+')
+        self.assertEqual(target['translator'], '박경용')
         self.assertEqual(target['document_series_name'], 'Embedded Series')
         self.assertEqual(target['document_volume_index'], 1)
         self.assertEqual(target['document_volume_count'], 10)
@@ -157,10 +235,10 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
                     banner_updated_at TEXT, author TEXT, isbn TEXT,
                     publisher TEXT, link TEXT, score REAL, summary TEXT,
                     release_date TEXT, genre TEXT, tags TEXT, books_lv TEXT, publication_status TEXT,
-                    cover_artist TEXT, teams TEXT, locations TEXT, characters TEXT,
+                    cover_artist TEXT, translator TEXT, teams TEXT, locations TEXT, characters TEXT,
                     localized_series TEXT,
                     document_series_name TEXT, document_volume_index REAL,
-                    document_volume_count INTEGER,
+                    document_number TEXT, document_volume_count INTEGER,
                     embedded_metadata_version INTEGER NOT NULL DEFAULT 0,
                     metadata_locked INTEGER DEFAULT 0
                 )
@@ -187,10 +265,12 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
                         'author': '', 'isbn': '', 'publisher': '', 'link': 'https://example.com',
                         'score': 0, 'summary': '', 'release_date': '', 'genre': '', 'tags': '',
                         'books_lv': 'M', 'cover_artist': 'Comic Artist', 'teams': 'Team A',
+                        'translator': '박경용',
                         'locations': 'Location A', 'characters': 'Character A',
                         'localized_series': 'Original Series',
                         'document_series_name': 'Embedded Series',
                         'document_volume_index': 1.5,
+                        'document_number': '특별편',
                         'document_volume_count': 6,
                         '_embedded_metadata_checked': True,
                     },
@@ -198,13 +278,14 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
 
             conn = sqlite3.connect(db_path)
             row = conn.execute(
-                'SELECT metadata_title, link, books_lv, cover_artist, teams, locations, characters, localized_series, document_series_name, document_volume_index, document_volume_count, embedded_metadata_version FROM books WHERE id = 1'
+                'SELECT metadata_title, link, books_lv, cover_artist, translator, teams, locations, characters, localized_series, document_series_name, document_volume_index, document_number, document_volume_count, embedded_metadata_version FROM books WHERE id = 1'
             ).fetchone()
             conn.close()
 
         self.assertEqual(row, (
-            'ComicInfo volume title', 'https://example.com', 'M', 'Comic Artist', 'Team A', 'Location A', 'Character A',
-            'Original Series', 'Embedded Series', 1.5, 6, CURRENT_EMBEDDED_METADATA_VERSION
+            'ComicInfo volume title', 'https://example.com', 'M', 'Comic Artist', '박경용', 'Team A', 'Location A', 'Character A',
+            'Original Series', 'Embedded Series', 1.5, '특별편', 6,
+            CURRENT_EMBEDDED_METADATA_VERSION
         ))
 
     def test_series_metadata_prefers_volume_one_links_and_highest_rating(self):
@@ -252,7 +333,7 @@ class ComicInfoMetadataPipelineTests(unittest.TestCase):
                     is_deleted INTEGER DEFAULT 0, author TEXT, isbn TEXT,
                     publisher TEXT, link TEXT, score REAL, summary TEXT,
                     genre TEXT, tags TEXT, books_lv TEXT, publication_status TEXT,
-                    cover_artist TEXT, teams TEXT, locations TEXT, characters TEXT,
+                    cover_artist TEXT, translator TEXT, teams TEXT, locations TEXT, characters TEXT,
                     series_alias TEXT, localized_series TEXT,
                     metadata_locked INTEGER DEFAULT 0
                 )

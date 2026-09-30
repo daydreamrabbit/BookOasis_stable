@@ -438,7 +438,7 @@ def _update_scanned_document_metadata(cursor, book_id, metadata):
             column = 'metadata_title' if field == 'title' else field
             assignments.append(f"{column} = COALESCE(NULLIF(?, ''), {column})")
             values.append(value)
-    for field in ('document_volume_index', 'document_volume_count'):
+    for field in ('document_volume_index', 'document_number', 'document_volume_count'):
         value = metadata.get(field)
         if value is not None:
             assignments.append(f'{field} = COALESCE(?, {field})')

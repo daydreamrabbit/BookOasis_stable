@@ -7,7 +7,7 @@ import re
 import datetime
 from flask import Blueprint, request, jsonify, session
 from api.auth import admin_required, login_required, verify_webhook_token, webhook_token_required
-from flask import render_template
+from flask import render_template, current_app, send_from_directory
 from urllib.request import Request, urlopen
 from services.plugin_service import PluginService
 from services.settings_service import SettingsService
@@ -51,7 +51,7 @@ def library_events():
     client = get_redis_client()
     if client is None or not STREAM_SLOTS.acquire(blocking=False):
         return jsonify(success=False, error='변경 알림 연결을 잠시 후 재시도합니다.'), 503
-    response = Response(library_event_stream(client), mimetype='text/event-stream')
+    response = Response(library_event_stream(client, include_health=session.get('role') == 'admin'), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Accel-Buffering'] = 'no'
     response.call_on_close(STREAM_SLOTS.release)
@@ -114,6 +114,12 @@ def health():
         'status': 'healthy',
         'service': 'BookOasis'
     })
+
+
+@system_bp.route('/favicon.ico', methods=['GET'])
+def favicon():
+    return send_from_directory(os.path.join(current_app.static_folder, 'images'),
+                               'icon-192.png', mimetype='image/png', max_age=86400)
 
 @system_bp.route('/', methods=['GET'])
 @system_bp.route('/media-library', methods=['GET'])
@@ -273,8 +279,14 @@ def get_system_status():
         for activity in metadata_activities:
             _add_library_name(activity)
 
+        system_warnings = []
+        if session.get('role') == 'admin':
+            from services.system_health_service import SystemHealthService
+            system_warnings = SystemHealthService.get_active_warnings(refresh=True)
+
         response = jsonify({
             'success': True,
+            'system_warnings': system_warnings,
             'is_active': is_active,
             'tasks': running_tasks,
             'raw_status': status,
@@ -322,7 +334,18 @@ def get_system_queue_status():
                 lib_name = get_library_name(db_type, lib_id)
                 task['library_name'] = f"{lib_name} ({db_type})" if lib_name else f"Library {lib_id} ({db_type})"
             elif task['type'] == 'lazy_scan':
-                task['library_name'] = "전체 시스템 (Lazy Scanner)"
+                kwargs = task.get('kwargs') or {}
+                db_type = kwargs.get('db_type', 'general')
+                library_id = kwargs.get('library_id')
+                series_name = kwargs.get('series_name')
+                if library_id is not None:
+                    name = get_library_name(db_type, library_id) or f'Library {library_id}'
+                    target = f'{name} ({db_type})'
+                    task['library_name'] = f'{target} · {series_name}' if series_name else f'{target} · 카테고리 누락 정보 보완'
+                elif kwargs.get('book_ids') is not None:
+                    task['library_name'] = f"선택 도서 {len(kwargs['book_ids'])}권 ({db_type}) · 누락 정보 보완"
+                else:
+                    task['library_name'] = "전체 시스템 (Lazy Scanner)"
             elif task['type'] == 'batch_book_scan':
                 kwargs = task.get('kwargs', {})
                 db_type = kwargs.get('db_type', 'general')

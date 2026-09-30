@@ -2,6 +2,36 @@ import { buildFallbackCoverUrl, getBookCoverSrc } from '../cover_fallback.js';
 import { state } from '../state.js';
 import { stripLeadingBracketTags } from '../series_display.js';
 
+const CONTENT_RATING_LABELS = {
+  0: '전체이용가',
+  15: '15세이상',
+  18: '18세이상(성인)',
+  19: '성인망가',
+  20: '포르노',
+};
+
+export function resolveContentRatingLabel(ratingLevel) {
+  return CONTENT_RATING_LABELS[ratingLevel] || '등급 확인 필요';
+}
+
+const PORN_RATING_VALUES = new Set([
+  'adult only 18+', 'adultsonly18+', 'adults only 18+',
+  'x18+', '포르노', 'porn', 'pornography',
+]);
+
+const GENERAL_ADULT_RATING_VALUES = new Set([
+  'adult only', 'adultonly', 'adults only', 'adultsonly',
+  '18세', '18세이상', '18세이상(성인)', '성인',
+]);
+
+export function isPornRatingValue(value) {
+  return PORN_RATING_VALUES.has(String(value || '').trim().toLowerCase());
+}
+
+export function isGeneralAdultRatingValue(value) {
+  return GENERAL_ADULT_RATING_VALUES.has(String(value || '').trim().toLowerCase());
+}
+
 function normalizeMetadataToken(token) {
   if (!token) return '';
   return String(token)
@@ -32,10 +62,8 @@ function safeHref(url) {
 export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId, displayTitle = '') {
   const booksLvValue = String(meta.books_lv || '').trim().toLowerCase();
   const isAdultMangaRating = ['r18', 'r18+', '성인망가', 'adult manga'].includes(booksLvValue);
-  const isPornRating = [
-    'adult only', 'adult only 18+', 'adultsonly18+', 'adults only 18+',
-    'x18+', '포르노', 'porn', 'pornography',
-  ].includes(booksLvValue);
+  const isPornRating = isPornRatingValue(booksLvValue);
+  const isGeneralAdultRating = isGeneralAdultRatingValue(booksLvValue);
   let visibleTitle = stripLeadingBracketTags(String(displayTitle || '').trim() || safeSeriesName);
 
   const toSeriesLikeTitle = (rawTitle) => {
@@ -97,11 +125,9 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
       20: { bg: 'rgba(244, 63, 94, 0.15)', fg: '#f43f5e', border: 'rgba(244, 63, 94, 0.3)' },
     };
     const colors = ratingColorMap[ratingLevel] || ratingColorMap[18];
-    const ratingLabelMap = {
-      0: '전체이용가', 15: '15세이상', 18: '18세이상(성인)',
-      19: '성인망가', 20: '포르노',
-    };
-    const ratingLabel = meta.content_rating_label || ratingLabelMap[ratingLevel] || '포르노';
+    // The numeric level is the normalized authority. A cached/older display
+    // string must not turn level 19 (R18+) into the level-20 Porn label.
+    const ratingLabel = resolveContentRatingLabel(ratingLevel);
     ratingBadgeHtml = `
       <span class="badge" data-role="detail-rating-badge" title="열람 등급" style="background: ${colors.bg}; color: ${colors.fg}; border: 1px solid ${colors.border}; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; font-weight: 700;">
         <i class="fa-solid fa-shield-halved" style="font-size: 0.7rem; margin-right: 0.3rem;"></i>${ratingLabel}
@@ -547,7 +573,7 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
               <option value="15세" ${booksLvValue === '15세' ? 'selected' : ''}>15세</option>
               <option value="r18" ${isAdultMangaRating ? 'selected' : ''}>R18 (성인망가)</option>
               <option value="adult only 18+" ${isPornRating ? 'selected' : ''}>Adult Only 18+ (포르노)</option>
-              <option value="18세" ${['18세', '18세이상', '18세이상(성인)', '성인'].includes(booksLvValue) ? 'selected' : ''}>18세</option>
+              <option value="18세" ${isGeneralAdultRating ? 'selected' : ''}>18세</option>
             </select>
           </div>
           <div class="edit-meta-row-item">

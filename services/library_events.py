@@ -15,7 +15,14 @@ def publish_library_change(db_type, revision):
         client.publish(CHANNEL, json.dumps({'type': db_type, 'revision': str(revision)}))
 
 
-def library_event_stream(client):
+def publish_system_health_change():
+    from utils.redis_helper import get_redis_client
+    client = get_redis_client()
+    if client is not None:
+        client.publish(CHANNEL, json.dumps({'type': 'system_health'}))
+
+
+def library_event_stream(client, include_health=False):
     from services.series_service import _read_shared_books_cache_epoch
     kinds = ('general', 'adult', 'audiobook', 'video')
     subscription = client.pubsub()
@@ -32,6 +39,8 @@ def library_event_stream(client):
                 event = json.loads(message['data'])
                 if event.get('type') in kinds:
                     yield 'event: changed\ndata: ' + json.dumps(event) + '\n\n'
+                elif include_health and event.get('type') == 'system_health':
+                    yield 'event: system-health\ndata: {}\n\n'
             else:
                 yield ': keepalive\n\n'
     finally:

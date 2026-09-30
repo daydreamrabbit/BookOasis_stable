@@ -30,6 +30,7 @@ def _base_meta():
         'publication_status': '',
         'document_series_name': '',
         'document_volume_index': None,
+        'document_number': None,
         'document_volume_count': None,
         'cover_artist': '',
         'teams': '',

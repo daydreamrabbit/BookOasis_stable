@@ -495,20 +495,22 @@ export async function loadLibraries() {
   const sidebar = document.getElementById('sidebar-categories');
   if (!sidebar) return;
   const requestToken = ++sidebarLoadToken;
+  const requestType = state.currentLibraryType;
   try {
     // 두 요청 모두 이 시점 기준으로 즉시 병렬 발사한다 - category-plugins는 원래 라이브러리
     // 목록을 다 받은 "뒤에" 순차로 조회했는데, 세션(일반/성인/오디오북 등) 전환마다 이
     // 두 왕복이 그대로 직렬로 쌓여 체감 지연의 큰 축이었다. 실제 사용은 아래 그룹 렌더링
     // 시점이라 그때까지 기다렸다가 await해도 결과는 동일하다.
-    const librariesPromise = api.fetchLibraries(state.currentLibraryType);
-    const categoryPluginsPromise = fetch(`/api/media/category-plugins?type=${state.currentLibraryType}`)
+    const librariesPromise = api.fetchLibraries(requestType);
+    const categoryPluginsPromise = fetch(`/api/media/category-plugins?type=${requestType}`)
       .then((res) => (res.ok ? res.json() : null))
       .catch((e) => {
         console.warn('[Category] Failed to fetch category plugins:', e);
         return null;
       });
 
-    const data = await librariesPromise;
+    const [data, catPluginData] = await Promise.all([librariesPromise, categoryPluginsPromise]);
+    if (requestToken !== sidebarLoadToken || requestType !== state.currentLibraryType) return;
     if (data.success) {
       state.libraryGroups = Array.isArray(data.groups) ? data.groups : [];
       state.libraryKinds = Array.isArray(data.kinds) ? data.kinds : [];
@@ -595,7 +597,6 @@ export async function loadLibraries() {
       // 동적 카테고리 레벨 플러그인 탭 - libraries와 이미 병렬로 요청해둔 결과를 여기서 받는다
       // (그룹 렌더링보다 먼저 수행해야 그룹 내부에 배치 가능)
       let categoryPlugins = [];
-      const catPluginData = await categoryPluginsPromise;
       if (catPluginData && catPluginData.success && Array.isArray(catPluginData.category_plugins)) {
         categoryPlugins = catPluginData.category_plugins;
       }
@@ -645,17 +646,19 @@ export async function loadLibraries() {
 
       // 이 요청이 대기하는 동안 더 최근 부문 전환이 시작됐다면, 지금 막 완성한 이
       // html은 이미 낡은 부문 것이므로 사이드바에 반영하지 않고 조용히 버린다.
-      if (requestToken !== sidebarLoadToken) return;
+      if (requestToken !== sidebarLoadToken || requestType !== state.currentLibraryType) return;
 
       sidebar.innerHTML = html;
       normalizeSidebarBareLabels(sidebar);
       applySavedMixedOrder(sidebar);
-      const activeItem = document.getElementById(`category-${state.currentLibraryId}`) || sidebar.querySelector(`[data-id="${state.currentLibraryId}"]`);
+      const activeItem = Array.from(sidebar.querySelectorAll('.menu-item[data-category-id]'))
+        .find((item) => String(item.getAttribute('data-category-id')) === String(state.currentLibraryId))
+        || document.getElementById(`category-${state.currentLibraryId}`);
       state.currentLibraryHideCovers = !!(activeItem && activeItem.dataset && activeItem.dataset.type === 'custom' && activeItem.dataset.hideCover === '1');
       state.currentLibraryAspectRatio = (activeItem && activeItem.dataset && activeItem.dataset.coverAspectRatio === '16:9') ? '16:9' : '4:3';
       state.currentLibraryHideTitles = !!(activeItem && activeItem.dataset && activeItem.dataset.type === 'custom' && activeItem.dataset.hideTitle === '1');
       const detail = document.getElementById('book-detail-view');
-      const showingDetail = detail && getComputedStyle(detail).display !== 'none' && state.detailLibraryId;
+      const showingDetail = detail && detail.getClientRects().length > 0 && state.detailLibraryId;
       updateCurrentCategoryIndicator(showingDetail ? state.detailLibraryId : state.currentLibraryId, showingDetail ? null : activeItem);
       bindSidebarContextMenu();
       bindDragAndDropEvents(!isPinned);

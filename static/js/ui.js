@@ -1,10 +1,11 @@
 // ui.js – UI 렌더링 및 그리드 함수들
 import { state } from './state.js';
+import { bindShelfDrag } from './shelf_drag.js';
 import { bindSeriesCoverRatio } from './series_cover_ratio.js';
 import { openBookDetail } from './modal.js';
 import { openReader } from './viewer.js?rev=20260927-tts-session-v8';
 import { showToast } from './view_manager.js';
-import { buildFallbackCoverUrl, getBookCoverSrc, buildTextCoverDataUri, coverAlignToObjectPosition } from './cover_fallback.js';
+import { buildFallbackCoverUrl, getBookCoverSrc, buildTextCoverDataUri, coverAlignToObjectPosition } from './cover_fallback.js?rev=20260929-cover-url-cache-fix-v1';
 import { stripLeadingBracketTags, stripTrailingBracketSuffix, middleTruncateTitle } from './series_display.js';
 import { initGridPruning, resetGridPruning, notifyCardsAppended, notifyCardsPrepended } from './grid_pruning.js';
 import { clearBookSelection, syncBookSelectionCard } from './book_selection.js';
@@ -368,6 +369,16 @@ export function createBookCard(item, options = {}) {
     ? `<span class="book-card-audiobook-completed" title="${i18n.t('detail.audiobook_completed')}" aria-label="${i18n.t('detail.audiobook_completed')}"></span>`
     : '';
 
+  const recentAddedCount = Number(item.recent_added_count || 0);
+  let recentBadgeHtml = '';
+  if (isBookCard && !item.is_author_group && recentAddedCount > 0) {
+    const days = Number(item.recent_window_days || 7);
+    const isNew = item.is_new_series === true;
+    const label = i18n.t(isNew ? 'book_list.badge_new' : 'book_list.badge_added', { count: recentAddedCount });
+    const tip = i18n.t(isNew ? 'book_list.badge_new_title' : 'book_list.badge_added_title', { days, count: recentAddedCount });
+    recentBadgeHtml = `<span class="book-card-recent-badge${isNew ? ' is-new' : ''}" data-role="card-recent-badge" title="${tip}">${label}</span>`;
+  }
+
   const isSelectableCard = options.allowSelection && !item.is_author_group;
   if (isSelectableCard) card.classList.add('book-card--selectable');
   const selectionToggleHtml = isSelectableCard
@@ -380,11 +391,12 @@ export function createBookCard(item, options = {}) {
   card.innerHTML = `
     <div class="book-card-cover">
       <div class="book-card-overlay"></div>
-      <img src="${imgSrc}" ${imgDataSrcAttr} alt="${displayTitle}" decoding="async" loading="lazy"${fetchPriorityAttr}${coverObjectPositionStyle}>
+      <img draggable="false" src="${imgSrc}" ${imgDataSrcAttr} alt="${displayTitle}" decoding="async" loading="lazy"${fetchPriorityAttr}${coverObjectPositionStyle}>
       ${selectionToggleHtml}
       ${badgeHtml}
       ${favBtnHtml}
       ${lockedBadgeHtml}
+      ${recentBadgeHtml}
       ${audiobookCompletedDotHtml}
       ${resumeButtonHtml}
     </div>
@@ -649,6 +661,7 @@ export function prependBooksGrid(seriesList) {
 export function renderDashboardHistory(booksList) {
   const container = document.getElementById('dashboard-history-row');
   if (!container) return;
+  bindShelfDrag(container);
 
   clearBookSelection();
   if (booksList.length === 0) {
@@ -701,6 +714,7 @@ export function renderDashboardHistory(booksList) {
 export function renderDashboardRecentlyAdded(booksList) {
   const container = document.getElementById('dashboard-new-row');
   if (!container) return;
+  bindShelfDrag(container);
 
   if (booksList.length === 0) {
     container.innerHTML = '<div class="loading-spinner loading-spinner--compact">최근에 추가된 도서가 없습니다.</div>';

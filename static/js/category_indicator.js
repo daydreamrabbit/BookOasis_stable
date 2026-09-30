@@ -14,7 +14,9 @@ export function updateCurrentCategoryIndicator(id, activeItem = null) {
 
   const targetId = String(id || '');
   const resolvedItem = activeItem || Array.from(document.querySelectorAll('#sidebar-categories .menu-item'))
-    .find(item => String(item.dataset.id || item.dataset.categoryId || item.getAttribute('data-category-id') || item.getAttribute('data-id')) === targetId);
+    // Group IDs and library/category IDs come from separate tables and can
+    // overlap. Group headers have data-id too, so match only category IDs.
+    .find(item => String(item.getAttribute('data-category-id') || '') === targetId);
   document.querySelectorAll('#sidebar-categories .menu-item').forEach(item => {
     item.classList.toggle('active', item === resolvedItem);
   });

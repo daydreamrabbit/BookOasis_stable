@@ -591,6 +591,7 @@ export async function triggerScanSingleBookAction() {
             state.currentLibraryType,
             seriesTarget.libraryId,
             seriesTarget.seriesName,
+            true,
           );
         } catch (lazyError) {
           lazyResult = { success: false, error: lazyError.message || '서버 통신 오류' };

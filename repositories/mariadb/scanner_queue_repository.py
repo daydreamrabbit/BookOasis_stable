@@ -109,7 +109,7 @@ class ScannerQueueRepository:
         conn = database.get_connection('general')
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, status FROM scanner_tasks WHERE task_key = %s ORDER BY id DESC LIMIT 1",
+            "SELECT id, status, started_at FROM scanner_tasks WHERE task_key = %s ORDER BY id DESC LIMIT 1",
             (task_key,)
         )
         row = cursor.fetchone()

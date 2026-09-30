@@ -657,6 +657,8 @@ _JUMP_INDEX_CACHE = BoundedCache(ttl=120)
 _TOTALS_CACHE = BoundedCache(ttl=30, max_bytes=2 * 1024 * 1024, max_items=256)
 _TOTALS_CACHE_TTL = 30.0
 _TOTALS_REDIS_TTL = 300
+_RECENT_ADDED_WINDOW_DAYS = 7
+_RECENT_ADDED_CACHE = BoundedCache(ttl=60, max_bytes=2 * 1024 * 1024, max_items=256)
 
 # ── [크로스 프로세스 캐시 무효화 신호] ──
 # 스캐너는 core.py의 start_scanner_worker_process()가 subprocess.Popen으로 띄우는
@@ -735,10 +737,48 @@ def _sync_local_books_cache_with_shared_epoch(db_type):
         _LIST_QUERY_CACHE.clear()
         _JUMP_INDEX_CACHE.clear()
         _TOTALS_CACHE.clear()
+        _RECENT_ADDED_CACHE.clear()
     _local_epoch_seen[db_type] = current_epoch
 
 
 class SeriesService:
+    @staticmethod
+    def annotate_recent_additions(db_type, entries):
+        """Annotate a visible page without modifying cached list entries."""
+        if db_type not in ('general', 'adult') or not entries:
+            return entries
+        def badge_book_id(entry):
+            return int(entry.get('representative_book_id') or entry.get('book_id') or entry.get('id') or 0)
+        book_ids = sorted({badge_book_id(entry) for entry in entries
+                           if not entry.get('is_author_group') and badge_book_id(entry)})
+        if not book_ids:
+            return entries
+        _sync_local_books_cache_with_shared_epoch(db_type)
+        cache_key = (db_type, _INDEX_GENERATION, tuple(book_ids))
+        try:
+            data = _RECENT_ADDED_CACHE.get(cache_key)
+            if data is None:
+                from repositories.recent_additions import fetch
+                data = fetch(db_type, _RECENT_ADDED_WINDOW_DAYS, book_ids)
+                _RECENT_ADDED_CACHE[cache_key] = data
+        except Exception as error:
+            print(f'[SeriesService] recent-additions lookup failed (badges skipped): {error}')
+            return entries
+        result = []
+        for entry in entries:
+            item = dict(entry)
+            for field in ('recent_added_count', 'is_new_series', 'recent_window_days'):
+                item.pop(field, None)
+            stat = data['series'].get(badge_book_id(entry))
+            if stat and not entry.get('is_author_group'):
+                count = int(stat['recent_count'] or 0)
+                if count > 0:
+                    item.update(recent_added_count=count,
+                                is_new_series=count == int(stat['total_count']),
+                                recent_window_days=_RECENT_ADDED_WINDOW_DAYS)
+            result.append(item)
+        return result
+
     @staticmethod
     def invalidate_all_books_cache(db_type=None):
         """도서 목록 캐시를 비운다. db_type을 넘기면 다른 프로세스(스캐너 워커 등)에도
@@ -749,6 +789,7 @@ class SeriesService:
         _LIST_QUERY_CACHE.clear()
         _JUMP_INDEX_CACHE.clear()
         _TOTALS_CACHE.clear()
+        _RECENT_ADDED_CACHE.clear()
         try:
             from utils.redis_helper import redis_delete_pattern
             redis_delete_pattern('cache:series_totals:*')

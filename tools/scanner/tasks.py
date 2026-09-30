@@ -16,7 +16,7 @@ from tools.scanner.cover import get_series_cover_fallback, get_imgdir_cover, ext
 from tools.scanner.folder_image import COMMON_BANNER_NAMES, find_common_banner
 from tools.scanner.offset import collect_zip_offsets_data
 from tools.scanner.path_utils import canonical_path, join_canonical
-from embedded_metadata_version import EMBEDDED_METADATA_FORMATS
+from embedded_metadata_version import EMBEDDED_METADATA_FORMATS, needs_comicinfo_rating_refresh
 
 SUPPORTED_FORMATS = ('.zip', '.cbz', '.epub', '.pdf', '.txt')
 SUPPORTED_METADATA_TITLE_FORMATS = ('.zip', '.cbz', '.epub', '.pdf')
@@ -131,21 +131,61 @@ def _merge_comicinfo_fallback(target, comicinfo):
     if not isinstance(target, dict) or not isinstance(comicinfo, dict):
         return
     for key in (
-        'title', 'author', 'localized_series', 'cover_artist', 'teams', 'locations',
+        'title', 'author', 'translator', 'localized_series', 'cover_artist', 'teams', 'locations',
         'characters', 'publisher', 'summary', 'release_date', 'genre', 'tags',
         'books_lv', 'link', 'document_series_name', 'document_volume_index',
-        'document_volume_count',
+        'document_number', 'document_volume_count',
     ):
         value = comicinfo.get(key)
         if not value:
             continue
         if key == 'link':
             target[key] = merge_metadata_links(target.get(key, ''), value)
+        elif key == 'books_lv':
+            # ComicInfo is per-volume and its AgeRating is more specific than
+            # a series sidecar or a provider's generic adult-only flag.
+            target[key] = value
         elif not target.get(key):
             target[key] = value
 
 
-def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote=False, library_id=None, db_files_cache=None, library_root=None, gdrive_file_ids=None, db_type=None, db_book_ids=None, cancel_checker=None, db_banner_missing=None, db_banner_images=None, use_folder_cover=False, db_cover_images=None, progress_callback=None, db_metadata_title_unchecked=None, db_embedded_metadata_outdated=None, **_compat_kwargs):
+def _merge_comicinfo_rating(target, comicinfo):
+    """Apply only a per-volume ComicInfo rating over folder-level metadata."""
+    if not isinstance(target, dict) or not isinstance(comicinfo, dict):
+        return
+    value = comicinfo.get('books_lv')
+    if value:
+        target['books_lv'] = value
+
+
+def _should_read_comicinfo(
+    file_format, can_read_comicinfo, has_yaml, full_path, db_book_ids,
+    db_embedded_metadata_outdated, book_meta, comicinfo_fields,
+    db_comicinfo_rating_outdated=None,
+):
+    if file_format not in ('cbz', 'zip') or not can_read_comicinfo:
+        return False
+    db_comicinfo_rating_outdated = db_comicinfo_rating_outdated or set()
+    return (
+        full_path not in db_book_ids
+        or full_path in db_comicinfo_rating_outdated
+        or (
+            full_path in db_embedded_metadata_outdated
+            and (
+                not has_yaml
+                or needs_comicinfo_rating_refresh(book_meta.get('books_lv'))
+                # A folder sidecar normally lets the scanner avoid reopening
+                # every CBZ.  The one-time Translator migration is an
+                # exception: when the sidecar and DB both lack it, read the
+                # archive once and persist the missing per-book value.
+                or not str(book_meta.get('translator') or '').strip()
+            )
+        )
+        or (not has_yaml and any(not book_meta.get(key) for key in comicinfo_fields))
+    )
+
+
+def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_folder_mtimes, is_remote=False, library_id=None, db_files_cache=None, library_root=None, gdrive_file_ids=None, db_type=None, db_book_ids=None, cancel_checker=None, db_banner_missing=None, db_banner_images=None, use_folder_cover=False, db_cover_images=None, progress_callback=None, db_metadata_title_unchecked=None, db_embedded_metadata_outdated=None, db_comicinfo_rating_outdated=None, **_compat_kwargs):
     """Independent I/O scan task per folder (DB independent, pure FS/I/O scaling)"""
     root = canonical_path(root)
     db_book_ids = db_book_ids or {}
@@ -158,6 +198,11 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
     db_embedded_metadata_outdated = (
         db_embedded_metadata_outdated
         or _compat_kwargs.get('db_embedded_metadata_outdated')
+        or set()
+    )
+    db_comicinfo_rating_outdated = (
+        db_comicinfo_rating_outdated
+        or _compat_kwargs.get('db_comicinfo_rating_outdated')
         or set()
     )
     print(f"[Scanner-DEBUG-Task] 📂 entering process_folder_task - folder: '{root}'")
@@ -556,26 +601,35 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                 # only API-backed gdrive:// paths must defer archive reads.
                 can_read_comicinfo = not (is_remote and root.startswith(('gdrive:', 'gdrive://')))
                 comicinfo_fields = (
-                    'title', 'author', 'localized_series', 'cover_artist', 'teams',
+                    'title', 'author', 'translator', 'localized_series', 'cover_artist', 'teams',
                     'locations', 'characters', 'publisher', 'summary',
                     'release_date', 'genre', 'tags', 'books_lv', 'link',
                     'document_series_name', 'document_volume_index',
-                    'document_volume_count',
+                    'document_number', 'document_volume_count',
                 )
-                # Kavita's folder sidecar is the metadata source of record for
-                # this folder.  Do not reopen every volume during a forced
-                # scan to look for optional ComicInfo fallbacks; this is
-                # especially costly on rclone/FUSE mounts.  The sidecar's
-                # presence is enough to suppress archive metadata probing.
-                if file_format in ('cbz', 'zip') and can_read_comicinfo and not has_yaml and any(
-                    not book_meta.get(key) for key in comicinfo_fields
-                ):
+                # Read each newly added CBZ once even when a folder sidecar is
+                # present: ComicInfo AgeRating belongs to the individual
+                # volume and must override a generic folder/provider rating.
+                # Existing sidecar-backed rows are reopened only when their
+                # saved rating needs correction; older rows without a sidecar
+                # still use the general embedded-metadata backfill.
+                should_read_comicinfo = _should_read_comicinfo(
+                    file_format, can_read_comicinfo, has_yaml, full_path,
+                    db_book_ids, db_embedded_metadata_outdated, book_meta,
+                    comicinfo_fields, db_comicinfo_rating_outdated,
+                )
+                if should_read_comicinfo:
                     try:
                         comicinfo_status = {}
                         comicinfo = parse_comicinfo_from_cbz(
                             full_path, is_remote=is_remote, status_out=comicinfo_status
                         )
-                        _merge_comicinfo_fallback(book_meta, comicinfo)
+                        if has_yaml:
+                            _merge_comicinfo_rating(book_meta, comicinfo)
+                            if comicinfo.get('translator') and not book_meta.get('translator'):
+                                book_meta['translator'] = comicinfo['translator']
+                        else:
+                            _merge_comicinfo_fallback(book_meta, comicinfo)
                         embedded_metadata_checked = bool(comicinfo_status.get('parsed'))
                         if comicinfo.get('author') and book_meta.get('author') == comicinfo['author']:
                             print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml author fallback: {comicinfo['author']}")
@@ -584,10 +638,9 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                     except Exception as ce:
                         print(f"[Scanner-DEBUG-Task]     - ComicInfo.xml parsing skipped: {ce}")
                 elif file_format in ('cbz', 'zip') and can_read_comicinfo:
-                    # Also mark Kavita-backed rows as checked so later normal
-                    # scans do not keep treating their embedded metadata as
-                    # pending.  A force scan still follows the branch above,
-                    # which intentionally skips the archive when has_yaml.
+                    # New/legacy records that were parsed are marked below;
+                    # otherwise a sidecar-backed row with a precise stored
+                    # rating remains on the normal no-archive fast path.
                     embedded_metadata_checked = True
 
                 defer_local_epub_metadata = (

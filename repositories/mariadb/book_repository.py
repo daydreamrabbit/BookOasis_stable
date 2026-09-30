@@ -398,7 +398,7 @@ class BookRepository:
     def get_series_meta(db_type, series_name, library_id, perm_clause, perm_params):
         with database.connection(db_type) as conn:
             cursor = conn.cursor()
-            columns = "title AS _volume_title, file_path AS _volume_path, author, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, localized_series, COALESCE(metadata_locked, 0) AS metadata_locked"
+            columns = "title AS _volume_title, file_path AS _volume_path, author, translator, isbn, publisher, link, score, summary, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, series_alias, localized_series, COALESCE(metadata_locked, 0) AS metadata_locked"
             where = ["series_name = %s", "COALESCE(is_deleted, 0) = 0"]
             params = [series_name]
             if library_id and library_id not in ('all', 'history', 'favorite', 'home'):

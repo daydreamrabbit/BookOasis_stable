@@ -55,7 +55,13 @@ _BOOKS_LV_LEVEL_MAP = {
     'r18+': LEVEL_ADULT_MANGA,
     '성인망가': LEVEL_ADULT_MANGA,
     'adult manga': LEVEL_ADULT_MANGA,
-    'adult only': LEVEL_PORN,
+    # A bare adult-only flag only says that the item is age-restricted. It does
+    # not establish pornography; sources that mean that must send an explicit
+    # value such as "adult only 18+" or "porn".
+    'adult only': LEVEL_18,
+    'adultonly': LEVEL_18,
+    'adults only': LEVEL_18,
+    'adultsonly': LEVEL_18,
     'adult only 18+': LEVEL_PORN,
     'adultsonly18+': LEVEL_PORN,
     'adults only 18+': LEVEL_PORN,

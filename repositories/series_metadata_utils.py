@@ -60,7 +60,7 @@ def book_metadata_exists_sql(book_alias='b'):
     """
     metadata_book = 'metadata_book'
     populated_fields = (
-        'author', 'isbn', 'publisher', 'link', 'release_date', 'summary',
+        'author', 'translator', 'isbn', 'publisher', 'link', 'release_date', 'summary',
         'genre', 'tags', 'books_lv', 'publication_status', 'cover_artist',
         'teams', 'locations', 'characters', 'series_alias', 'title_alias',
         'localized_series',
@@ -120,7 +120,7 @@ def merge_series_metadata_rows(rows):
 
     result = dict(normalized_rows[0])
     fallback_fields = (
-        'author', 'isbn', 'publisher', 'score', 'summary', 'genre', 'tags',
+        'author', 'translator', 'isbn', 'publisher', 'score', 'summary', 'genre', 'tags',
         'publication_status', 'cover_artist', 'teams', 'locations',
         'characters', 'series_alias', 'localized_series',
     )

@@ -43,7 +43,7 @@ class ScannerMetadataTitleBackfillTests(unittest.TestCase):
             self.assertEqual(metadata['release_date'], '2026-09-03')
             self.assertTrue(item['embedded_metadata_checked'])
 
-    def test_force_scan_skips_comicinfo_when_kavita_yaml_exists(self):
+    def test_new_cbz_uses_only_comicinfo_rating_when_kavita_yaml_exists(self):
         with tempfile.TemporaryDirectory() as root:
             with open(os.path.join(root, 'kavita.yaml'), 'w', encoding='utf-8') as sidecar:
                 sidecar.write('Title: 작품\n')
@@ -51,7 +51,8 @@ class ScannerMetadataTitleBackfillTests(unittest.TestCase):
             with zipfile.ZipFile(path, 'w') as archive:
                 archive.writestr(
                     'ComicInfo.xml',
-                    '<ComicInfo><Publisher>Must be ignored</Publisher></ComicInfo>',
+                    '<ComicInfo><AgeRating>R18+</AgeRating>'
+                    '<Publisher>Must be ignored</Publisher></ComicInfo>',
                 )
                 archive.writestr('page.jpg', b'not-an-image')
 
@@ -59,8 +60,6 @@ class ScannerMetadataTitleBackfillTests(unittest.TestCase):
             folder_metadata.update({'author': 'Kavita author', 'has_yaml': True})
             with (
                 patch('tools.scanner.tasks.merge_local_metadata', return_value=folder_metadata),
-                patch('tools.scanner.tasks.parse_comicinfo_from_cbz',
-                      side_effect=AssertionError('ComicInfo should be ignored with Kavita.yaml')),
                 patch('tools.scanner.tasks.get_folder_banner', return_value=None),
                 patch('tools.scanner.tasks.get_series_cover_fallback', return_value=None),
                 patch('tools.scanner.tasks._compute_offsets', return_value=[]),
@@ -77,6 +76,7 @@ class ScannerMetadataTitleBackfillTests(unittest.TestCase):
 
             item = result['results'][0]
             self.assertEqual(item['merged_meta']['author'], 'Kavita author')
+            self.assertEqual(item['merged_meta']['books_lv'], 'R18+')
             self.assertNotEqual(item['merged_meta']['publisher'], 'Must be ignored')
             self.assertTrue(item['embedded_metadata_checked'])
 

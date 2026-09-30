@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS books (
     embedded_metadata_version INT NOT NULL DEFAULT 0,
     series_name VARCHAR(500),
     author VARCHAR(500),
+    translator VARCHAR(500),
     isbn VARCHAR(100),
     file_path TEXT NOT NULL,
     file_format VARCHAR(50) NOT NULL,

@@ -46,7 +46,7 @@ class SeriesRepository:
                                MIN(b2.id)
                            ) AS rep_id,
                            COUNT(*) AS series_book_count,
-                           MAX(b2.created_at) AS latest_added
+                           COALESCE(MAX(b2.created_at), '') AS latest_added
                     FROM books b2
                     WHERE (b2.is_deleted = 0 OR b2.is_deleted IS NULL)
                     GROUP BY b2.library_id, COALESCE(NULLIF(b2.series_name, ''), b2.title)

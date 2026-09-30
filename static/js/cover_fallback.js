@@ -172,9 +172,16 @@ export function getBookCoverSrc({ coverImage, title, format, seed } = {}) {
     if (clean.toLowerCase().startsWith('covers/')) {
       clean = clean.substring(7).replace(/^[\/\\]+/, '');
     }
-    const filename = clean.split(/[\/\\]/).pop();
-    if (clean && !clean.endsWith('/') && !clean.endsWith('\\') && filename && filename.includes('.')) {
-      return `/covers/${clean}`;
+    const queryIndex = clean.indexOf('?');
+    const query = queryIndex >= 0 ? clean.slice(queryIndex) : '';
+    const path = queryIndex >= 0 ? clean.slice(0, queryIndex) : clean;
+    const filename = path.split(/[\/\\]/).pop();
+    if (path && !path.endsWith('/') && !path.endsWith('\\') && filename && filename.includes('.')) {
+      // cover_image is a filesystem-relative path, not an already encoded URL.
+      // Encode each component so literal '%' (and URL delimiters such as '#')
+      // in filenames survive browser URL parsing and reverse proxies.
+      const encodedPath = path.split(/[\/\\]/).map((part) => encodeURIComponent(part)).join('/');
+      return `/covers/${encodedPath}${query}`;
     }
   }
   return buildFallbackCoverUrl({ title, format, seed });

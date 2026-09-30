@@ -447,8 +447,26 @@ export async function markSeriesAsCompleted(type, bookIds, options = {}) {
 }
 
 export async function fetchLibrarySchedules(type) {
-  const res = await fetch(`/api/media/libraries/schedules?type=${type}`);
-  return res.json();
+  let res;
+  try {
+    res = await safeFetch(`/api/media/libraries/schedules?type=${encodeURIComponent(type)}`, {
+      cache: 'no-store', headers: { Accept: 'application/json' }
+    });
+  } catch (error) {
+    return { success: false, error_code: error.message === 'Unauthorized' ? 'unauthorized' : 'network_error' };
+  }
+  const failure = { success: false, error_code: 'invalid_response', http_status: res.status };
+  // Proxies may return HTML during application restarts. Preserve the view
+  // and let the next scheduled refresh recover instead of parsing that HTML.
+  if (!/\bapplication\/(?:[\w.-]+\+)?json\b/i.test(res.headers.get('content-type') || '')) return failure;
+  let data;
+  try { data = await res.json(); }
+  catch { return failure; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return failure;
+  if (typeof data.success !== 'boolean') return failure;
+  if (!res.ok) return { ...data, ...failure, error_code: 'http_error' };
+  if (data.success && !Array.isArray(data.libraries)) return failure;
+  return data;
 }
 
 export async function triggerLibraryScan(type, libraryId, force = false) {
@@ -505,13 +523,29 @@ export async function triggerBooksLazyScan(type, bookIds) {
   return finishScanRequest(res, type);
 }
 
-export async function triggerSeriesLazyScan(type, libraryId, seriesName) {
-  const res = await fetch('/api/media/books/lazy-scan', {
+const pendingSeriesLazyRequests = new Map();
+export async function triggerSeriesLazyScan(type, libraryId, seriesName, autoFollowup = false) {
+  const key = JSON.stringify([type, libraryId, seriesName, autoFollowup]);
+  if (pendingSeriesLazyRequests.has(key)) return pendingSeriesLazyRequests.get(key);
+  const request = (async () => {
+    const res = await fetch('/api/media/books/lazy-scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type, library_id: libraryId, series_name: seriesName })
+    body: JSON.stringify({ type, library_id: libraryId, series_name: seriesName, auto_followup: autoFollowup })
   });
-  return finishScanRequest(res, type);
+    return finishScanRequest(res, type);
+  })();
+  pendingSeriesLazyRequests.set(key, request);
+  try {
+    const result = await request;
+    if (result?.success) {
+      setTimeout(() => pendingSeriesLazyRequests.delete(key), 30000);
+    } else pendingSeriesLazyRequests.delete(key);
+    return result;
+  } catch (error) {
+    pendingSeriesLazyRequests.delete(key);
+    throw error;
+  }
 }
 
 export async function cancelLibraryScan(type, libraryId) {

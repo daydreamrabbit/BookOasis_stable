@@ -38,7 +38,7 @@ import {
   updateSortButtonUI,
   clearLibrarySearchQuery,
   restoreLibrarySearchQuery,
-} from './book_list.js?rev=20260921-global-search-v1';
+} from './book_list.js?rev=20260929-cover-url-cache-fix-v1';
 import { clearBookSelection } from './book_selection.js';
 
 // plugin_custom_view.js 임포트

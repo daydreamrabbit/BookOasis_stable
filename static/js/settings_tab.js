@@ -45,16 +45,43 @@ function initSettingsTabDelegation() {
   window.__settingsTabDelegationBound = true;
 }
 
-function refreshScheduleTabData() {
+let scheduleRefreshPending = null;
+
+function isScheduleTabVisible() {
+  const settings = document.getElementById('library-settings-view');
+  const tab = document.getElementById('settings-tab-schedule');
+  return !document.hidden && settings?.getClientRects().length > 0
+    && tab?.classList.contains('active') && tab.getClientRects().length > 0;
+}
+
+function stopScheduleRefresh() {
+  if (window.queueRefreshInterval) clearInterval(window.queueRefreshInterval);
+  window.queueRefreshInterval = null;
+}
+
+async function refreshScheduleTabData() {
+  if (!isScheduleTabVisible()) return;
+  if (scheduleRefreshPending) return scheduleRefreshPending;
+  const requests = [];
   if (window.refreshLibraryScheduleStatuses) {
-    window.refreshLibraryScheduleStatuses();
+    requests.push(window.refreshLibraryScheduleStatuses());
   } else if (window.loadLibrarySchedules) {
-    window.loadLibrarySchedules();
+    requests.push(window.loadLibrarySchedules());
   }
   if (window.loadQueueStatus) {
-    window.loadQueueStatus();
+    requests.push(window.loadQueueStatus());
   }
+  scheduleRefreshPending = Promise.allSettled(requests);
+  try { await scheduleRefreshPending; }
+  finally { scheduleRefreshPending = null; }
 }
+
+window.addEventListener('bookoasis:view-changing', event => {
+  if (event.detail?.viewName !== 'settings') {
+    stopScheduleRefresh();
+    stopMetadataHistory();
+  }
+});
 
 function setAboutUpdateStatus(versionInfoEl, messageKey, fallbackText, color) {
   if (!versionInfoEl) return;
@@ -214,10 +241,7 @@ export function switchSettingsTab(tabId) {
   // Handle queue refresh interval clearing if leaving schedule tab
   if (tabId !== 'metadata-history') stopMetadataHistory();
   if (tabId !== 'schedule') {
-    if (window.queueRefreshInterval) {
-      clearInterval(window.queueRefreshInterval);
-      window.queueRefreshInterval = null;
-    }
+    stopScheduleRefresh();
   }
 }
 

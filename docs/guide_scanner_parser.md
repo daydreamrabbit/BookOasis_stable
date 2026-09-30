@@ -2,7 +2,7 @@
 
 이 문서는 `tools/scanner/metadata/` 계열의 로컬 메타데이터 파서 모듈을 작성하거나 수정할 때 따라야 하는 규칙을 정리합니다. 외부 검색 플러그인([guide_plugins.md](./guide_plugins.md))과는 목적이 다르며, 스캐너가 파일 시스템에서 직접 읽는 로컬 파서에만 적용됩니다.
 
-> 2026-09-15 보완: `comicinfo_xml.py`에 `cover_artist`/`teams`/`locations`/`characters` 4개 컬럼과 `AgeRating → books_lv` 연결을 추가했습니다(50만 권 규모 실사용 통계 기준 상위 5개 필드만 채택 - Writer/CoverArtist(Penciller)는 각각 약 50%/40%, Teams/Locations/Characters는 3~5% 수준). `Translator`/`Notes`/`PageCount`/`LanguageISO`/`GTIN` 등은 사용량이 미미해 이번 스코프에서 제외했습니다.
+> 2026-10-01 보완: ComicInfo의 `Translator`도 권별 DB 값으로 저장하고 상세정보에 표시합니다. 기존 CBZ는 내장 메타데이터 버전이 낮거나 번역가가 비어 있으면 다음 스캔에서 한 번 다시 읽습니다. `Notes`/`PageCount`/`LanguageISO`/`GTIN` 등은 계속 파서 범위에서 제외합니다.
 
 ---
 

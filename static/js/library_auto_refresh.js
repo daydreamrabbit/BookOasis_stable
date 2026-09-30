@@ -60,6 +60,10 @@ function connectLibraryEvents() {
   events.addEventListener('snapshot', event => {
     tracker.observe(JSON.parse(event.data));
     checkLibraryChanges();
+    window.dispatchEvent(new Event('bookoasis:system-health-changed'));
+  });
+  events.addEventListener('system-health', () => {
+    window.dispatchEvent(new Event('bookoasis:system-health-changed'));
   });
   events.addEventListener('changed', event => {
     const change = JSON.parse(event.data);

@@ -93,8 +93,20 @@ def _resolve_series_scan_target(file_path, physical_path):
     return None
 
 
-def _enqueue_targeted_lazy_scan(db_type, **target):
+def _enqueue_targeted_lazy_scan(db_type, auto_followup=False, **target):
     from services.scanner_queue import scanner_queue
+    from repositories.scanner_queue_repository import ScannerQueueRepository
+    # Repeated requests attach to the existing task instead of logging/requeueing.
+    key = scanner_queue._get_task_key('lazy_scan', dict(db_type=db_type, **target))
+    existing = ScannerQueueRepository.get_task_by_key(key)
+    if existing and existing['status'] in ('pending', 'running', 'exit_pending'):
+        return 'existing'
+    if auto_followup:
+        full = ScannerQueueRepository.get_task_by_key('lazy_scan')
+        # A resumed/running scan may already have visited this series. Never
+        # swallow an explicit request, or a request behind such a snapshot.
+        if full and full['status'] == 'pending' and 'started_at' in full and not full['started_at']:
+            return 'covered'
     return scanner_queue.enqueue('lazy_scan', db_type=db_type, **target)
 
 
@@ -142,18 +154,22 @@ def trigger_books_lazy_scan():
             if book_count == 0:
                 return jsonify({'success': False, 'error': '해당 라이브러리에서 시리즈 도서를 찾을 수 없습니다.'}), 404
 
-            if not _enqueue_targeted_lazy_scan(
+            queued = _enqueue_targeted_lazy_scan(
                 db_type,
                 library_id=library_id,
                 series_name=series_name,
-            ):
+                auto_followup=payload.get('auto_followup') is True,
+            )
+            if not queued:
                 return jsonify({
                     'success': False,
                     'error': 'Lazy-Scanner 작업이 이미 실행 중이거나 대기 중입니다. 현재 작업이 끝난 뒤 다시 요청해 주세요.'
                 }), 409
             return jsonify({
                 'success': True,
-                'message': f"'{series_name}' 시리즈 {book_count}권의 Lazy-Scanner 작업을 대기열에 추가했습니다."
+                'scan_queued': queued is True,
+                'message': (f"'{series_name}' 시리즈 {book_count}권의 Lazy-Scanner 작업을 대기열에 추가했습니다."
+                            if queued is True else '이미 등록된 작업에서 처리합니다. 중복 작업은 추가하지 않았습니다.')
             })
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500

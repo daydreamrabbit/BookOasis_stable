@@ -32,12 +32,14 @@ class BookWriterMetadataTitleTests(unittest.TestCase):
             books_lv TEXT,
             publication_status TEXT,
             cover_artist TEXT,
+            translator TEXT,
             teams TEXT,
             locations TEXT,
             characters TEXT,
             localized_series TEXT,
             document_series_name TEXT,
             document_volume_index REAL,
+            document_number REAL,
             document_volume_count INTEGER,
             file_mtime REAL,
             file_size INTEGER,
@@ -53,9 +55,8 @@ class BookWriterMetadataTitleTests(unittest.TestCase):
         row = (
             1, 'file-name', 'Embedded title', 'Series', 'Author', '',
             '/books/file-name.cbz', 'cbz', 0, 'cover.webp', None, 'Publisher',
-            '', 0, '', '', '', '', '', '', '', '', '', '', '', '', None,
-            None, 1.0, 123,
-        )
+            '', 0,
+        ) + ('',) * 13 + (None, None, None, 1.0, 123)
         bulk_insert_books(self.cursor, [row])
         self.connection.commit()
 
@@ -69,8 +70,8 @@ class BookWriterMetadataTitleTests(unittest.TestCase):
             + ('',) * 6  # cover and banner values
             + ('',) * 4  # author, ISBN, publisher, and link
             + (0, 0)  # duplicated score parameters
-            + ('',) * 12  # remaining text metadata fields
-            + (None, None, 2.0, 456, '/books/file-name.cbz')
+            + ('',) * 13  # remaining text metadata fields
+            + (None, None, None, 2.0, 456, '/books/file-name.cbz')
         )
         bulk_update_books(self.cursor, [update])
         self.connection.commit()

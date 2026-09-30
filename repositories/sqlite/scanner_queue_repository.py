@@ -142,7 +142,7 @@ class ScannerQueueRepository:
         # [버그픽스] ORDER BY id DESC LIMIT 1: 동일 task_key 레코드가 여러 개 쌓인 경우
         # 과거의 completed/failed 행이 먼저 반환되어 중복 판정이 오염되는 것을 방지.
         cursor.execute(
-            "SELECT id, status FROM scanner_tasks WHERE task_key = ? ORDER BY id DESC LIMIT 1",
+            "SELECT id, status, started_at FROM scanner_tasks WHERE task_key = ? ORDER BY id DESC LIMIT 1",
             (task_key,)
         )
         row = cursor.fetchone()

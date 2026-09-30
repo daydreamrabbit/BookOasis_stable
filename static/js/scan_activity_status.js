@@ -1,6 +1,6 @@
 // scan_activity_status.js – 백그라운드 스캔 상태 폴링 및 카테고리 스피너 제어 루틴 (ui.js에서 분리)
 import { state } from './state.js';
-import { parseServerDateTime } from './utils/time.js';
+import { parseServerDateTime, formatRelativeTime } from './utils/time.js';
 import { evaluateScanPollingState } from './scan_status_polling_policy.js';
 
 let statusIntervalId = null;
@@ -108,6 +108,20 @@ function formatScanActivityElapsed(task) {
   return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분`;
 }
 
+function systemWarningItemHtml(warning) {
+  const count = Number(warning?.fail_count || 0);
+  const since = warning?.last_ok_at
+    ? `마지막 성공 ${formatRelativeTime(warning.last_ok_at)}`
+    : `첫 실패 ${formatRelativeTime(warning?.first_failed_at)}`;
+  const detail = `${since} · 연속 ${count}회 실패 · ${warning?.message || ''}`;
+  return `<div class="scan-activity-item is-failed is-system-warning" data-role="system-warning">
+    <span class="scan-activity-item-icon"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i></span>
+    <div class="scan-activity-item-copy">
+      <div class="scan-activity-item-title">${escapeActivityText(warning?.label)} 실패 중</div>
+      <div class="scan-activity-item-detail" title="${escapeActivityAttribute(detail)}">${escapeActivityText(detail)}</div>
+    </div><span class="scan-activity-item-time">경고</span></div>`;
+}
+
 function renderScanActivity(data) {
   latestSystemStatus = data;
   const button = document.getElementById('btn-scan-activity');
@@ -127,7 +141,14 @@ function renderScanActivity(data) {
     ? data.raw_status.metadata_activities
     : [];
   const isActive = Boolean(data?.success && data?.is_active);
+  const systemWarnings = Array.isArray(data?.system_warnings) ? data.system_warnings : [];
+  const hasWarning = systemWarnings.length > 0;
   button.classList.toggle('is-active', isActive);
+  button.classList.toggle('has-warning', hasWarning);
+  document.querySelectorAll('[data-role="scan-activity-mirror"]').forEach(el => {
+    el.classList.toggle('is-active', isActive);
+    el.classList.toggle('has-warning', hasWarning);
+  });
 
   const tasks = [];
   if (running) tasks.push({ task: running, pending: false });
@@ -146,6 +167,7 @@ function renderScanActivity(data) {
     }));
   }
   button.title = tasks.length > 0 ? `스캔 활동 ${tasks.length}건` : '스캔 활동';
+  if (hasWarning) button.title += ` · 경고 ${systemWarnings.length}건`;
   const activeMetadataCount = metadataActivities.filter(task => task?.status === 'running').length;
   const recentMetadataCount = metadataActivities.filter(task => task?.status !== 'running').length;
   const failedMetadataCount = metadataActivities.filter(task => task?.status === 'failed').length;
@@ -158,8 +180,10 @@ function renderScanActivity(data) {
         : recentLibraryScans.length ? `최근 카테고리 스캔 ${recentLibraryScans.length}건`
           : recentBookScans.length ? `최근 도서 스캔 ${recentBookScans.length}건`
             : tasks.length ? '실행 중' : '대기 중';
+  if (hasWarning) summary.textContent += ` · 경고 ${systemWarnings.length}건`;
+  const warningsHtml = systemWarnings.map(systemWarningItemHtml).join('');
   if (tasks.length === 0) {
-    list.innerHTML = `
+    list.innerHTML = warningsHtml || `
       <div class="scan-activity-empty">
         <i class="fa-regular fa-circle-check" aria-hidden="true"></i>
         <span>진행 중인 스캔이 없습니다.</span>
@@ -167,7 +191,7 @@ function renderScanActivity(data) {
     return;
   }
 
-  list.innerHTML = tasks.map(({ task, pending: isPending, recent: isRecent }) => {
+  list.innerHTML = warningsHtml + tasks.map(({ task, pending: isPending, recent: isRecent }) => {
     const info = getScanActivityTaskInfo(task, isPending, isRecent);
     const recentStatus = task?.status || 'completed';
     const itemStateClass = isPending ? ' is-pending'
@@ -598,6 +622,7 @@ export function startSystemStatusPolling(type = state.currentLibraryType || 'gen
 window.addEventListener('bookoasis:scan-queued', event => {
   startSystemStatusPolling(event?.detail?.type || state.currentLibraryType || 'general');
 });
+window.addEventListener('bookoasis:system-health-changed', refreshSystemStatus);
 
 // Recover server-owned work after reload; idle pages do not keep polling.
 if (document.readyState === 'loading') {

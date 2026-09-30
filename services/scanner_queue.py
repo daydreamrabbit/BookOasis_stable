@@ -476,14 +476,14 @@ def run_scanner_worker_loop():
                     recent_added_db_types = ['general', 'adult', 'audiobook', 'video'] if task_type == 'lazy_scan' else [target_db]
                     for recent_added_db_type in recent_added_db_types:
                         redis_delete_pattern(f"cache:recent_added*:{recent_added_db_type}:*")
-                    from repositories.series_repository import SeriesRepository
+                    from services.system_health_service import SystemHealthService
                     summary_db_types = ['general', 'adult'] if task_type == 'lazy_scan' else [target_db]
                     for summary_db_type in summary_db_types:
                         if summary_db_type == 'audiobook':
                             continue
                         try:
                             started_at = time.perf_counter()
-                            SeriesRepository.rebuild_summary(summary_db_type)
+                            SystemHealthService.rebuild_series_summary(summary_db_type)
                             elapsed_ms = (time.perf_counter() - started_at) * 1000
                             sq.log(
                                 f"Series summary rebuilt: db={summary_db_type}, "

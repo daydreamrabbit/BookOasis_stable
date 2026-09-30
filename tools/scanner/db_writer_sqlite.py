@@ -151,12 +151,14 @@ def bulk_update_books(cursor, update_data_list, force=False):
                 books_lv     = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), books_lv) ELSE books_lv END,
                 publication_status = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), publication_status) ELSE publication_status END,
                 cover_artist = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), cover_artist) ELSE cover_artist END,
+                translator   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), translator) ELSE translator END,
                 teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), teams) ELSE teams END,
                 locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), locations) ELSE locations END,
                 characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), characters) ELSE characters END,
                 localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), localized_series) ELSE localized_series END,
                 document_series_name = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), document_series_name) ELSE document_series_name END,
                 document_volume_index = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(?, document_volume_index) ELSE document_volume_index END,
+                document_number = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(?, document_number) ELSE document_number END,
                 document_volume_count = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(?, document_volume_count) ELSE document_volume_count END,
                 file_mtime   = ?,
                 file_size    = ?
@@ -188,12 +190,14 @@ def bulk_update_books(cursor, update_data_list, force=False):
                 books_lv     = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), books_lv) ELSE books_lv END,
                 publication_status = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), publication_status) ELSE publication_status END,
                 cover_artist = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), cover_artist) ELSE cover_artist END,
+                translator   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), translator) ELSE translator END,
                 teams        = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), teams) ELSE teams END,
                 locations    = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), locations) ELSE locations END,
                 characters   = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), characters) ELSE characters END,
                 localized_series = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), localized_series) ELSE localized_series END,
                 document_series_name = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(NULLIF(?, ''), document_series_name) ELSE document_series_name END,
                 document_volume_index = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(?, document_volume_index) ELSE document_volume_index END,
+                document_number = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(?, document_number) ELSE document_number END,
                 document_volume_count = CASE WHEN COALESCE(metadata_locked, 0) = 0 THEN COALESCE(?, document_volume_count) ELSE document_volume_count END,
                 file_mtime   = ?,
                 file_size    = ?
@@ -218,8 +222,8 @@ def bulk_insert_books(cursor, insert_data_list):
     insert_data_list = with_filename_page_counts(insert_data_list)
     cursor.executemany("""
         INSERT INTO books
-        (library_id, title, metadata_title, series_name, author, isbn, file_path, file_format, total_pages, cover_image, banner_image, publisher, link, score, summary, release_date, genre, tags, books_lv, publication_status, cover_artist, teams, locations, characters, localized_series, document_series_name, document_volume_index, document_volume_count, file_mtime, file_size, is_deleted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        (library_id, title, metadata_title, series_name, author, isbn, file_path, file_format, total_pages, cover_image, banner_image, publisher, link, score, summary, release_date, genre, tags, books_lv, publication_status, cover_artist, translator, teams, locations, characters, localized_series, document_series_name, document_volume_index, document_number, document_volume_count, file_mtime, file_size, is_deleted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(file_path) DO UPDATE SET
             library_id   = EXCLUDED.library_id,
             is_deleted   = 0,
@@ -229,8 +233,10 @@ def bulk_insert_books(cursor, insert_data_list):
             cover_image  = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(NULLIF(EXCLUDED.cover_image, ''), books.cover_image) ELSE books.cover_image END,
             banner_image = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(NULLIF(EXCLUDED.banner_image, ''), books.banner_image) ELSE books.banner_image END,
             localized_series = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(NULLIF(EXCLUDED.localized_series, ''), books.localized_series) ELSE books.localized_series END,
+            translator = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(NULLIF(EXCLUDED.translator, ''), books.translator) ELSE books.translator END,
             document_series_name = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(NULLIF(EXCLUDED.document_series_name, ''), books.document_series_name) ELSE books.document_series_name END,
             document_volume_index = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(EXCLUDED.document_volume_index, books.document_volume_index) ELSE books.document_volume_index END,
+            document_number = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(EXCLUDED.document_number, books.document_number) ELSE books.document_number END,
             document_volume_count = CASE WHEN COALESCE(books.metadata_locked, 0) = 0 THEN COALESCE(EXCLUDED.document_volume_count, books.document_volume_count) ELSE books.document_volume_count END,
             file_mtime   = EXCLUDED.file_mtime,
             file_size    = EXCLUDED.file_size

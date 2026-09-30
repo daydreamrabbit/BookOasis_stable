@@ -1,7 +1,11 @@
 import sqlite3
 import unittest
 
-from embedded_metadata_version import CURRENT_EMBEDDED_METADATA_VERSION
+from embedded_metadata_version import (
+    COMICINFO_TRANSLATOR_METADATA_VERSION,
+    CURRENT_EMBEDDED_METADATA_VERSION,
+    is_embedded_metadata_outdated,
+)
 from services.db_migration_service import _SCHEMA_SQL, auto_migrate_schema, parse_schema_columns
 from tools.db_schema_updater import MARIADB_CENTRAL_SCHEMA
 from tools.scanner.engine import _is_book_scan_complete
@@ -35,11 +39,19 @@ class EmbeddedMetadataVersionTests(unittest.TestCase):
             sqlite_columns['embedded_metadata_version'],
             'INTEGER NOT NULL DEFAULT 0',
         )
+        self.assertEqual(sqlite_columns['translator'], 'TEXT')
         self.assertIn(
             'embedded_metadata_version INT NOT NULL DEFAULT 0',
             MARIADB_CENTRAL_SCHEMA,
         )
+        self.assertIn('translator VARCHAR(500)', MARIADB_CENTRAL_SCHEMA)
         self.assertGreater(CURRENT_EMBEDDED_METADATA_VERSION, 0)
+
+    def test_missing_comicinfo_translator_is_backfilled_once(self):
+        self.assertEqual(COMICINFO_TRANSLATOR_METADATA_VERSION, CURRENT_EMBEDDED_METADATA_VERSION)
+        self.assertTrue(is_embedded_metadata_outdated('/library/01.cbz', 3, 'M', ''))
+        self.assertFalse(is_embedded_metadata_outdated('/library/01.cbz', 4, 'M', ''))
+        self.assertFalse(is_embedded_metadata_outdated('/library/01.cbz', 3, 'M', 'Provider Translator'))
 
     def test_current_parser_version_avoids_reopening_sparse_unchanged_archive(self):
         self.assertTrue(_is_book_scan_complete({

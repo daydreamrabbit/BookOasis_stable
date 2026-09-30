@@ -265,6 +265,7 @@ _SCHEMA_SQL = """
         embedded_metadata_version INTEGER NOT NULL DEFAULT 0,
         series_name TEXT,
         author TEXT,
+        translator TEXT,
         isbn TEXT,
         file_path TEXT NOT NULL UNIQUE,
         file_format TEXT NOT NULL,
@@ -294,6 +295,7 @@ _SCHEMA_SQL = """
         localized_series TEXT,
         document_series_name TEXT,
         document_volume_index REAL DEFAULT NULL,
+        document_number REAL DEFAULT NULL,
         document_volume_count INTEGER DEFAULT NULL,
         title_alias TEXT,
         file_mtime REAL DEFAULT 0.0,
@@ -1081,12 +1083,8 @@ def _rebuild_series_summary_if_needed(conn, db_type):
     if db_type == 'audiobook':
         return
     try:
-        import database
-        if database.is_mariadb_mode():
-            from repositories.mariadb.series_repository import SeriesRepository
-        else:
-            from repositories.sqlite.series_repository import SeriesRepository
-        if SeriesRepository.rebuild_summary(db_type, only_if_unready=True):
+        from services.system_health_service import SystemHealthService
+        if SystemHealthService.rebuild_series_summary(db_type, only_if_unready=True):
             print(f"[DB-Migration] {db_type} DB - initial series summary created")
     except Exception as summary_err:
         print(f"[DB-Migration ERROR] {db_type} series summary initialization failed: {summary_err}")
@@ -1295,6 +1293,7 @@ def _ensure_mariadb_columns():
         ('media_general', 'books', 'cover_align', "VARCHAR(10) DEFAULT 'center'"),
         ('media_general', 'books', 'document_series_name', 'VARCHAR(500) DEFAULT NULL'),
         ('media_general', 'books', 'document_volume_index', 'DOUBLE DEFAULT NULL'),
+        ('media_general', 'books', 'document_number', 'DOUBLE DEFAULT NULL'),
         ('media_general', 'books', 'document_volume_count', 'INT DEFAULT NULL'),
         ('media_adult', 'books', 'series_alias', 'VARCHAR(500)'),
         ('media_adult', 'books', 'localized_series', 'VARCHAR(500)'),
@@ -1307,6 +1306,7 @@ def _ensure_mariadb_columns():
         ('media_adult', 'books', 'cover_align', "VARCHAR(10) DEFAULT 'center'"),
         ('media_adult', 'books', 'document_series_name', 'VARCHAR(500) DEFAULT NULL'),
         ('media_adult', 'books', 'document_volume_index', 'DOUBLE DEFAULT NULL'),
+        ('media_adult', 'books', 'document_number', 'DOUBLE DEFAULT NULL'),
         ('media_adult', 'books', 'document_volume_count', 'INT DEFAULT NULL'),
         ('media_general', 'collections', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'),
         ('media_adult', 'collections', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'),
@@ -1325,6 +1325,8 @@ def _ensure_mariadb_columns():
         ('media_adult', 'books', 'publication_status', 'VARCHAR(10)'),
         ('media_general', 'books', 'cover_artist', 'VARCHAR(500)'),
         ('media_adult', 'books', 'cover_artist', 'VARCHAR(500)'),
+        ('media_general', 'books', 'translator', 'VARCHAR(500)'),
+        ('media_adult', 'books', 'translator', 'VARCHAR(500)'),
         ('media_general', 'books', 'teams', 'VARCHAR(255)'),
         ('media_adult', 'books', 'teams', 'VARCHAR(255)'),
         ('media_general', 'books', 'locations', 'VARCHAR(255)'),

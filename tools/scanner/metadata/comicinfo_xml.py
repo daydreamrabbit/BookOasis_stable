@@ -108,6 +108,7 @@ def _empty_meta():
     return {
         'title': '',
         'author': '',
+        'translator': '',
         'localized_series': '',
         'cover_artist': '',
         'link': '',
@@ -120,6 +121,7 @@ def _empty_meta():
         'release_date': '',
         'document_series_name': '',
         'document_volume_index': None,
+        'document_number': None,
         'document_volume_count': None,
         'genre': '',
         'tags': '',
@@ -175,9 +177,11 @@ def _parse_comicinfo_from_cbz_local(file_path):
             # cover_artist에 별도로 보존한다.
             meta['title'] = _get('Title')
             meta['author'] = _get('Writer')
+            meta['translator'] = _get('Translator')
             meta['localized_series'] = _get('LocalizedSeries')
             meta['document_series_name'] = _get('Series')
             meta['document_volume_index'] = _parse_volume_index(_get('Volume'))
+            meta['document_number'] = _parse_volume_index(_get('Number'))
             meta['document_volume_count'] = _parse_volume_count(_get('Count'))
 
             # 명시적 <CoverArtist> 태그가 있으면 우선 사용하고, 없으면 <Penciller>를

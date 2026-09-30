@@ -19,10 +19,10 @@ _DOCUMENT_SCAN_PER_BOOK_TIMEOUT_SECONDS = 180
 _DOCUMENT_SCAN_MAX_TIMEOUT_SECONDS = 3600
 
 _COMICINFO_SINGLE_BOOK_FIELDS = (
-    'title', 'author', 'localized_series', 'cover_artist', 'teams', 'locations',
+    'title', 'author', 'translator', 'localized_series', 'cover_artist', 'teams', 'locations',
     'characters', 'publisher', 'summary', 'release_date', 'genre', 'tags',
     'books_lv', 'link', 'document_series_name', 'document_volume_index',
-    'document_volume_count',
+    'document_number', 'document_volume_count',
 )
 
 
@@ -36,6 +36,10 @@ def _merge_comicinfo_metadata(target, comicinfo):
             continue
         if key == 'link':
             target[key] = merge_metadata_links(target.get(key, ''), value)
+        elif key == 'books_lv':
+            # ComicInfo carries the rating for this exact volume; retain it
+            # over folder-wide Kavita data and provider metadata.
+            target[key] = value
         elif not target.get(key):
             target[key] = value
 

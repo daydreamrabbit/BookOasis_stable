@@ -250,14 +250,26 @@ function initScheduleActionDelegation() {
 }
 
 // 환경설정 (스케줄 관리) 리스트 로드 및 렌더링
+function setScheduleRefreshError(data = null) {
+  const notice = document.getElementById('schedule-refresh-status');
+  if (!notice) return;
+  notice.hidden = !data;
+  notice.textContent = data
+    ? `${i18n.t('scheduler.refresh_unavailable', {}, '스케줄 상태를 갱신하지 못했습니다. 기존 표시를 유지하며 잠시 후 다시 확인합니다.')}${data.http_status ? ` (HTTP ${data.http_status})` : ''}`
+    : '';
+}
+
 export async function loadLibrarySchedules() {
   initScheduleActionDelegation();
   const container = document.getElementById('settings-libraries-list');
   if (!container) return;
+  const requestType = state.currentLibraryType;
   container.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:2rem; color:var(--app-accent);"><i class="fa-solid fa-circle-notch fa-spin fa-2x"></i><br><span style="display:inline-block; margin-top:0.5rem;">${i18n.t('settings.loading_schedules')}</span></td></tr>`;
   
   try {
-    const data = await api.fetchLibrarySchedules(state.currentLibraryType);
+    const data = await api.fetchLibrarySchedules(requestType);
+    if (requestType !== state.currentLibraryType || document.getElementById('settings-libraries-list') !== container) return;
+    setScheduleRefreshError(data.success ? null : data);
     if (data.success) {
       if (data.libraries.length === 0) {
         container.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:2rem; color: var(--app-text-muted);">${i18n.t('settings.no_categories')}</td></tr>`;
@@ -266,7 +278,7 @@ export async function loadLibrarySchedules() {
 
       container.innerHTML = data.libraries.map(buildScheduleRow).join('');
     } else {
-      container.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:2rem; color:#ef4444;">${i18n.t('settings.fetch_failed')}: ${data.error}</td></tr>`;
+      container.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:2rem; color:#ef4444;">${escapeHtml(data.error || i18n.t('settings.server_error'))}</td></tr>`;
     }
   } catch (e) {
     console.error('스케줄 조회 에러:', e);
@@ -277,23 +289,31 @@ export async function loadLibrarySchedules() {
 export async function refreshLibraryScheduleStatuses() {
   const container = document.getElementById('settings-libraries-list');
   if (!container) return;
+  const requestType = state.currentLibraryType;
+  const isCurrent = () => requestType === state.currentLibraryType
+    && document.getElementById('settings-tab-schedule')?.classList.contains('active')
+    && document.getElementById('library-settings-view')?.getClientRects().length > 0;
+  if (!isCurrent()) return;
 
   try {
-    const data = await api.fetchLibrarySchedules(state.currentLibraryType);
-    if (!data.success || !Array.isArray(data.libraries) || data.libraries.length === 0) {
+    const data = await api.fetchLibrarySchedules(requestType);
+    if (!isCurrent()) return;
+    setScheduleRefreshError(data.success ? null : data);
+    if (!data.success || !Array.isArray(data.libraries)) {
       return;
     }
 
     const existingRows = container.querySelectorAll('tr[data-library-id]');
-    if (existingRows.length !== data.libraries.length) {
-      loadLibrarySchedules();
+    if (existingRows.length !== data.libraries.length || data.libraries.length === 0) {
+      container.innerHTML = data.libraries.length ? data.libraries.map(buildScheduleRow).join('')
+        : `<tr><td colspan="6" style="text-align:center; padding:2rem;">${i18n.t('settings.no_categories')}</td></tr>`;
       return;
     }
 
     for (const lib of data.libraries) {
       const row = container.querySelector(`tr[data-library-id="${lib.id}"]`);
       if (!row) {
-        loadLibrarySchedules();
+        container.innerHTML = data.libraries.map(buildScheduleRow).join('');
         return;
       }
 
@@ -315,9 +335,6 @@ export async function refreshLibraryScheduleStatuses() {
       if (actionButton) {
         actionButton.dataset.lastScannedAt = lib.last_scanned_at || '-';
       }
-    }
-    if (typeof window.loadLibraries === 'function') {
-      window.loadLibraries();
     }
   } catch (e) {
     console.error('스케줄 상태 갱신 에러:', e);

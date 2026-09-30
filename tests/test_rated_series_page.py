@@ -38,7 +38,7 @@ class RatedPageTests(unittest.TestCase):
              '2026-01-01',cover,'','center','author',genre,'',rating,'0','',0,0))
 
     def test_filter_before_grouping_and_paging(self):
-        self.add(1,'[tag] A','adult only',cover='hidden')
+        self.add(1,'[tag] A','adult only 18+',cover='hidden')
         self.add(2,'[tag] A','everyone')
         self.add(3,'[tag] A','everyone',cover='visible')
         self.add(4,'B','everyone',lib=2)
@@ -68,15 +68,42 @@ class RatedPageTests(unittest.TestCase):
         self.conn.execute('INSERT INTO user_favorites VALUES(2,1)')
         self.assertEqual(repo.fetch('general','favorite',1,18)[0]['id'],2)
 
+    def test_recent_badges_follow_authorized_folder_groups(self):
+        from services import series_service
+        from services.series_service import SeriesService
+        self.add(1, 'A', 'everyone', directory='/allowed')
+        self.add(2, 'A', 'everyone', directory='/allowed')
+        self.add(3, 'A', 'adult only', directory='/hidden')
+        self.add(4, 'A', 'everyone', directory='/hidden')
+        self.add(5, 'A', 'everyone', lib=2, directory='/other-library')
+        self.add(6, 'Old', 'everyone')
+        self.conn.execute("UPDATE books SET created_at=datetime('now','-30 days')")
+        self.conn.execute("UPDATE books SET created_at=datetime('now','-1 days') WHERE id IN (2,4,5)")
+        visible = repo.fetch('general', 'all', 1, 15)
+        entries = [{'representative_book_id': row['id']} for row in visible]
+        series_service._RECENT_ADDED_CACHE.clear()
+        self.addCleanup(series_service._RECENT_ADDED_CACHE.clear)
+        with patch.object(series_service, '_sync_local_books_cache_with_shared_epoch'):
+            decorated = SeriesService.annotate_recent_additions('general', entries)
+        self.assertEqual([e['representative_book_id'] for e in decorated], [1, 6])
+        self.assertEqual(decorated[0]['recent_added_count'], 1)
+        self.assertFalse(decorated[0]['is_new_series'])
+
     def test_large_library_only_returns_requested_groups(self):
         self.conn.executemany("INSERT INTO books(id,library_id,series_name,title,file_path,file_format,books_lv) VALUES (?,1,?,'t','/books/file.zip','zip','everyone')",
                               ((i,'series%05d' % i) for i in range(1,10001)))
         self.assertEqual(len(repo.fetch('general',1,1,18,limit=31)),31)
         self.assertEqual(repo.fetch('general',1,1,18,totals=True)['total_book_count'],10000)
 
+    def test_bare_adult_only_is_18_not_porn(self):
+        self.add(1, 'A', 'adult only')
+        self.assertEqual(repo.level_for_book('general', 1), 18)
+        self.assertEqual(len(repo.fetch('general', 1, 1, 18)), 1)
+        self.assertEqual(repo.fetch('general', 1, 1, 15), [])
+
     def test_unfavorited_high_rating_volume_blocks_entire_series(self):
         self.add(1,'A','everyone')
-        self.add(2,'A','adult only')
+        self.add(2,'A','adult only 18+')
         self.conn.execute('INSERT INTO user_progress VALUES(1,1,10,1)')
         self.conn.execute('INSERT INTO user_favorites VALUES(1,1)')
         self.assertEqual(repo.fetch('general',1,1,18),[])

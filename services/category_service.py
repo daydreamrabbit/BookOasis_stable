@@ -5,10 +5,10 @@ from repositories.category_repository import CategoryRepository
 
 
 def _refresh_series_summaries(*db_types):
-    from repositories.series_repository import SeriesRepository
+    from services.system_health_service import SystemHealthService
     for db_type in dict.fromkeys(db_types):
         if db_type != 'audiobook':
-            SeriesRepository.rebuild_summary(db_type)
+            SystemHealthService.rebuild_series_summary(db_type)
     from services.series_service import SeriesService
     SeriesService.invalidate_all_books_cache()
 
