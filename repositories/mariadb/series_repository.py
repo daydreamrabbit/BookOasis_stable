@@ -6,7 +6,7 @@ import time
 import re
 import database
 from repositories.series_search_query import parse_series_search_query
-from repositories.series_metadata_utils import book_metadata_select_expr
+from repositories.series_metadata_utils import book_metadata_select_expr, series_cover_id_sql
 
 class SeriesRepository:
     @staticmethod
@@ -56,7 +56,7 @@ class SeriesRepository:
                 """)
 
             cursor.execute("DELETE FROM series_summary")
-            cursor.execute("""
+            cursor.execute(f"""
                 INSERT INTO series_summary (
                     library_id, series_key, representative_book_id,
                     series_book_count, sort_series_name, latest_added
@@ -66,10 +66,7 @@ class SeriesRepository:
                 FROM (
                     SELECT b2.library_id,
                            COALESCE(NULLIF(b2.series_name, ''), b2.title) AS series_key,
-                           COALESCE(
-                               MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END),
-                               MIN(b2.id)
-                           ) AS rep_id,
+                           {series_cover_id_sql('b2', mariadb=True)} AS rep_id,
                            COUNT(*) AS series_book_count,
                            COALESCE(MAX(b2.created_at), '') AS latest_added
                     FROM books b2
@@ -476,7 +473,7 @@ class SeriesRepository:
             representative_sql = (
                 "MIN(b2.id)"
                 if lightweight
-                else "COALESCE(MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END), MIN(b2.id))"
+                else series_cover_id_sql('b2', mariadb=True)
             )
             if not include_all_rows:
                 sql = f"""{select_sql}
@@ -757,10 +754,7 @@ class SeriesRepository:
                        COALESCE(SUM(rep.series_book_count), 0) AS total_book_count
                 FROM books b
                 INNER JOIN (
-                    SELECT COALESCE(
-                        MIN(CASE WHEN b2.cover_image IS NOT NULL AND b2.cover_image != '' THEN b2.id END),
-                        MIN(b2.id)
-                    ) AS rep_id,
+                    SELECT {series_cover_id_sql('b2', mariadb=True)} AS rep_id,
                     COUNT(*) AS series_book_count
                     FROM books b2
                     {sub_join}

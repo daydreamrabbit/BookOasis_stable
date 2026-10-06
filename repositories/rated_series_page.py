@@ -4,6 +4,7 @@ import re
 
 import database
 from services.content_rating_service import ContentRatingService, _BOOKS_LV_LEVEL_MAP
+from repositories.series_metadata_utils import series_cover_id_sql
 
 
 def supported(db_type, rating, search='', genres=None, tags=None, group='', author=''):
@@ -66,7 +67,8 @@ def _query(conn, library_id, user_id, rating, series_scope=None):
     sql = f"""WITH raw_books AS (
         SELECT b.id,b.library_id,COALESCE(NULLIF(b.series_name,''),'기타 단행본') AS group_name,
                {directory} AS group_dir,b.created_at,b.cover_image,b.author,b.genre,b.tags,
-               b.books_lv,b.publication_status,b.series_alias,b.metadata_locked,({level}) AS effective_level,
+               b.books_lv,b.publication_status,b.series_alias,b.metadata_locked,
+               b.document_volume_index,b.document_number,({level}) AS effective_level,
                CASE WHEN COALESCE(p.is_completed,0)=1 OR (COALESCE(b.total_pages,0)>0 AND COALESCE(p.pages_read,0)>=b.total_pages) THEN 1 ELSE 0 END AS completed,
                COALESCE(p.pages_read,0) AS pages_read,
                CASE WHEN EXISTS(SELECT 1 FROM user_favorites f WHERE f.book_id=b.id AND f.user_id={safe_user}) THEN 1 ELSE 0 END AS favorite
@@ -82,7 +84,7 @@ def _query(conn, library_id, user_id, rating, series_scope=None):
                MAX(COALESCE(metadata_locked,0)) AS any_locked,
                MIN(completed) AS all_completed, MAX(CASE WHEN completed=1 OR pages_read>0 THEN 1 ELSE 0 END) AS has_progress,
                MAX(favorite) AS is_favorite,MAX(series_level) AS series_level,
-               MIN(CASE WHEN cover_image IS NOT NULL AND cover_image<>'' THEN id END) AS cover_id,
+               {series_cover_id_sql('eligible', database.is_mariadb_mode(), fallback=False)} AS cover_id,
                {','.join(f"MIN(CASE WHEN {field} IS NOT NULL AND {field}<>'' THEN id END) AS {field}_id" for field in ('author','genre','tags','books_lv','publication_status','series_alias'))}
         FROM eligible GROUP BY library_id,group_name,group_dir HAVING MAX(series_level)<=?
     ) """

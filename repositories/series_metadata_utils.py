@@ -10,6 +10,13 @@ _VOLUME_PATTERNS = (
 
 
 def _volume_number(row):
+    for key in ('document_volume_index', 'document_number'):
+        try:
+            number = float(row.get(key) or 0)
+            if 0 < number < float('inf'):
+                return number
+        except (ValueError, TypeError, OverflowError):
+            pass
     for key in ('_volume_title', 'title', '_volume_path', 'file_path'):
         value = row.get(key)
         name = str(value or '').replace('\\', '/').rsplit('/', 1)[-1]
@@ -49,6 +56,22 @@ def select_series_cover_row(rows):
         if cover and cover.upper() != 'NO_COVER':
             return row
     return None
+
+
+def series_cover_id_sql(alias, mariadb=False, fallback=True):
+    """Aggregate the earliest numbered usable cover, independent of insert ID."""
+    volume = (f"CASE WHEN {alias}.document_volume_index>0 THEN {alias}.document_volume_index "
+              f"WHEN {alias}.document_number>0 THEN {alias}.document_number ELSE 0 END")
+    priority = f"CASE WHEN ({volume})=1 THEN 0 WHEN ({volume})>0 THEN 1 ELSE 2 END"
+    usable = f"NULLIF(TRIM({alias}.cover_image),'') IS NOT NULL AND UPPER(TRIM({alias}.cover_image))<>'NO_COVER'"
+    if mariadb:
+        key = (f"CONCAT(({priority}),':',LPAD(CAST(CAST(({volume}) AS DECIMAL(24,6)) AS CHAR),"
+               f"26,'0'),':',LPAD({alias}.id,20,'0'))")
+        chosen = f"CAST(SUBSTRING_INDEX(MIN(CASE WHEN {usable} THEN {key} END),':',-1) AS UNSIGNED)"
+    else:
+        key = f"printf('%d:%026.6f:%020d',({priority}),({volume}),{alias}.id)"
+        chosen = f"CAST(SUBSTR(MIN(CASE WHEN {usable} THEN {key} END),-20) AS INTEGER)"
+    return f"COALESCE({chosen},MIN({alias}.id))" if fallback else chosen
 
 
 def book_metadata_exists_sql(book_alias='b'):

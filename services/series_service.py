@@ -386,7 +386,8 @@ def _build_series_entries(db_type, rows, user_id=None):
         books = groups[key]
         representative = min(books, key=lambda r: r['id'])
 
-        first_with_cover = next((b for b in books if b['cover_image']), None)
+        from repositories.series_metadata_utils import select_series_cover_row
+        first_with_cover = select_series_cover_row(books)
         db_cover = first_with_cover['cover_image'] if first_with_cover else None
         updated_at = first_with_cover['cover_updated_at'] if first_with_cover else None
         # 카드에 실제로 뜨는 커버(first_with_cover)의 정렬값을 써야 그리드에서도
