@@ -16,6 +16,10 @@ book_rating.py -- 도서 상세 페이지 헤더의 정적 점수 별을 커뮤�
   선언해 코어의 _resolve_plugin_sessions()가 자동으로 배제해준다.
 """
 import logging
+import hashlib
+import json
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -23,7 +27,10 @@ from plugins.metadata.base import BaseMetadataProvider
 
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 10
+REQUEST_TIMEOUT = 3
+SUBMIT_TIMEOUT = 5
+WIDGET_CACHE_TTL = 300
+FAILURE_BACKOFF_TTL = 120
 RELAY_PLUGIN_ID = "bookoasis_ratings"
 VERIFY_CACHE_TTL = 60 * 60 * 24  # 하루 - 인증이 여전히 유효한지 재확인하는 주기
 
@@ -104,7 +111,8 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
         정규화(괄호 제거 등)는 하지 않고 trim만 한다."""
         title = str(context.get("series_name") or "").strip()
         author = str(context.get("author") or "").strip()
-        isbn = str(context.get("isbn") or "").strip()
+        from utils.isbn import normalize_isbn
+        isbn = normalize_isbn(context.get("isbn"))
 
         if isbn:
             return f"isbn:{isbn}"
@@ -112,10 +120,64 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             return f"ta:{title}|{author}"
         return f"t:{title}"
 
+    def _sort_cache_key(self, db_type):
+        domain, user, _, _ = self._relay_config(db_type)
+        identity = hashlib.sha256((domain + '|' + user).encode()).hexdigest()
+        epoch = self.cache_get('sort-epoch:' + identity) or 'initial'
+        return 'sort-own-v2:' + identity + ':' + str(epoch)
+
+    def invalidate_sort_ratings(self, db_type):
+        self.cache_delete(self._sort_cache_key(db_type))
+        domain, user, _, _ = self._relay_config(db_type)
+        identity = hashlib.sha256((domain + '|' + user).encode()).hexdigest()
+        self.cache_set('sort-epoch:' + identity, uuid.uuid4().hex, ttl=86400)
+
+    def get_sort_ratings(self, db_type):
+        """Export this installation's votes in one request, not one per book."""
+        try:
+            cache_key = self._sort_cache_key(db_type)
+            cached = self.cache_get(cache_key)
+            if cached:
+                return json.loads(cached)
+            domain, user, secret, _ = self._relay_config(db_type)
+            if not all((domain, user, secret)) or not self._ensure_verified(domain, user, secret):
+                return {'success': False, 'error': '별점 플러그인 인증을 확인해 주세요.'}
+            def fetch():
+                return requests.get(f'{domain}/api/{RELAY_PLUGIN_ID}/records',
+                    params={'user_id': user, 'secret_token': secret, 'filter_field': 'user_id',
+                            'filter_value': user, 'limit': 200}, timeout=REQUEST_TIMEOUT)
+            response = self._retry_after_unauthorized(fetch(), fetch, domain, user, secret)
+            body = response.json()
+            if not response.ok or not body.get('success'):
+                return {'success': False, 'error': '정렬용 별점 조회에 실패했습니다.'}
+            rows = body.get('records') or []
+            # This relay has no pagination. Never silently sort an incomplete export.
+            if len(rows) >= 200:
+                return {'success': False, 'error': '별점 서버의 200건 조회 제한으로 전체 별점을 정렬할 수 없습니다.'}
+            values = {}
+            for row in rows:
+                if str(row.get('user_id')) != user or not row.get('book_key'):
+                    continue
+                key = str(row['book_key'])
+                if key.startswith('isbn:'):
+                    from utils.isbn import normalize_isbn
+                    isbn = normalize_isbn(key[5:])
+                    if not isbn:
+                        continue  # Ambiguous historical votes are preserved, not reassigned.
+                    key = 'isbn:' + isbn
+                value = float(row.get('rating'))
+                if value in {step / 2 for step in range(1, 11)}:
+                    values[hashlib.sha256(key.encode()).hexdigest()] = value
+            result = {'success': True, 'identity': 'book_key', 'ratings': values}
+            self.cache_set(cache_key, json.dumps(result), ttl=60)
+            return result
+        except (requests.RequestException, ValueError, TypeError):
+            return {'success': False, 'error': '정렬용 플러그인 별점을 불러오지 못했습니다.'}
+
     def _ensure_verified(self, domain_url, user_id, secret_token, force=False):
         """relay에 이 설치(install)가 등록돼 있는지 확인/자동 등록한다. 매 요청마다 왕복하지
         않도록 결과를 하루 동안 플러그인 전용 Redis 캐시에 남긴다."""
-        cache_key = f"verified:{user_id}"
+        cache_key = 'verified:' + self._scope_hash(domain_url, user_id, secret_token)
         if not force and self.cache_get(cache_key) == "1":
             return True
 
@@ -137,6 +199,20 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             return request_again()
         return response
 
+    @staticmethod
+    def _scope_hash(*parts):
+        return hashlib.sha256('|'.join(map(str, parts)).encode()).hexdigest()[:24]
+
+    def _widget_cache_key(self, domain, user, book):
+        return 'widget-v2:' + self._scope_hash(domain, user, book)
+
+    def _backoff_key(self, domain, user):
+        return 'backoff-v2:' + self._scope_hash(domain, user)
+
+    def _invalidate_widget(self, domain, user, book):
+        self.cache_delete(self._widget_cache_key(domain, user, book))
+        self.cache_delete(self._backoff_key(domain, user))
+
     # ------------------------------------------------------------------
     # rating_widget 계약 구현
     # ------------------------------------------------------------------
@@ -148,11 +224,24 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
         if not domain_url or not user_id or not secret_token:
             return {"success": False, "error": "커뮤니티 별점 플러그인 설정이 완료되지 않았습니다."}
 
+        book_key = self._book_key(context)
+        cache_key = self._widget_cache_key(domain_url, user_id, book_key)
+        cached = self.cache_get(cache_key)
+        if cached:
+            try:
+                result = json.loads(cached)
+                if isinstance(result, dict) and result.get('success'):
+                    return result
+            except (ValueError, TypeError):
+                pass
+        backoff_key = self._backoff_key(domain_url, user_id)
+        if self.cache_get(backoff_key):
+            return {'success':False, 'error':'별점 서버 응답이 지연되어 잠시 후 다시 확인합니다.'}
         try:
             if not self._ensure_verified(domain_url, user_id, secret_token):
+                self.cache_set(backoff_key, '1', ttl=FAILURE_BACKOFF_TTL)
                 return {"success": False, "error": "relay 인증에 실패했습니다."}
 
-            book_key = self._book_key(context)
             auth = {"user_id": user_id, "secret_token": secret_token}
 
             def get_aggregate():
@@ -161,21 +250,26 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
                     params={**auth, "agg_field": "rating", "filter_field": "book_key", "filter_value": book_key},
                     timeout=REQUEST_TIMEOUT,
                 )
-            agg_resp = self._retry_after_unauthorized(
-                get_aggregate(), get_aggregate, domain_url, user_id, secret_token)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                mine = pool.submit(self._find_my_rating, domain_url, auth, book_key, user_id, strict=True)
+                aggregate = pool.submit(get_aggregate)
+                agg_resp = self._retry_after_unauthorized(
+                    aggregate.result(), get_aggregate, domain_url, user_id, secret_token)
+                my_rating = mine.result()
             agg = agg_resp.json() if agg_resp.ok else {}
             if not agg.get("success"):
+                self.cache_set(backoff_key, '1', ttl=FAILURE_BACKOFF_TTL)
                 return {"success": False, "error": agg.get("message") or "별점 집계 조회에 실패했습니다."}
-
-            my_rating = self._find_my_rating(domain_url, auth, book_key, user_id)
-
-            return {
+            result = {
                 "success": True,
                 "average": round(float(agg.get("avg") or 0), 1),
                 "count": int(agg.get("count") or 0),
                 "my_rating": my_rating,
             }
-        except requests.RequestException as e:
+            self.cache_set(cache_key, json.dumps(result), ttl=WIDGET_CACHE_TTL)
+            return result
+        except (requests.RequestException, ValueError, TypeError) as e:
+            self.cache_set(backoff_key, '1', ttl=FAILURE_BACKOFF_TTL)
             logger.warning("[book_rating] 별점 조회 실패: %s", e)
             return {"success": False, "error": "커뮤니티 별점 서버에 연결할 수 없습니다."}
 
@@ -205,13 +299,16 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
                         "values": {"book_key": book_key, "rating": rating, "submitter_domain": submitter_domain},
                         "unique_by": ["book_key"],
                     },
-                    timeout=REQUEST_TIMEOUT,
+                    timeout=SUBMIT_TIMEOUT,
                 )
             resp = self._retry_after_unauthorized(
                 post_rating(), post_rating, domain_url, user_id, secret_token)
             body = resp.json() if resp.content else {}
             if not resp.ok or not body.get("success"):
                 return {"success": False, "error": body.get("message") or "별점 제출에 실패했습니다."}
+
+            self._invalidate_widget(domain_url, user_id, book_key)
+            self.invalidate_sort_ratings(db_type)
 
             auth = {"user_id": user_id, "secret_token": secret_token}
             agg_resp = requests.get(
@@ -231,7 +328,51 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             logger.warning("[book_rating] 별점 제출 실패: %s", e)
             return {"success": False, "error": "커뮤니티 별점 서버에 연결할 수 없습니다."}
 
-    def _find_my_rating(self, domain_url, auth, book_key, user_id):
+    def cancel_rating(self, db_type, context):
+        """Delete only this installation's vote; zero is never a community vote."""
+        if db_type != 'general':
+            return {'success': False, 'error': '일반도서 별점만 취소할 수 있습니다.'}
+        domain_url, user_id, secret_token, _ = self._relay_config(db_type)
+        if not all((domain_url, user_id, secret_token)):
+            return {'success': False, 'error': '커뮤니티 별점 플러그인 설정이 완료되지 않았습니다.'}
+        try:
+            if not self._ensure_verified(domain_url, user_id, secret_token):
+                return {'success': False, 'error': 'relay 인증에 실패했습니다.'}
+            book_key = self._book_key(context)
+            auth = {'user_id': user_id, 'secret_token': secret_token}
+            def get_records():
+                return requests.get(f'{domain_url}/api/{RELAY_PLUGIN_ID}/records',
+                    params={**auth, 'filter_field': 'book_key', 'filter_value': book_key, 'limit': 200},
+                    timeout=REQUEST_TIMEOUT)
+            response = self._retry_after_unauthorized(get_records(), get_records, domain_url, user_id, secret_token)
+            body = response.json()
+            if not response.ok or not body.get('success'):
+                return {'success': False, 'error': body.get('message') or '내 별점 조회에 실패했습니다.'}
+            records = body.get('records') or []
+            own = [record for record in records if str(record.get('user_id')) == user_id
+                   and record.get('book_key') == book_key]
+            if not own and len(records) >= 200:
+                return {'success': False, 'error': '별점 조회 범위를 초과해 내 평점을 확인하지 못했습니다. 취소하지 않았습니다.'}
+            for record in own:
+                record_id = int(record['id'])
+                def delete_record():
+                    return requests.delete(f'{domain_url}/api/{RELAY_PLUGIN_ID}/records/{record_id}',
+                        json=auth, timeout=REQUEST_TIMEOUT)
+                deleted = self._retry_after_unauthorized(delete_record(), delete_record, domain_url, user_id, secret_token)
+                result = deleted.json()
+                if not deleted.ok or not result.get('success'):
+                    return {'success': False, 'error': result.get('message') or '평점 취소에 실패했습니다.'}
+            self._invalidate_widget(domain_url, user_id, book_key)
+            self.invalidate_sort_ratings(db_type)
+            result = self.get_rating_widget_data(db_type, context)
+            if result.get('success'):
+                result['my_rating'] = None
+            return result
+        except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+            logger.warning('[book_rating] 별점 취소 실패: %s', type(error).__name__)
+            return {'success': False, 'error': '커뮤니티 별점 서버에서 평점 취소를 확인하지 못했습니다.'}
+
+    def _find_my_rating(self, domain_url, auth, book_key, user_id, strict=False):
         """list_records는 user_id로 필터링되지 않으므로(같은 book_key의 다른 사용자 레코드도
         함께 온다), 응답에서 내 user_id와 일치하는 행만 찾아 my_rating으로 쓴다."""
         try:
@@ -244,11 +385,18 @@ class BookRatingMetadataProvider(BaseMetadataProvider):
             resp = self._retry_after_unauthorized(
                 get_records(), get_records, domain_url, user_id, auth['secret_token'])
             if not resp.ok:
+                if strict:
+                    raise requests.RequestException('own rating lookup failed')
                 return None
-            records = resp.json().get("records") or []
+            payload = resp.json()
+            if strict and not payload.get('success'):
+                raise requests.RequestException('own rating lookup failed')
+            records = payload.get("records") or []
             for record in records:
                 if record.get("user_id") == user_id:
                     return float(record.get("rating"))
         except (requests.RequestException, TypeError, ValueError):
+            if strict:
+                raise
             pass
         return None

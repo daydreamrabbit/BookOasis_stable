@@ -4,9 +4,19 @@ from repositories.trash_repository import TrashRepository
 
 class TrashService:
     @staticmethod
-    def get_deleted_books(db_type):
+    def get_counts_by_library(db_type):
+        import database
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT library_id,COUNT(*) AS count FROM books WHERE is_deleted=1 GROUP BY library_id')
+            return {int(r['library_id']): int(r['count']) for r in cursor.fetchall() if r['library_id'] is not None}
+
+    @staticmethod
+    def get_deleted_books(db_type, library_id=None):
         """물리적으로 사라져서 휴지통(is_deleted=1)에 들어있는 도서 목록을 카테고리 정보와 함께 조회"""
         rows = TrashRepository.get_deleted_books(db_type)
+        if library_id is not None:
+            rows = [r for r in rows if int(r['library_id'] or 0) == int(library_id)]
         return [
             {
                 'id': r['id'],
@@ -76,6 +86,8 @@ class TrashService:
 
                     # DB 및 종속 테이블 완전 삭제 수행 & 참조 없는 커버 리스트 리턴
                     unreferenced_covers = TrashRepository.hard_delete_books_transaction(db_type, chunk, target_covers)
+                    from services.problem_service import ProblemService
+                    ProblemService.on_books_deleted(db_type, chunk)
 
                     # 2.2. 로컬 정적 커버 파일 삭제 (안전 방어막: 실물 파일 미존재/삭제 오류 시에도 DB 삭제 안전 완수)
                     for cover_img in unreferenced_covers:

@@ -11,7 +11,18 @@
     if (!scrollEl || !header) return;
 
     let lastScrollTop = scrollEl.scrollTop;
-    const isMobile = window.matchMedia('(max-width: 1200px)').matches;
+    const mobileQuery = window.matchMedia('(max-width: 1200px)');
+    let measuredHeight = -1;
+    function measureHeader() {
+      const height = header.offsetHeight;
+      if (Number.isFinite(height) && height !== measuredHeight) {
+        scrollEl.style?.setProperty('--library-header-h', `${height}px`);
+        measuredHeight = height;
+      }
+    }
+    measureHeader();
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureHeader).observe(header);
+    window.addEventListener('resize', measureHeader);
     const moveThreshold = 8;    // 데스크톱의 미세한 스크롤 변화 무시(떨림 방지)
     const mobileHideDistance = 16;
     const mobileRevealDistance = 80;
@@ -51,6 +62,7 @@
       requestAnimationFrame(() => {
         const st = scrollEl.scrollTop;
         const delta = st - lastScrollTop;
+        const isMobile = mobileQuery.matches;
 
         if (!userScrolling || st <= revealNearTop) {
           header.classList.remove('library-header--hidden');

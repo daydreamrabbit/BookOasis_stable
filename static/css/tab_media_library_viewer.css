@@ -129,8 +129,27 @@
 }
 
 /* 이미지형 뷰어의 폭맞춤/높이맞춤 두 가지 크기 방식. */
+.viewer-auto-scroll-settings { box-sizing: border-box; min-width: 0; padding: 12px 16px; border-bottom: 1px solid var(--viewer-panel-border, rgba(255,255,255,.1)); }
+.viewer-auto-scroll-settings[hidden] { display: none !important; }
+.viewer-auto-scroll-settings > .ridi-setting-row { min-height: 34px; padding: 0; border: 0; margin-bottom: 12px; font-size: 14px; }
+.viewer-auto-scroll-settings > label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.viewer-auto-scroll-settings output { flex-shrink: 0; white-space: nowrap; font-size: 12px; font-variant-numeric: tabular-nums; }
+.viewer-auto-scroll-settings > input { display: block; box-sizing: border-box; width: 100%; min-width: 0; height: 24px; margin: 8px 0; padding: 0; accent-color: #36aeea; }
+.viewer-auto-scroll-settings > small { display: block; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; opacity: .75; }
+#viewer-auto-scroll-toggle { box-sizing: border-box; min-width: 80px; height: 34px; padding: 0 14px; font: inherit; font-size: 13px; line-height: 1; white-space: nowrap; border: 1px solid #36aeea; border-radius: 17px; background: transparent; color: inherit; cursor: pointer; }
+#viewer-auto-scroll-toggle:disabled { opacity: .45; cursor: default; }
+#viewer-auto-scroll-toggle[aria-pressed="true"] { background: #1688b8; color: white; }
 .comic-image-wrapper.fit-width,
 .comic-image-wrapper.fit-height { overflow: auto; }
+.viewer-modal .comic-image-wrapper {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.viewer-modal .comic-image-wrapper::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
 .comic-image-wrapper.fit-width .comic-page-pair {
     align-items: flex-start;
     min-height: 100%;
@@ -334,12 +353,12 @@
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     column-count: initial !important;
     column-width: auto !important;
-    column-gap: clamp(0px, 0.5vw, 8px) !important;
+    column-gap: var(--epub-image-gap, 8px) !important;
     width: 100% !important;
     max-width: none !important;
     height: 100% !important;
     overflow: hidden !important;
-    padding: clamp(0px, 0.5vw, 8px) !important;
+    padding: 0 !important;
     box-sizing: border-box !important;
 }
 
@@ -378,9 +397,62 @@
 #media-viewer-modal[data-reading-direction="rtl"] #txt-content-area.epub-image-spread > .epub-image-only-chunk:first-child { grid-column: 2; grid-row: 1; }
 #media-viewer-modal[data-reading-direction="rtl"] #txt-content-area.epub-image-spread > .epub-image-only-chunk:nth-child(2) { grid-column: 1; grid-row: 1; }
 
+/* A landscape illustration already contains its full spread: never squeeze it
+   into one leaf or place another chapter beside it. Preserve the entire image. */
+#media-viewer-modal #txt-content-area.epub-image-spread.epub-image-wide {
+    grid-template-columns: minmax(0, 1fr) !important;
+}
+#media-viewer-modal #txt-content-area.epub-image-spread.epub-image-wide > .epub-image-only-chunk {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+}
+
 /* 스크롤 모드 + 너비맞춤: 위 규칙으로 통합 (별도 오버라이드 불필요) */
 
+#media-viewer-modal #txt-content-area.epub-image-sequence {
+    display: flex !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    gap: 0 !important;
+}
+#media-viewer-modal[data-display-mode="two-one"] #txt-content-area.epub-image-sequence { direction: rtl; }
+#media-viewer-modal #txt-content-area.epub-image-sequence > .epub-image-sheet {
+    flex: 0 0 100%;
+    min-width: 0;
+    height: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--epub-image-gap, 8px);
+    padding: 0;
+    box-sizing: border-box;
+}
+#media-viewer-modal #txt-content-area.epub-image-sequence > .epub-image-sheet-wide,
+#media-viewer-modal[data-display-mode="one"] #txt-content-area.epub-image-sequence > .epub-image-sheet {
+    grid-template-columns: minmax(0, 1fr);
+}
+
 /* 스크롤 모드 + 높이맞춤: 너비만 고정, 높이는 자연 비율 유지 */
+
+/* A landscape plate in one-page mode uses the available illustration viewport,
+   not the 800px text column. Mixed image chapters retain 800px portrait leaves. */
+#media-viewer-modal #txt-scroll-wrapper:has(> #txt-content-area.epub-single-landscape) {
+    max-width: var(--epub-illustration-max-width, 1600px) !important;
+}
+#media-viewer-modal #txt-content-area.epub-single-landscape > .epub-image-sheet { justify-items: center; }
+#media-viewer-modal #txt-content-area.epub-single-landscape > .epub-image-sheet:not(.epub-landscape-sheet) > .epub-image-only-chunk {
+    max-width: 800px;
+}
+
+/* Contained images can be narrower than their cells on short screens. Align
+   paired images towards the seam as well as removing the CSS gutter. */
+#media-viewer-modal #txt-content-area.epub-no-center-gap:not(.epub-image-wide) > .epub-image-only-chunk:first-child img,
+#media-viewer-modal #txt-content-area.epub-no-center-gap .epub-image-sheet:not(.epub-image-sheet-wide) > :first-child img { object-position: right center; }
+#media-viewer-modal #txt-content-area.epub-no-center-gap:not(.epub-image-wide) > .epub-image-only-chunk:nth-child(2) img,
+#media-viewer-modal #txt-content-area.epub-no-center-gap .epub-image-sheet:not(.epub-image-sheet-wide) > :nth-child(2) img { object-position: left center; }
+#media-viewer-modal[data-reading-direction="rtl"] #txt-content-area.epub-no-center-gap:not(.epub-image-wide) > .epub-image-only-chunk:first-child img,
+#media-viewer-modal[data-reading-direction="rtl"] #txt-content-area.epub-no-center-gap .epub-image-sheet:not(.epub-image-sheet-wide) > :first-child img { object-position: left center; }
+#media-viewer-modal[data-reading-direction="rtl"] #txt-content-area.epub-no-center-gap:not(.epub-image-wide) > .epub-image-only-chunk:nth-child(2) img,
+#media-viewer-modal[data-reading-direction="rtl"] #txt-content-area.epub-no-center-gap .epub-image-sheet:not(.epub-image-sheet-wide) > :nth-child(2) img { object-position: right center; }
 
 
 /* 맞추기 토글 버튼 패널 */
@@ -543,6 +615,16 @@
     overscroll-behavior: contain;
 }
 
+/* Width-fit needs native wheel/touch input on the actual scroll container.
+   The transparent sibling hotspot cannot scroll the image underneath it. */
+#media-viewer-modal:is([data-viewer-format="zip"], [data-viewer-format="cbz"], [data-viewer-format="imgdir"]):has(.comic-image-wrapper.fit-width) #common-viewer-hotspot {
+    pointer-events: none !important;
+}
+.comic-image-wrapper.fit-width {
+    touch-action: pan-y pinch-zoom;
+    overscroll-behavior-y: contain;
+}
+
 .comic-hotspot-layer.vertical {
     flex-direction: column;
 }
@@ -689,6 +771,37 @@
        위로 튀어 올라 호버하자마자 클릭이 빗나가는 원인이었다. */
     transform: translateY(-50%) scale(1.05);
 }
+
+/* 전체화면 전환 (닫기 버튼과 대칭으로 왼쪽 여백에 배치) */
+.overlay-fullscreen-btn {
+    position: absolute;
+    left: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--app-text-muted);
+    padding: 0.3rem 0.6rem;
+    font-size: 0.95rem;
+    border-radius: 6px;
+    cursor: pointer;
+    line-height: 1;
+    transition: all 0.2s ease;
+}
+
+.overlay-fullscreen-btn:hover {
+    background: color-mix(in srgb, var(--app-accent) 20%, transparent);
+    border-color: var(--app-accent);
+    color: var(--app-text-primary);
+}
+
+.ridi-view-settings > header .overlay-fullscreen-btn {
+    position: static;
+    transform: none;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+.ridi-view-settings > header > strong { flex: 1; }
 
 .overlay-controls-panel {
     /* 헤더 바로 아래 틈 없이 붙여서, 별개로 뜬 컨텍스트 메뉴가 아니라 헤더 자체가
@@ -2421,10 +2534,67 @@ input:checked + .toggle-switch-slider::before {
     direction: ltr;
 }
 #media-viewer-modal .ridi-viewer-toolbar-bottom .seekbar-btn { display: flex !important; }
+
+/* Mirror navigation as a unit, without reversing page numbers or book data. */
+#media-viewer-modal .overlay-footer[data-seek-direction="rtl"] .seekbar-nav-row { flex-direction: row-reverse; }
+#media-viewer-modal .overlay-footer[data-seek-direction="rtl"] .seekbar-input {
+    direction: rtl;
+    background-image: linear-gradient(to left, #159fe7 0 var(--seek-progress, 0%), #8f9aa2 var(--seek-progress, 0%) 100%);
+}
+#media-viewer-modal .overlay-footer[data-seek-direction="rtl"] .seekbar-page-num {
+    left: auto;
+    right: 0;
+    text-align: right;
+    direction: ltr;
+    unicode-bidi: isolate;
+}
+#media-viewer-modal .overlay-footer[data-seek-direction="rtl"] .seekbar-btn > i { transform: scaleX(-1); }
+
+/* Accessible labels also supply compact, themed tooltips (no native title popup). */
+#media-viewer-modal .seekbar-btn { position: relative; }
+#media-viewer-modal .seekbar-btn::after {
+    content: attr(aria-label);
+    position: absolute;
+    bottom: calc(100% + 12px);
+    width: max-content;
+    max-width: min(240px, calc(100vw - 40px));
+    padding: 7px 10px;
+    border: 1px solid var(--viewer-panel-border, rgba(120, 130, 145, .25));
+    border-radius: 7px;
+    background: var(--viewer-panel-bg, #242a32);
+    color: var(--viewer-theme-text, #f0f3f7);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .16);
+    font: 500 12px/1.45 sans-serif;
+    text-align: start;
+    white-space: normal;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(3px);
+    transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    pointer-events: none;
+    z-index: 10;
+}
+#media-viewer-modal #seekbar-btn-first::after { left: 0; }
+#media-viewer-modal #seekbar-btn-last::after { right: 0; }
+#media-viewer-modal .overlay-footer[data-seek-direction="rtl"] #seekbar-btn-first::after { left: auto; right: 0; }
+#media-viewer-modal .overlay-footer[data-seek-direction="rtl"] #seekbar-btn-last::after { right: auto; left: 0; }
+#media-viewer-modal .seekbar-btn:hover::after,
+#media-viewer-modal .seekbar-btn:focus-visible::after { opacity: 1; visibility: visible; transform: translateY(0); }
+#media-viewer-modal .seekbar-btn:focus-visible { outline: 2px solid #159fe7; outline-offset: 3px; }
 .viewer-page-info-source { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 
 /* 툴팁은 현재 위치 표시이므로 조작 중뿐 아니라 도구 모음이 열린 동안 계속 표시한다. */
 #media-viewer-modal .seekbar-tooltip { display: block; }
+#media-viewer-modal .seekbar-tooltip {
+    padding: 4px 8px;
+    border: 1px solid var(--viewer-panel-border, rgba(120, 130, 145, .25));
+    border-radius: 6px;
+    background: var(--viewer-panel-bg, #242a32);
+    color: var(--viewer-theme-text, #f0f3f7);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, .12);
+    font-size: 11px;
+    line-height: 1.35;
+}
 
 /* 2←1 텍스트 펼침은 RTL 컬럼 흐름을 사용한다. scaleX 반전은 시각적으로만 뒤집고
    overflow 폭을 뷰포트 1개로 축소해 매번 다음 챕터로 건너뛰는 원인이었다. */
@@ -2643,24 +2813,101 @@ input:checked + .toggle-switch-slider::before {
 #media-viewer-modal .ridi-viewer-toolbar-top > .viewer-controls { min-width: 0; }
 @media (max-width: 1200px) {
     #media-viewer-modal .ridi-viewer-toolbar-top {
-        height: 88px;
-        grid-template-columns: 38px minmax(0, 1fr) 38px;
-        grid-template-rows: 44px 38px;
+        height: 56px;
+        grid-template-columns: 38px minmax(0, 1fr) auto minmax(0, 1fr) 38px;
+        grid-template-rows: 56px;
         gap: 0 6px;
     }
     #media-viewer-modal .ridi-viewer-toolbar-top > .viewer-title { display: none; }
     #media-viewer-modal .ridi-viewer-back { grid-area: 1 / 1; }
-    #media-viewer-modal .ridi-viewer-tools { grid-area: 1 / 2; }
-    #media-viewer-modal .ridi-viewer-toolbar-top > .viewer-controls { grid-area: 1 / 3; }
-    #media-viewer-modal .ridi-viewer-mode-group { grid-area: 2 / 1 / 3 / -1; }
+    #media-viewer-modal .ridi-viewer-tools { grid-area: 1 / 4; }
+    #media-viewer-modal .ridi-viewer-toolbar-top > .viewer-controls { grid-area: 1 / 5; }
+    #media-viewer-modal .ridi-viewer-mode-group { grid-area: 1 / 3; }
     #media-viewer-modal #epub-toc-container,
-    #media-viewer-modal .viewer-side-panel { top: 88px !important; }
+    #media-viewer-modal .viewer-side-panel { top: 56px !important; }
 }
 @media (min-width: 621px) and (max-width: 1200px) {
-    #media-viewer-modal .ridi-view-settings { top: calc(96px + env(safe-area-inset-top, 0px)); }
+    #media-viewer-modal .ridi-view-settings { top: calc(64px + env(safe-area-inset-top, 0px)); }
+    #media-viewer-modal .ridi-viewer-mode-group button { min-width: 44px; padding-inline: 5px; }
+    #media-viewer-modal .ridi-viewer-tools { align-items: center; gap: 0; scrollbar-width: none; }
+    #media-viewer-modal .ridi-viewer-tools::-webkit-scrollbar { display: none; }
+    #media-viewer-modal .ridi-viewer-tools button { min-width: 40px; flex-shrink: 0; }
+    #media-viewer-modal .ridi-viewer-tools button span { display: none; }
+}
+
+/* Mobile: one row, centered modes, no reserved column for hidden fullscreen.
+   Text/TTS tools may overflow their own strip, never the mode switch. */
+@media (max-width: 620px) {
+    #media-viewer-modal .ridi-viewer-toolbar-top {
+        height: calc(48px + env(safe-area-inset-top, 0px));
+        padding: env(safe-area-inset-top, 0px) max(4px, env(safe-area-inset-right, 0px)) 0 max(4px, env(safe-area-inset-left, 0px));
+        grid-template-columns: minmax(32px, 1fr) auto minmax(0, 1fr);
+        grid-template-rows: 48px;
+        gap: 0 4px;
+    }
+    #media-viewer-modal .ridi-viewer-back { grid-area: 1 / 1; width: 32px; height: 40px; }
+    #media-viewer-modal .ridi-viewer-mode-group { grid-area: 1 / 2; height: 36px; }
+    #media-viewer-modal .ridi-viewer-mode-group button { min-width: 30px; }
+    #media-viewer-modal .ridi-viewer-tools {
+        grid-area: 1 / 3;
+        width: max-content;
+        max-width: 100%;
+        justify-content: flex-start;
+        align-items: center;
+        gap: 0;
+        scrollbar-width: none;
+        touch-action: pan-x;
+    }
+    #media-viewer-modal .ridi-viewer-tools::-webkit-scrollbar { display: none; }
+    #media-viewer-modal .ridi-viewer-tools button { min-width: 32px; height: 40px; }
+    #media-viewer-modal .ridi-viewer-toolbar-top > .viewer-controls { display: none; }
+    #media-viewer-modal #epub-toc-container,
+    #media-viewer-modal .viewer-side-panel { top: calc(48px + env(safe-area-inset-top, 0px)) !important; }
 }
 
 /* Fit a scroll page to the viewport height, not the entire scroll strip. */
+.viewer-secondary-tools { display: flex; gap: 2px; }
+#media-viewer-modal #btn-viewer-more { display: none; }
+@media (max-width: 1200px) {
+    #media-viewer-modal .ridi-viewer-tools {
+        overflow: visible;
+        width: auto;
+        max-width: none;
+        justify-content: flex-end;
+        touch-action: manipulation;
+    }
+    #media-viewer-modal #btn-viewer-settings,
+    #media-viewer-modal #btn-viewer-more { display: flex; min-width: 36px; flex-shrink: 0; }
+    #media-viewer-modal .viewer-secondary-tools { display: none; }
+    #media-viewer-modal .is-tools-open .viewer-secondary-tools {
+        display: grid;
+        position: fixed;
+        top: calc(58px + env(safe-area-inset-top, 0px));
+        right: max(8px, env(safe-area-inset-right, 0px));
+        width: min(250px, calc(100vw - 16px));
+        max-height: calc(100dvh - 130px);
+        overflow-y: auto;
+        padding: 6px;
+        border: 1px solid var(--viewer-panel-border, #ccc);
+        border-radius: 10px;
+        background: var(--viewer-panel-bg, #fff);
+        box-shadow: 0 8px 28px rgba(0,0,0,.22);
+        z-index: 10010;
+        touch-action: pan-y;
+    }
+    #media-viewer-modal .viewer-secondary-tools button {
+        flex-direction: row;
+        justify-content: flex-start;
+        gap: 12px;
+        width: 100%;
+        min-height: 42px;
+        padding: 8px 12px;
+        font-size: 13px;
+    }
+    #media-viewer-modal .viewer-secondary-tools button span,
+    #media-viewer-modal .viewer-secondary-tools #btn-viewer-tts-settings span { display: inline; }
+}
+
 #media-viewer-modal .comic-image-wrapper.scroll-mode.fit-height img.comic-scroll-img {
     width: auto;
     height: 100vh;

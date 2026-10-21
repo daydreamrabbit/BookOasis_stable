@@ -50,6 +50,7 @@ export function syncViewerDisplayModeUI(mode = getViewerDisplayMode()) {
   });
   const modal = document.getElementById('media-viewer-modal');
   if (modal) modal.dataset.displayMode = normalized;
+  if (typeof CustomEvent === 'function') document.dispatchEvent?.(new CustomEvent('viewer-reading-direction-changed'));
   return normalized;
 }
 

@@ -4,7 +4,6 @@ report_routes.py – 스캔 에러 리포트 조회 라우터
 """
 import os
 import json
-import glob
 import re
 from flask import Blueprint, request, jsonify
 from api.auth import admin_required
@@ -38,10 +37,9 @@ def _resolve_report_file_path(user_filename):
 def get_library_reports(library_id):
     """특정 라이브러리 카테고리의 스캔 에러 리포트 목록 조회"""
     try:
-        from utils.report_helper import get_reports_dir
-        reports_dir = get_reports_dir()
-        pattern = os.path.join(reports_dir, f"{library_id}_*.json")
-        files = glob.glob(pattern)
+        from utils.report_helper import list_report_files
+        db_type = (request.args.get('type') or 'general').strip()
+        files = list_report_files(library_id, db_type)
         # 파일명 기준 역순(최신순) 정렬
         files.sort(key=os.path.basename, reverse=True)
         
@@ -57,6 +55,8 @@ def get_library_reports(library_id):
                 'errors_count': errors_count
             })
         return jsonify({'success': True, 'reports': report_list})
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

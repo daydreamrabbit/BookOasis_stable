@@ -347,7 +347,11 @@ class CategoryRepository:
             
             cursor.execute("DELETE FROM scanner_progress WHERE library_id = %s", (str(library_id),))
             try:
-                cursor.execute("DELETE FROM scanner_tasks WHERE task_key LIKE %s", (f"%_{library_id}",))
+                cursor.execute("DELETE FROM scanner_tasks WHERE task_key IN (%s,%s,%s)", (
+                    f"library_scan_{db_type}_{int(library_id)}",
+                    f"cover_scan_{db_type}_{int(library_id)}",
+                    f"lazy_scan_library_{db_type}_{int(library_id)}",
+                ))
             except Exception:
                 pass
             cursor.execute("DELETE FROM libraries WHERE id = %s", (library_id,))

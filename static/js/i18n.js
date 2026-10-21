@@ -51,7 +51,7 @@ const i18n = {
      */
     async loadLanguagePack(lang) {
         try {
-            const response = await fetch(`/static/i18n/${lang}.json`);
+            const response = await fetch(`/static/i18n/${lang}.json?rev=20261019-last-access`, { cache: 'no-cache' });
             if (response.ok) {
                 this.dictionary = await response.json();
                 this.currentLang = lang;

@@ -1,5 +1,7 @@
 // scan_activity_status.js – 백그라운드 스캔 상태 폴링 및 카테고리 스피너 제어 루틴 (ui.js에서 분리)
 import { state } from './state.js';
+import { notificationItemHtml } from './notification_render.js';
+import { initNotificationCards, restoreCardExpansions } from './notification_cards.js';
 import { parseServerDateTime, formatRelativeTime } from './utils/time.js';
 import { evaluateScanPollingState } from './scan_status_polling_policy.js';
 
@@ -20,6 +22,62 @@ let observedActiveScan = false;
 let consecutiveIdlePolls = 0;
 let statusPollGeneration = 0;
 let pollingProbe = false;
+let activityTab = 'all';
+let activityDetails = { history: [], upcoming: [] };
+let activityDetailsLoading = false;
+let activityHistoryExpanded = false;
+let activityUpcomingExpanded = false;
+let dismissedActivity = new Set();
+let currentActivityTasks = [];
+
+function activityIdentity(task) {
+  return JSON.stringify([task.type || task.task_type, task.id ?? task.key ?? task.run_id,
+    task.finished_at || task.started_at || task.enqueued_at || '']);
+}
+
+function activityStorageKey() {
+  return `bookoasis:scan-activity:hidden:${window.currentUser?.id ?? window.currentUser?.username ?? document.getElementById('session-username-display')?.textContent ?? 'session'}`;
+}
+
+function hideActivityItems(ids) {
+  ids.forEach(id => dismissedActivity.add(id));
+  dismissedActivity = new Set([...dismissedActivity].slice(-400));
+  try { localStorage.setItem(activityStorageKey(), JSON.stringify([...dismissedActivity])); } catch { /* Storage can be disabled. */ }
+  if (latestSystemStatus) renderScanActivity(latestSystemStatus);
+}
+
+function activityNotice(message = '') {
+  const el = document.getElementById('scan-activity-notice');
+  if (el) { el.textContent = message; el.hidden = !message; }
+}
+
+async function loadActivityDetails() {
+  if (window.currentUser?.role !== 'admin' || activityDetailsLoading) return;
+  activityDetailsLoading = true;
+  try {
+    const response = await fetch('/api/system/scan-activity', { cache: 'no-store' });
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error();
+    const data = await response.json();
+    if (!data.success || !Array.isArray(data.history) || !Array.isArray(data.upcoming)) throw new Error();
+    activityDetails = data;
+    activityNotice(data.unavailable?.length ? '일부 예약을 조회하지 못했습니다. 예약·대기열에서 확인해 주세요.' : '');
+    if (latestSystemStatus) renderScanActivity(latestSystemStatus);
+  } catch {
+    activityNotice('이력·예약을 갱신하지 못했습니다. 기존 표시를 유지합니다. 다시 열어 재시도하세요.');
+  } finally { activityDetailsLoading = false; }
+}
+
+function renderUpcomingActivity() {
+  const el = document.getElementById('scan-activity-upcoming');
+  if (!el) return;
+  el.hidden = activityTab === 'attention' || window.currentUser?.role !== 'admin';
+  const upcoming = activityDetails.upcoming.filter(item => new Date(item.next_run_at).getTime() >= Date.now());
+  el.innerHTML = `<div class="scan-activity-section-heading"><strong>다음 예약</strong>${upcoming.length > 2 ? `<button type="button" data-scan-upcoming-more>${activityUpcomingExpanded ? '접기' : `${upcoming.length - 2}개 더 보기`}</button>` : ''}</div>`
+    + (upcoming.length ? upcoming.slice(0, activityUpcomingExpanded ? undefined : 2).map(item => {
+      const date = new Date(item.next_run_at);
+      return `<div class="scan-activity-upcoming-row"><time datetime="${escapeActivityAttribute(item.next_run_at)}">${escapeActivityText(date.toLocaleString(undefined, { month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit' }))}</time><div><strong>${escapeActivityText(item.name)}</strong><small>${escapeActivityText(item.db_type)} · 예약식 ${escapeActivityText(item.cron)}</small></div></div>`;
+    }).join('') : '<p class="scan-activity-note">등록된 다음 예약이 없습니다.</p>');
+}
 
 const STATUS_POLL_INTERVAL_MS = 2000;
 const QUEUE_VISIBILITY_GRACE_MS = 8000;
@@ -84,9 +142,14 @@ function getScanActivityTaskInfo(task, isPending = false, isRecent = false) {
       || (taskType === 'lazy_scan' ? '전체 시스템' : libraryId != null ? `Library ${libraryId} (${dbType})` : '백그라운드 작업');
   const taskName = isSingleBookScan ? '도서 스캔' : (names[taskType] || '백그라운드 작업');
   const statusLabel = task?.status === 'failed' ? '실패' : task?.status === 'cancelled' ? '취소' : '완료';
-  const detail = isRecent
+  let detail = isRecent
     ? (stage || (statusLabel === '완료' ? '스캔 완료' : `스캔 ${statusLabel}`))
     : isPending ? (stage || `${taskName} 대기 중`) : stage || `${taskName} 진행 중`;
+  if (taskType === 'lazy_scan' && !isRecent) {
+    const target = String(kwargs.series_name || '').trim()
+      || (Array.isArray(kwargs.book_ids) && kwargs.book_ids.length ? `선택 도서 ${kwargs.book_ids.length}권` : '');
+    if (target && !detail.includes(target)) detail += ` · ${target}`;
+  }
   return { title, detail };
 }
 
@@ -122,6 +185,11 @@ function systemWarningItemHtml(warning) {
     </div><span class="scan-activity-item-time">경고</span></div>`;
 }
 
+// Keep queue history intact; root outages have a dedicated problem card with a grace period.
+function isRootUnavailableFailure(task) {
+  return task?.status === 'failed' && String(task.stage || '').includes('[root_unreachable]');
+}
+
 function renderScanActivity(data) {
   latestSystemStatus = data;
   const button = document.getElementById('btn-scan-activity');
@@ -135,14 +203,17 @@ function renderScanActivity(data) {
     ? data.raw_status.recent_book_scans
     : [];
   const recentLibraryScans = Array.isArray(data?.raw_status?.recent_library_scans)
-    ? data.raw_status.recent_library_scans
+    ? data.raw_status.recent_library_scans.filter(task => !isRootUnavailableFailure(task))
     : [];
   const metadataActivities = Array.isArray(data?.raw_status?.metadata_activities)
     ? data.raw_status.metadata_activities
     : [];
   const isActive = Boolean(data?.success && data?.is_active);
   const systemWarnings = Array.isArray(data?.system_warnings) ? data.system_warnings : [];
-  const hasWarning = systemWarnings.length > 0;
+  const problemCards = Array.isArray(data?.problem_cards) ? data.problem_cards : [];
+  const warningCount = systemWarnings.length + problemCards.length;
+  const hasWarning = warningCount > 0;
+  initNotificationCards(list, { refresh: refreshSystemStatus });
   button.classList.toggle('is-active', isActive);
   button.classList.toggle('has-warning', hasWarning);
   document.querySelectorAll('[data-role="scan-activity-mirror"]').forEach(el => {
@@ -166,8 +237,37 @@ function renderScanActivity(data) {
       pending: false,
     }));
   }
-  button.title = tasks.length > 0 ? `스캔 활동 ${tasks.length}건` : '스캔 활동';
-  if (hasWarning) button.title += ` · 경고 ${systemWarnings.length}건`;
+  // The queue status intentionally exposes only a short completion window.
+  // Panel history is read separately; do not feed old history into list-refresh logic.
+  const present = new Set(tasks.map(({task}) => activityIdentity(task)));
+  activityDetails.history.forEach(task => {
+    if (!present.has(activityIdentity(task))) {
+      present.add(activityIdentity(task));
+      tasks.push({task, pending:false, recent:true});
+    }
+  });
+  tasks.sort((a,b) => Number(Boolean(a.recent)) - Number(Boolean(b.recent))
+    || (a.recent && b.recent ? (parseServerDateTime(b.task.finished_at)?.getTime() || 0) - (parseServerDateTime(a.task.finished_at)?.getTime() || 0) : 0));
+  const visible = tasks.filter(({task,recent}) => !recent || !dismissedActivity.has(activityIdentity(task)));
+  currentActivityTasks = visible;
+  const attention = visible.filter(({task,recent}) => recent && ['failed','cancelled'].includes(task.status));
+  const jobs = visible.filter(item => !item.recent);
+  const counts = { all: visible.length + warningCount, attention: attention.length + warningCount, jobs: jobs.length };
+  const labels = { all:'전체', attention:'확인 필요', jobs:'작업' };
+  document.querySelectorAll('[data-scan-tab]').forEach(el => {
+    const tab = el.dataset.scanTab;
+    el.textContent = `${labels[tab]} ${counts[tab]}`;
+    el.setAttribute('aria-pressed', String(tab === activityTab));
+  });
+  const clear = document.getElementById('btn-clear-scan-activity');
+  if (clear) clear.disabled = !visible.some(({task,recent}) => recent && task.status === 'completed');
+  const indicator = document.getElementById('scan-activity-indicator');
+  if (indicator) { indicator.textContent = counts.attention || jobs.length || ''; indicator.classList.toggle('has-count', Boolean(counts.attention || jobs.length)); }
+  button.classList.toggle('has-warning', counts.attention > 0);
+  renderUpcomingActivity();
+  button.title = counts.all > 0 ? `스캔 활동 ${counts.all}건` : '스캔 활동';
+  if (counts.attention) button.title += ` · 확인 필요 ${counts.attention}건`;
+  document.querySelectorAll('[data-role="scan-activity-mirror"]').forEach(el=>el.classList.toggle('has-warning',counts.attention>0));
   const activeMetadataCount = metadataActivities.filter(task => task?.status === 'running').length;
   const recentMetadataCount = metadataActivities.filter(task => task?.status !== 'running').length;
   const failedMetadataCount = metadataActivities.filter(task => task?.status === 'failed').length;
@@ -179,19 +279,28 @@ function renderScanActivity(data) {
         : recentMetadataCount ? `자동 메타데이터 수집 완료 ${recentMetadataCount}건`
         : recentLibraryScans.length ? `최근 카테고리 스캔 ${recentLibraryScans.length}건`
           : recentBookScans.length ? `최근 도서 스캔 ${recentBookScans.length}건`
-            : tasks.length ? '실행 중' : '대기 중';
-  if (hasWarning) summary.textContent += ` · 경고 ${systemWarnings.length}건`;
-  const warningsHtml = systemWarnings.map(systemWarningItemHtml).join('');
-  if (tasks.length === 0) {
+            : jobs.length ? '실행 중' : visible.length ? `최근 이력 ${visible.length}건` : '대기 중';
+  if (counts.attention) summary.textContent += ` · 확인 필요 ${counts.attention}건`;
+  const warningsHtml = activityTab === 'jobs' ? '' : systemWarnings.map(systemWarningItemHtml).join('') + problemCards.map(card => notificationItemHtml({
+    id: card.group_key, kind: 'problem', tone: card.severity === 'action_required' ? 'error' : 'notice',
+    source: card.source, title_key: card.title_key,
+    raw_detail: `${card.db_type} · 카테고리 ${card.library_id ?? '-'} · ${card.open_count}건`,
+    updated_at: card.last_seen_at, card, actions: card.actions,
+  })).join('');
+  let filtered = activityTab === 'jobs' ? jobs : activityTab === 'attention' ? attention : visible;
+  const more = activityTab === 'all' && !activityHistoryExpanded && filtered.filter(item => item.recent).length > 3;
+  if (more) { let recentCount=0; filtered=filtered.filter(item => !item.recent || ++recentCount<=3); }
+  if (filtered.length === 0) {
     list.innerHTML = warningsHtml || `
       <div class="scan-activity-empty">
         <i class="fa-regular fa-circle-check" aria-hidden="true"></i>
-        <span>진행 중인 스캔이 없습니다.</span>
+        <span>${activityTab === 'attention' ? '확인이 필요한 항목이 없습니다.' : activityTab === 'jobs' ? '진행·대기 중인 작업이 없습니다.' : '표시할 스캔 활동이 없습니다.'}</span>
       </div>`;
+    restoreCardExpansions(list);
     return;
   }
 
-  list.innerHTML = warningsHtml + tasks.map(({ task, pending: isPending, recent: isRecent }) => {
+  list.innerHTML = warningsHtml + filtered.map(({ task, pending: isPending, recent: isRecent }) => {
     const info = getScanActivityTaskInfo(task, isPending, isRecent);
     const recentStatus = task?.status || 'completed';
     const itemStateClass = isPending ? ' is-pending'
@@ -202,9 +311,15 @@ function renderScanActivity(data) {
       : isRecent
         ? (recentStatus === 'completed' ? 'fa-circle-check' : 'fa-circle-exclamation')
         : 'fa-circle-notch fa-spin';
+    const started = parseServerDateTime(task.started_at)?.getTime();
+    const finished = parseServerDateTime(task.finished_at)?.getTime();
+    const duration = Number.isFinite(started) && Number.isFinite(finished) && finished >= started
+      ? formatScanActivityElapsed({elapsed_seconds:(finished-started)/1000}) : '';
     const elapsed = isRecent
-      ? (recentStatus === 'failed' ? '실패' : recentStatus === 'cancelled' ? '취소' : '완료')
+      ? `${recentStatus === 'failed' ? '실패' : recentStatus === 'cancelled' ? '중단' : '완료'}${duration ? ` · ${duration}` : ''}`
       : isPending ? '' : formatScanActivityElapsed(task);
+    const libId=task.kwargs?.library_id,dbType=task.kwargs?.db_type || 'general';
+    const actions = libId != null ? `<div class="scan-activity-item-actions"><button type="button" data-scan-open="${escapeActivityAttribute(libId)}" data-db-type="${escapeActivityAttribute(dbType)}">카테고리 열기</button>${isRecent && recentStatus !== 'completed' && task.type === 'library_scan' && window.currentUser?.role === 'admin' ? `<button type="button" data-notify-action="rescan_library" data-library-id="${escapeActivityAttribute(libId)}" data-db-type="${escapeActivityAttribute(dbType)}">재스캔</button>` : ''}</div>` : '';
     return `
       <div class="scan-activity-item${itemStateClass}">
         <span class="scan-activity-item-icon">
@@ -213,10 +328,13 @@ function renderScanActivity(data) {
         <div class="scan-activity-item-copy">
           <div class="scan-activity-item-title" title="${escapeActivityAttribute(info.title)}">${escapeActivityText(info.title)}</div>
           <div class="scan-activity-item-detail" title="${escapeActivityAttribute(info.detail)}">${escapeActivityText(info.detail)}</div>
+          ${isRecent && task.finished_at ? `<div class="scan-activity-item-date">${escapeActivityText(formatRelativeTime(task.finished_at, {fallback:''}))}</div>` : ''}
+          ${actions}
         </div>
-        <span class="scan-activity-item-time">${escapeActivityText(elapsed)}</span>
+        <span class="scan-activity-item-side"><span class="scan-activity-item-time">${escapeActivityText(elapsed)}</span>${isRecent ? `<button type="button" class="scan-activity-dismiss" data-scan-dismiss="${escapeActivityAttribute(activityIdentity(task))}" aria-label="이 활동 숨기기" title="표시만 숨깁니다. 서버 이력은 유지됩니다.">×</button>` : ''}</span>
       </div>`;
-  }).join('');
+  }).join('') + (more ? '<button type="button" class="scan-activity-more" data-scan-history-more>최근 이력 더 보기</button>' : '');
+  restoreCardExpansions(list);
 }
 
 function positionScanActivityPopover() {
@@ -225,12 +343,12 @@ function positionScanActivityPopover() {
   if (!button || !popover || popover.hidden) return;
   const rect = button.getBoundingClientRect();
   const top = Math.min(Math.max(8, rect.bottom + 8), Math.max(8, innerHeight - 160));
-  const width = Math.min(360, innerWidth - 16);
+  const width = Math.min(410, innerWidth - 16);
   Object.assign(popover.style, {
     position: 'fixed', width: `${width}px`,
     top: `${top}px`, bottom: 'auto', right: 'auto',
     left: `${Math.max(8, Math.min(rect.right - width, innerWidth - width - 8))}px`,
-    maxHeight: `${Math.max(0, innerHeight - top - 8)}px`, overflowY: 'auto',
+    maxHeight: `${Math.max(0, Math.min(620, innerHeight - top - 8))}px`, overflowY: 'hidden',
   });
 }
 
@@ -244,6 +362,7 @@ function setScanActivityPopoverOpen(open) {
   if (open) {
     positionScanActivityPopover();
     refreshSystemStatus();
+    loadActivityDetails();
   }
 }
 
@@ -253,6 +372,10 @@ function initScanActivityPopover() {
   const popover = document.getElementById('scan-activity-popover');
   if (!button || !closeButton || !popover || button.dataset.bound === '1') return;
   button.dataset.bound = '1';
+  try {
+    const ids=JSON.parse(localStorage.getItem(activityStorageKey()) || '[]');
+    if(Array.isArray(ids))dismissedActivity=new Set(ids.filter(id=>typeof id==='string').slice(-400));
+  } catch { /* Ignore unavailable or corrupt browser storage. */ }
   // Sticky headers can establish a containing block for fixed descendants.
   document.body.appendChild(popover);
   window.addEventListener('resize', positionScanActivityPopover);
@@ -261,6 +384,28 @@ function initScanActivityPopover() {
     setScanActivityPopoverOpen(popover.hidden);
   });
   closeButton.addEventListener('click', () => setScanActivityPopoverOpen(false));
+  const footer=document.querySelector('.scan-activity-footer');
+  if(footer)footer.hidden=window.currentUser?.role !== 'admin';
+  popover.addEventListener('click', async event => {
+    const tab=event.target.closest('[data-scan-tab]');
+    if(tab){activityTab=tab.dataset.scanTab;if(latestSystemStatus)renderScanActivity(latestSystemStatus);}
+    const dismiss=event.target.closest('[data-scan-dismiss]');
+    if(dismiss)hideActivityItems([dismiss.dataset.scanDismiss]);
+    if(event.target.closest('#btn-clear-scan-activity'))hideActivityItems(currentActivityTasks.filter(({task,recent})=>recent&&task.status==='completed').map(({task})=>activityIdentity(task)));
+    if(event.target.closest('[data-scan-history-more]')){activityHistoryExpanded=true;if(latestSystemStatus)renderScanActivity(latestSystemStatus);}
+    if(event.target.closest('[data-scan-upcoming-more]')){activityUpcomingExpanded=!activityUpcomingExpanded;renderUpcomingActivity();}
+    const open=event.target.closest('[data-scan-open]');
+    if(open){
+      setScanActivityPopoverOpen(false);
+      if(open.dataset.dbType!==state.currentLibraryType)await window.switchLibraryType?.(open.dataset.dbType);
+      window.selectCategory?.(String(open.dataset.scanOpen));
+    }
+    if(event.target.closest('#btn-scan-activity-settings')){
+      setScanActivityPopoverOpen(false);
+      window.selectCategory?.('settings');
+      document.querySelector('.settings-tab-btn[data-settings-tab="schedule"]')?.click();
+    }
+  });
   popover.addEventListener('click', event => event.stopPropagation());
   document.addEventListener('click', () => setScanActivityPopoverOpen(false));
   document.addEventListener('keydown', event => {
@@ -547,11 +692,13 @@ export function startSystemStatusPolling(type = state.currentLibraryType || 'gen
   if (statusIntervalId) return refreshStatusPoll?.();
   pollingProbe = probe;
   const generation = ++statusPollGeneration;
-  let inFlight = false;
+  let inFlight = null;
+  let queuedRefresh = null;
 
-  const poll = async () => {
-    if (inFlight || generation !== statusPollGeneration) return;
-    inFlight = true;
+  const poll = () => {
+    if (generation !== statusPollGeneration) return Promise.resolve();
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
     try {
       const res = await fetch(`/api/system/status?type=${encodeURIComponent(pollingScanType || 'general')}`, { cache: 'no-store' });
       const body = await res.text();
@@ -608,12 +755,19 @@ export function startSystemStatusPolling(type = state.currentLibraryType || 'gen
         console.warn('[ScanSpinner] 상태 조회 실패:', err);
         lastStatusErrorAt = now;
       }
-    } finally {
-      inFlight = false;
     }
+    })().finally(() => { inFlight = null; });
+    return inFlight;
   };
 
-  refreshStatusPoll = poll;
+  refreshStatusPoll = () => {
+    if (queuedRefresh) return queuedRefresh;
+    if (!inFlight) return poll();
+    // Timer ticks join the pending request; explicit refreshes share one
+    // follow-up so a newly queued scan cannot be missed by an older response.
+    queuedRefresh = inFlight.then(() => poll()).finally(() => { queuedRefresh = null; });
+    return queuedRefresh;
+  };
   // Reload/open checks resume existing work without enqueueing a scan.
   statusIntervalId = setInterval(poll, STATUS_POLL_INTERVAL_MS);
   return poll();

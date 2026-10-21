@@ -1,12 +1,13 @@
 import { state } from './state.js';
 import * as api from './api.js?rev=20260920-scan-response-v1';
 import { renderHistoryGrid, renderBooksGrid, appendBooksGrid, prependBooksGrid } from './ui.js?v=20260929-cover-url-cache-fix-v1';
-import { openReader } from './viewer.js?rev=20260927-tts-session-v8';
+import { openReader } from './reader_loader.js';
 import { initInfiniteScrollObserver } from './infinite_scroll.js';
 import { stripLeadingBracketTags } from './series_display.js';
 import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js';
 import { BookListRefreshState, getLoadedPageRange } from './book_list_refresh_state.js';
 import { resolveSearchNavigation } from './search_navigation.js?rev=20260921-global-search-v1';
+import { toggleLibrarySortMenu } from './library_sort_menu.js';
 
 let filterDebounceTimer = null;
 let totalsRequestSerial = 0;
@@ -19,6 +20,9 @@ function currentListQueryKey() {
     state.currentLibraryType,
     String(state.currentLibraryId || ''),
     state.searchQuery || '',
+    state.advancedSearch || null,
+    state.filterMode || 'and',
+    state.readFilter || '',
     state.currentSortDirection || 'asc',
     state.groupMode,
     state.authorKeyFilter || '',
@@ -27,6 +31,22 @@ function currentListQueryKey() {
     state.showMetadataConnectionStatus === true,
   ]);
 }
+
+window.addEventListener('bookoasis:reading-reset', event => {
+  if (event.detail?.type && event.detail.type !== state.currentLibraryType) return;
+  for (const key of bookListRefreshState.versionsByList.keys()) bookListRefreshState.invalidate(key);
+  window.invalidateDashboardData?.(event.detail?.type);
+});
+window.addEventListener('bookoasis:rating-changed', event => {
+  if (event.detail?.type !== state.currentLibraryType) return;
+  for (const key of bookListRefreshState.versionsByList.keys()) bookListRefreshState.invalidate(key);
+  if (['rating_desc', 'rating_asc'].includes(state.currentSortDirection)) refreshBooksListIfStale();
+});
+document.addEventListener('viewer-progress-flushed', event => {
+  if (!state.readFilter || event.detail?.type !== state.currentLibraryType) return;
+  for (const key of bookListRefreshState.versionsByList.keys()) bookListRefreshState.invalidate(key);
+  refreshBooksListIfStale();
+});
 
 // 카테고리·검색·정렬을 바꿀 때 이전 목록 요청이 모바일 화면을 다시 그리지 않도록 취소한다.
 // Abort만으로 충분하지 않은 캐시 응답도 있으므로 현재 요청인지 함께 확인한다.
@@ -181,9 +201,14 @@ export function normalizeMetadataToken(token) {
 }
 
 
-export function updateLibraryTotalCount(items, totals = null) {
+function setLibraryCountText(text, filterText = text) {
   const countSpan = document.getElementById('library-total-count');
-  if (!countSpan) return;
+  if (countSpan) countSpan.innerText = text;
+  const filterCount = document.getElementById('active-filter-result-count');
+  if (filterCount) filterCount.innerText = filterText;
+}
+
+export function updateLibraryTotalCount(items, totals = null) {
   const serverSeriesCount = Number(totals?.total_series_count);
   const serverBookCount = Number(totals?.total_book_count);
   const hasServerTotals = Number.isFinite(serverSeriesCount) && Number.isFinite(serverBookCount);
@@ -199,7 +224,7 @@ export function updateLibraryTotalCount(items, totals = null) {
       ? 'book_list.total_count_video'
       : 'book_list.total_count';
 
-  countSpan.innerText = i18n.t(i18nKey, {seriesCount: seriesCount.toLocaleString(), bookCount: bookCount.toLocaleString()});
+  setLibraryCountText(i18n.t(i18nKey, {seriesCount: seriesCount.toLocaleString(), bookCount: bookCount.toLocaleString()}));
 }
 
 // 1. 도서 시리즈 목록 로드
@@ -237,6 +262,8 @@ export async function loadBooksList(isAppend = false, startPage = null, options 
     const limit = state.LIMIT || 60;
     const targetPage = isAppend ? state.currentPage : (startPage || 1);
     const requestFilters = {
+      advanced: state.advancedSearch,
+      filterMode: state.filterMode,
       type: state.currentLibraryType,
       libraryId: state.currentLibraryId,
       search: state.searchQuery || '',
@@ -253,12 +280,13 @@ export async function loadBooksList(isAppend = false, startPage = null, options 
       // 스캔 후 자동 갱신(keepCurrentGrid)은 기존 그리드를 유지한 채 교체해 깜빡임을 줄인다.
       if (!options.keepCurrentGrid) {
         container.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> ${i18n.t('book_list.loading')}</div>`;
-        const countSpan = document.getElementById('library-total-count');
-        if (countSpan) countSpan.innerText = '';
+        setLibraryCountText('', '결과 조회 중…');
       }
     }
 
     const data = options.preloadedData || await api.fetchBooksList({
+      advanced: requestFilters.advanced,
+      filterMode: requestFilters.filterMode,
       type: requestFilters.type,
       libraryId: requestFilters.libraryId,
       page: targetPage,
@@ -303,11 +331,15 @@ export async function loadBooksList(isAppend = false, startPage = null, options 
       api.fetchBooksTotals({...requestFilters, signal: request.controller.signal})
         .then((totals) => {
           const isSameList = request.key === currentListQueryKey();
-          if (totalsSerial === totalsRequestSerial && isSameList && totals.success) {
-            updateLibraryTotalCount([], totals);
+          if (totalsSerial === totalsRequestSerial && isSameList) {
+            if (totals.success) updateLibraryTotalCount([], totals);
+            else setLibraryCountText('', '결과 수 조회 실패');
           }
         })
-        .catch((error) => console.warn('[Book-List] 전체 수량 조회 실패:', error));
+        .catch((error) => {
+          if (totalsSerial === totalsRequestSerial && request.key === currentListQueryKey()) setLibraryCountText('', '결과 수 조회 실패');
+          console.warn('[Book-List] 전체 수량 조회 실패:', error);
+        });
     }
 
     state.hasMore = !!data.has_more;
@@ -371,6 +403,8 @@ export async function loadPreviousBooksPage() {
   try {
     const limit = state.LIMIT || 60;
     const data = await api.fetchBooksList({
+      advanced: state.advancedSearch,
+      filterMode: state.filterMode,
       type: state.currentLibraryType,
       libraryId: state.currentLibraryId,
       page: targetPage,
@@ -461,6 +495,14 @@ export async function loadReadingHistory() {
 
 // 3. 도서 검색 필터링 (클라이언트 사이드 메모리 내 즉시 필터링)
 export function filterBooks() {
+  if (state.advancedSearch) {
+    state.advancedSearch = {...state.advancedSearch, series: String(document.getElementById('library-search')?.value || '').trim()};
+    state.searchQuery = state.advancedSearch.series.toLowerCase();
+    history.replaceState({...history.state, searchQuery:state.advancedSearch.series, advancedSearch: state.advancedSearch}, '', location.href);
+    window.dispatchEvent(new Event('bookoasis:advanced-search-changed'));
+    loadBooksList(false);
+    return;
+  }
   const searchInput = document.getElementById('library-search');
   const rawQuery = String(searchInput?.value || '').trim();
   const query = rawQuery.toLowerCase();
@@ -526,6 +568,8 @@ export function updateSearchActionButtonUI(query) {
 }
 
 export function clearLibrarySearchQuery() {
+  state.advancedSearch = null;
+  window.dispatchEvent(new Event('bookoasis:advanced-search-changed'));
   if (filterDebounceTimer) {
     clearTimeout(filterDebounceTimer);
     filterDebounceTimer = null;
@@ -565,6 +609,11 @@ export function updateSortButtonUI() {
   } else if (currentSort === 'date_asc') {
     currentLabelKey = 'book_list.sort_date_asc';
     btn.innerHTML = `<i class="fa-solid fa-sort-numeric-up"></i> <span class="sr-only">${i18n.t('book_list.sort_date_asc')}</span>`;
+  } else if (currentSort === 'rating_desc' || currentSort === 'rating_asc') {
+    const label = currentSort === 'rating_desc' ? '내 별점 높은 순' : '내 별점 낮은 순';
+    btn.innerHTML = `<i class="fa-solid fa-star"></i><span class="sr-only">${label}</span>`;
+    btn.title = `${i18n.t('header.sort_title')}: ${label}`;
+    return;
   }
   btn.title = `${i18n.t('header.sort_title')}: ${i18n.t(currentLabelKey)}`;
 }
@@ -572,15 +621,10 @@ export function updateSortButtonUI() {
 export function toggleLibrarySort() {
   const btn = document.getElementById('btn-lib-sort');
   if (!btn) return;
+  toggleLibrarySortMenu(btn, { current: state.currentSortDirection, onSelect: applyLibrarySort });
+}
 
-  const cycle = {
-    'asc': 'desc',
-    'desc': 'date_desc',
-    'date_desc': 'date_asc',
-    'date_asc': 'asc'
-  };
-
-  const newSort = cycle[state.currentSortDirection] || 'asc';
+function applyLibrarySort(newSort) {
   state.currentSortDirection = newSort;
   localStorage.setItem('library_sort_direction', newSort);
 

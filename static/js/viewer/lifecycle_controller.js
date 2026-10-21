@@ -8,6 +8,7 @@ import { tryAutoFullscreenOnOpen, exitFullscreenIfNeeded } from './fullscreen_co
 import { shouldAutoFullscreenForFormat } from './platform_profile.js';
 import { flushProgress, resetPreloadState, setProgressSnapshotProvider } from '../viewer_progress.js?rev=20260927-tts-session-v8';
 import { setAnnotationUiEnabled } from './annotation_ui.js?rev=20260922-reader-session-v45';
+import { rememberOpenViewer, forgetOpenViewer } from './open_session.js';
 
 let deps = {
   initViewerSeekBar: () => {},
@@ -16,7 +17,7 @@ let deps = {
 };
 
 let activeViewerInstance = null;
-setProgressSnapshotProvider(() => activeViewerInstance?.prepareForClose?.());
+setProgressSnapshotProvider(options => activeViewerInstance?.prepareForClose?.(options));
 
 function resetViewerSeekbarForOpen() {
   const slider = document.getElementById('viewer-page-slider');
@@ -77,6 +78,7 @@ export function openReader(bookId, format, title, pagesRead, totalPages) {
   syncReaderSettingsUI();
   const viewerModal = document.getElementById('media-viewer-modal');
   if (!viewerModal) return;
+  rememberOpenViewer(bookId, fmt, title, pagesRead, totalPages);
   // 텍스트 뷰어는 도구 모음 표시 여부와 무관하게 첫 입력부터 본문이 직접 포인터를 받는다.
   viewerModal.dataset.viewerFormat = fmt;
 
@@ -213,27 +215,37 @@ export function openReader(bookId, format, title, pagesRead, totalPages) {
   }));
 }
 
-export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
+export function closeMediaViewer(triggerBack = true, isTransitioning = false, options = {}) {
   const closingBookId = state.activeBookId;
   const closingLibraryType = state.currentLibraryType;
   const viewerModal = document.getElementById('media-viewer-modal');
   if (!viewerModal) return Promise.resolve();
   if (viewerModal.style.display === 'none' && !activeViewerInstance) return Promise.resolve();
+  if (!options.keepFullscreen) forgetOpenViewer();
   // The close button hides the modal before popstate fires. Retain that fact so
   // routing can restore the underlying view just as it does for browser Back.
   if (triggerBack && !isTransitioning && window.location.hash === '#viewer') {
     viewerModal.dataset.pendingHistoryClose = 'true';
   }
 
+  let readPositionPromise;
   if (activeViewerInstance && typeof activeViewerInstance.prepareForClose === 'function') {
     try {
-      activeViewerInstance.prepareForClose();
+      readPositionPromise = activeViewerInstance.prepareForClose();
     } catch (e) {
       console.warn('[Viewer-Core] Error preparing viewer for close:', e);
     }
   }
+  // Start both requests while text/EPUB DOM and its registered provider exist.
+  const flushPromise = Promise.all([flushProgress(false, true), readPositionPromise]);
 
-  const fullscreenExitPromise = exitFullscreenIfNeeded();
+  // Preserve only fullscreen owned by this viewer, never an unrelated element.
+  // Keeping the modal mounted/visible also avoids gesture-gated re-entry.
+  const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+  const keepFullscreen = !!options?.keepFullscreen && !!fullscreenElement
+    && (fullscreenElement === viewerModal || viewerModal.contains(fullscreenElement)
+      || fullscreenElement === document.documentElement || fullscreenElement === document.body);
+  const fullscreenExitPromise = keepFullscreen ? Promise.resolve() : exitFullscreenIfNeeded();
 
   if (!isTransitioning) {
     const menu = document.getElementById('comic-overlay-menu');
@@ -245,13 +257,15 @@ export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
       delete menu.dataset.iosBodyLock;
     }
 
-    viewerModal.classList.remove('fullscreen-mode');
-    viewerModal.style.display = 'none';
+    if (!keepFullscreen) {
+      viewerModal.classList.remove('fullscreen-mode');
+      viewerModal.style.display = 'none';
+    }
     const loadingOverlay = document.getElementById('viewer-common-overlay');
     if (loadingOverlay) loadingOverlay.style.display = 'none';
     document.dispatchEvent(new CustomEvent('viewer-closed'));
     const fullscreenIcon = document.getElementById('fullscreen-icon');
-    if (fullscreenIcon) fullscreenIcon.className = 'fa-solid fa-expand';
+    if (fullscreenIcon && !keepFullscreen) fullscreenIcon.className = 'fa-solid fa-expand';
 
     // body 및 documentElement 인라인 스크롤 락 스타일만 안전 소거 (CSS 변수 유실 방지)
     document.body.style.removeProperty('overflow');
@@ -313,7 +327,6 @@ export function closeMediaViewer(triggerBack = true, isTransitioning = false) {
     clearPdfViewer();
   }
 
-  const flushPromise = flushProgress(false, true);
   resetPreloadState();
 
   const reloadData = () => {

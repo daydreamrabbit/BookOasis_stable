@@ -111,6 +111,7 @@ function defaultSettingsTab() {
 }
 
 function isAccessibleSettingsTab(tabId) {
+  if (tabId === 'viewer') return false; // Use the reader's live appearance/margin controls.
   if (!tabId || !document.getElementById(`settings-tab-${tabId}`)) return false;
   return isAdminUser() || !ADMIN_ONLY_SETTINGS_TABS.includes(tabId);
 }
@@ -133,10 +134,12 @@ export function getPreferredSettingsTab() {
   const historyTab = window.history?.state && String(window.history.state.libraryId || '') === 'settings'
     ? window.history.state.settingsTab
     : null;
+  if (historyTab === 'viewer') return 'my';
   if (isAccessibleSettingsTab(historyTab)) return historyTab;
 
   try {
     const storedTab = sessionStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
+    if (storedTab === 'viewer') return 'my';
     if (isAccessibleSettingsTab(storedTab)) return storedTab;
   } catch (e) {}
 
@@ -156,6 +159,7 @@ export function applySettingsTabAccessControl() {
 
 // 환경설정 내부 탭 전환 함수
 export function switchSettingsTab(tabId) {
+  if (tabId === 'viewer') tabId = 'my';
   initSettingsTabDelegation();
   // 일반 사용자는 어드민 전용 탭에 접근하지 못하도록 차단 및 'about'으로 우회
   // (버튼 자체는 applySettingsTabAccessControl()이 이미 숨기지만, URL 직접 조작 등

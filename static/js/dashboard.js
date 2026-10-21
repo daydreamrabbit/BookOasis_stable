@@ -1,4 +1,6 @@
 // dashboard.js – 대시보드 데이터 로드 및 수평 휠/버튼 스크롤 제어
+import './dashboard_welcome.js';
+import { withPluginGlobals } from './utils/script_loader.js';
 import { state } from './state.js';
 import * as api from './api.js';
 import { renderDashboardHistory, renderDashboardRecentlyAdded } from './ui.js?v=20260922-series-progress-v1';
@@ -14,13 +16,13 @@ const dashboardInFlightByType = new Map();
 const homeLayoutModeByType = new Map();
 
 function hasDashboardContent(row) {
-  return !!row && (row.__dashboardReady === true || !!row.querySelector('.book-card'));
+  return !!row && ((row.__dashboardReady === true && row.childElementCount > 0) || !!row.querySelector('.book-card'));
 }
 
 function renderDashboardRowIfChanged(row, targetType, books, render) {
   if (!row) return;
   const signature = `${targetType}:${JSON.stringify(books)}`;
-  if (row.__dashboardReady === true && row.__dashboardSignature === signature) return;
+  if (hasDashboardContent(row) && row.__dashboardSignature === signature) return;
   render(books);
   row.__dashboardSignature = signature;
   row.__dashboardReady = true;
@@ -77,6 +79,7 @@ export function loadDashboardData(options = {}) {
   if (forceRefresh) dashboardDataCacheByType.delete(targetType);
 
   updateDashboardSectionLabels(targetType);
+  resumeHomeWidgetData(targetType);
   if (isDashboardDataReusable({
     forceRefresh,
     typeSwitched: isTypeSwitched,
@@ -259,6 +262,19 @@ window.loadDashboardData = loadDashboardData;
 
 
 let homeLayoutLoadToken = 0;
+
+function resumeHomeWidgetData(targetType) {
+  const stack = document.getElementById('home-widget-stack');
+  if (stack?.dataset.ssrType !== targetType) return;
+  stack.querySelectorAll('.home-widget-slot[data-widget-kind="plugin"]').forEach(el => {
+    if (el.style.display === 'none') return;
+    const id = `home-widget-content-${el.getAttribute('data-widget-id')}`;
+    const content = document.getElementById(id);
+    if (content && !content.__widgetReady && !content.__widgetLoading) {
+      loadDashboardWidgetData(el.dataset.pluginId, Number(el.dataset.limit) || 10, id, pluginsLoadToken);
+    }
+  });
+}
 
 // 최초 페이지 로드 때 서버가 렌더한 레이아웃과 이후 JS가 갱신한 레이아웃을 기억한다.
 // 같은 타입으로 홈에 다시 들어오면 배치 API를 다시 호출하지 않고 현재 DOM을 재사용한다.
@@ -1036,10 +1052,16 @@ if (!window.__pluginsViewTabDelegationBound) {
 }
 
 async function loadDashboardWidgetData(pluginId, limit, contentId, requestToken) {
-  if (requestToken !== pluginsLoadToken) return;
-
   const container = document.getElementById(contentId);
   if (!container) return;
+  const homeWidget = contentId.startsWith('home-widget-content-');
+  const targetType = state.currentLibraryType;
+  const isCurrent = () => container.isConnected
+    && document.getElementById(contentId) === container
+    && targetType === state.currentLibraryType
+    && (homeWidget || requestToken === pluginsLoadToken);
+  if (!isCurrent() || container.__widgetLoading || container.__widgetReady) return;
+  container.__widgetLoading = true;
 
   try {
     const initialDataElement = container.querySelector('.home-widget-initial-data');
@@ -1053,11 +1075,13 @@ async function loadDashboardWidgetData(pluginId, limit, contentId, requestToken)
       initialDataElement.remove();
     }
     if (!data) {
-      const res = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?type=${state.currentLibraryType}&limit=${limit}`);
+      const res = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?type=${targetType}&limit=${limit}`, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`위젯 조회 실패 (HTTP ${res.status})`);
       data = await res.json();
     }
 
-    if (requestToken !== pluginsLoadToken) return;
+    if (!isCurrent()) return;
+    container.__widgetReady = !!data?.success;
 
     if (data.success && (data.html || data.css)) {
       // 플러그인이 dashboard.html/dashboard.css(선택: dashboard.js)를 제공한 경우 -
@@ -1083,7 +1107,9 @@ async function loadDashboardWidgetData(pluginId, limit, contentId, requestToken)
       if (data.js) {
         try {
           const scriptFn = new Function('pluginId', 'shadowRoot', 'items', data.js);
-          scriptFn(pluginId, shadow, data.items || []);
+          await withPluginGlobals(data.js, () => {
+            if (isCurrent()) return scriptFn(pluginId, shadow, data.items || []);
+          });
         } catch (err) {
           console.error(`[Dashboard] 위젯 스크립트 실행 오류(${pluginId}):`, err);
         }
@@ -1164,7 +1190,9 @@ async function loadDashboardWidgetData(pluginId, limit, contentId, requestToken)
     container.innerHTML = '<div class="plugin-widget-empty">표시할 데이터가 없습니다.</div>';
   } catch (e) {
     console.error(`대시보드 위젯 로드 오류(${pluginId}):`, e);
-    container.innerHTML = '<div class="plugin-widget-error">서버 연결 오류</div>';
+    if (isCurrent()) container.innerHTML = '<div class="plugin-widget-error">서버 연결 오류 · 홈 재진입 시 다시 시도합니다.</div>';
+  } finally {
+    container.__widgetLoading = false;
   }
 }
 

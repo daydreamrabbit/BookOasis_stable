@@ -10,20 +10,19 @@ class BookScanRepository:
     @staticmethod
     def get_book_basic_info_raw(db_type, book_id):
         """도서 단일 행의 시리즈, 경로, 파일 포맷 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT b.id, b.library_id, b.title, b.series_name, b.file_path, b.file_format,
-                   b.cover_image, COALESCE(l.is_remote, 0) AS library_is_remote
-            FROM books b
-            LEFT JOIN libraries l ON l.id = b.library_id
-            WHERE b.id = ?
-            """,
-            (book_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT b.id, b.library_id, b.title, b.series_name, b.file_path, b.file_format,
+                       b.cover_image, COALESCE(l.is_remote, 0) AS library_is_remote
+                FROM books b
+                LEFT JOIN libraries l ON l.id = b.library_id
+                WHERE b.id = ?
+                """,
+                (book_id,)
+            )
+            row = cursor.fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -115,6 +114,8 @@ class BookScanRepository:
                     # series 테이블이 없는 adult DB이거나 구형 스키마인 경우 예외 발생 시 안전하게 스킵
                     pass
 
+            from utils.book_identifiers import save_book_uci
+            save_book_uci(cursor, book_id, meta.get('uci'), placeholder='?')
             conn.commit()
             return True
         except Exception as e:
@@ -128,11 +129,19 @@ class BookScanRepository:
         """파일 내장 메타데이터로 도서의 "비어 있는" 컬럼만 채운다(덮어쓰지 않음, 잠긴 도서는 무변경).
         채운 컬럼 이름 목록을 반환한다."""
         candidates = sanitize_fill_candidates(fields)
-        if not candidates:
+        if not candidates and not (fields or {}).get('uci'):
             return []
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
         try:
+            filled = []
+            if (fields or {}).get('uci'):
+                from utils.book_identifiers import save_book_uci
+                if save_book_uci(cursor, book_id, fields['uci'], placeholder='?', only_if_empty=True):
+                    filled.append('uci')
+            if not candidates:
+                conn.commit()
+                return filled
             columns = list(candidates)
             cursor.execute(
                 f"SELECT COALESCE(metadata_locked, 0) AS is_locked, {', '.join(columns)} FROM books WHERE id = ?",
@@ -140,10 +149,12 @@ class BookScanRepository:
             )
             row = cursor.fetchone()
             if not row or int(row['is_locked'] or 0) == 1:
-                return []
+                conn.commit()
+                return filled
             to_fill = [column for column in columns if is_empty_value(column, row[column])]
             if not to_fill:
-                return []
+                conn.commit()
+                return filled
             # SELECT와 UPDATE 사이에 다른 쓰기가 끼어들어도 덮어쓰지 않도록 UPDATE에도 같은 조건을 둔다.
             assignments = ', '.join(
                 f"{column} = CASE WHEN {empty_guard_sql(column)} THEN ? ELSE {column} END"
@@ -154,7 +165,7 @@ class BookScanRepository:
                 tuple(candidates[column] for column in to_fill) + (book_id,)
             )
             conn.commit()
-            return to_fill
+            return filled + to_fill
         except Exception:
             conn.rollback()
             raise

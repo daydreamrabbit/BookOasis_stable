@@ -6,6 +6,7 @@ import queue
 import sys
 import re
 import weakref
+import collections
 from contextlib import contextmanager
 
 # DB 파일이 저장될 경로 설정 (media_server/db/ 하위)
@@ -19,17 +20,39 @@ DB_AUDIOBOOK_PATH = os.path.join(DB_DIR, 'media_audiobook.db')
 DB_VIDEO_PATH = os.path.join(DB_DIR, 'media_video.db')
 SQLITE_BUSY_TIMEOUT_MS = int(os.environ.get('SQLITE_BUSY_TIMEOUT_MS', '60000') or '60000')
 
-def _reclaim_leaked_slot(pool, returned_flag):
+# GC 안전망이 회수할 슬롯 대기열. GC 콜백(weakref.finalize)은 아무 스레드·아무 시점에나 돌 수 있어서, 그 스레드가
+# 이미 pool.lock을 쥐고 있으면(threading.Lock은 재진입 불가) 콜백 안에서 락을 잡는 순간 교착된다. 그래서 콜백은
+# 여기에 넣기만 하고, 실제 회수(allocated 차감·원본 연결 닫기)는 다음 get_connection()/get_stats()가 락 밖에서 한다(2.9.6).
+_pending_reclaims = collections.deque()
+
+
+def _reclaim_leaked_slot(pool, returned_flag, raw_conn=None):
     """호출부가 conn.close()를 한 번도 못 부르고(예외가 close() 도달 전에 터짐) 커넥션
     객체가 GC되는 경우의 안전망. close()/명시적 폐기 경로를 거쳐 이미 반납·회수된
     커넥션은 returned_flag[0]이 True라 여기서 아무 일도 하지 않는다 - 정상 반납분을
-    이중 차감하지 않기 위한 가드."""
+    이중 차감하지 않기 위한 가드. raw_conn은 MariaDB처럼 감싼 원본 연결이 따로 있을 때 닫을 대상."""
     if returned_flag and not returned_flag[0]:
         returned_flag[0] = True
+        _pending_reclaims.append((pool, raw_conn))
+
+
+def _drain_pending_reclaims():
+    """GC 안전망이 넣어 둔 누수 슬롯을 회수한다. 반드시 pool.lock을 쥐지 않은 상태에서 부른다."""
+    while True:
+        try:
+            pool, raw_conn = _pending_reclaims.popleft()
+        except IndexError:
+            return
+        if raw_conn is not None:
+            try:
+                raw_conn.close()
+            except Exception:
+                pass
         try:
             with pool.lock:
                 pool.allocated = max(0, pool.allocated - 1)
-            print(f"[SQLiteConnectionPool] Reclaimed leaked connection slot (GC safety net): {pool.db_path}")
+            target = getattr(pool, 'db_path', None) or getattr(pool, 'db_type', '')
+            print(f"[DBPool] Reclaimed leaked connection slot (GC safety net): {target}")
         except Exception:
             pass
 
@@ -81,11 +104,13 @@ class SQLiteConnectionPool:
         self.lock = threading.Lock()
 
     def get_connection(self, wait_timeout=30.0):
+        _drain_pending_reclaims()
         # 1. 풀에 유휴 커넥션이 있는지 확인
         while True:
             try:
                 conn = self.pool.get_nowait()
                 conn._is_returned = False
+                conn._returned_flag[0] = False
                 # 풀에서 꺼낸 커넥션이 썩었는지(Stale/malformed/disk I/O) 즉시 핑 검사
                 try:
                     conn.execute("SELECT 1;")
@@ -123,6 +148,7 @@ class SQLiteConnectionPool:
         try:
             conn = self.pool.get(block=True, timeout=max(0.01, float(wait_timeout)))
             conn._is_returned = False
+            conn._returned_flag[0] = False
             return conn
         except queue.Empty:
             raise sqlite3.OperationalError(f"Database connection pool exhausted. Timeout waiting for connection ({wait_timeout}s).")
@@ -172,6 +198,7 @@ class SQLiteConnectionPool:
             self.pool = new_pool
 
     def get_stats(self):
+        _drain_pending_reclaims()
         with self.lock:
             allocated = self.allocated
             max_size = self.max_size
@@ -464,10 +491,16 @@ class PooledMariaDBConnectionWrapper(MariadbConnectionWrapper):
         super().__init__(raw_conn)
         self._pool = pool
         self._is_closed = False
+        # SQLite PooledConnection과 같은 GC 안전망(2.9.6 - 예전엔 SQLite에만 있어서, MariaDB에서 close() 전에
+        # 예외가 나면 슬롯이 워커가 재시작될 때까지 영구히 빠졌다). wrapper 자신이 아니라 flag·원본만 넘겨 순환참조를 피한다.
+        self._closed_flag = [False]
+        if pool is not None:
+            weakref.finalize(self, _reclaim_leaked_slot, pool, self._closed_flag, raw_conn)
 
     def close(self):
         if not self._is_closed:
             self._is_closed = True
+            self._closed_flag[0] = True
             if self._pool:
                 self._pool.release(self._conn)
             else:
@@ -509,6 +542,7 @@ class MariaDBConnectionPool:
         )
 
     def get_connection(self, wait_timeout=30.0):
+        _drain_pending_reclaims()
         try:
             conn = self.pool.get(block=True, timeout=0.01)
             try:
@@ -575,6 +609,7 @@ class MariaDBConnectionPool:
                     break
 
     def get_stats(self):
+        _drain_pending_reclaims()
         with self.lock:
             allocated = self.allocated
             max_size = self.max_size

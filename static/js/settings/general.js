@@ -6,6 +6,7 @@
 // 로드/저장 흐름과, 그 폼에서 발생하는 이벤트를 각 모듈로 위임하는 역할만 담당한다.
 import { state } from '../state.js';
 import * as api from '../api.js';
+import { syncCoreDetailOptions, shouldSaveCoreDetailOption } from './core_detail_options.js';
 import { changeDashboardTheme, populateCustomThemeOptions, rescanCustomThemesUi, toggleDashboardInsightsSetting } from './theme_settings.js';
 import { startCoverStorageMigration } from './cover_storage_settings.js';
 import { getTempShortcut, setTempShortcut, initShortcutRecorderEvents } from './shortcut_recorder.js';
@@ -123,6 +124,7 @@ function applyNonAdminGeneralSettingsMode() {
 
 // 설정값을 CSS 변수 및 메모리 상태에 적용하는 헬퍼 함수
 export function applySettingsToUI(settings) {
+  syncCoreDetailOptions();
   const savedTheme = localStorage.getItem('app_dashboard_theme') || 'purple';
   changeDashboardTheme(savedTheme);
   const themeSelect = document.getElementById('my-setting-dashboard-theme');
@@ -210,6 +212,7 @@ export async function loadInitialSystemSettings() {
   try {
     const res = await api.fetchPublicUiSettings();
     if (res.success && res.settings) {
+      state.activeDetailViewProviders = res.active_detail_view_providers || {};
       applySettingsToUI(res.settings);
     }
   } catch (e) {
@@ -504,6 +507,7 @@ export async function loadMySettings() {
   // 여기서도 호출해 두 진입점 중 어느 쪽이 먼저 열려도 바인딩되도록 한다(멱등, 최초 1회만 실행).
   initGeneralDelegation();
   try {
+    await loadInitialSystemSettings();
     const res = await api.fetchUserSettings();
     if (!res.success || !res.settings) return;
     const s = res.settings;
@@ -581,6 +585,8 @@ export async function loadMySettings() {
 // 내 설정(사용자별 개인화) 탭 저장
 export async function submitMySettings(event) {
   if (event) event.preventDefault();
+  const saveDetailOption = (key, value) => shouldSaveCoreDetailOption(key)
+    ? api.updateUserSetting(key, value) : Promise.resolve({ success: true });
 
   const themeValue = document.getElementById('my-setting-dashboard-theme')?.value || 'purple';
   const showInsights = document.getElementById('my-setting-show-dashboard-insights')?.checked ? '1' : '0';
@@ -620,15 +626,15 @@ export async function submitMySettings(event) {
       api.updateUserSetting('VIEWER_FONT_FAMILY', fontFamily),
       api.updateUserSetting('AUDIO_MINI_PLAYER_MODE', audioMiniPlayerMode),
       api.updateUserSetting('AUDIO_RIGHT_DOCK_DIM_ENABLED', audioRightDockDimEnabled),
-      api.updateUserSetting('DETAIL_VOLUME_GRID_VIEW', detailVolumeGridView),
-      api.updateUserSetting('COLLAPSE_DETAIL_GENRE_TAGS', collapseDetailGenreTags),
-      api.updateUserSetting('SHOW_CONTENT_RATING_BADGE', showContentRatingBadge),
+      saveDetailOption('DETAIL_VOLUME_GRID_VIEW', detailVolumeGridView),
+      saveDetailOption('COLLAPSE_DETAIL_GENRE_TAGS', collapseDetailGenreTags),
+      saveDetailOption('SHOW_CONTENT_RATING_BADGE', showContentRatingBadge),
       api.updateUserSetting('SHOW_SIDEBAR_CATEGORY_ALL', showSidebarCategoryAll),
       api.updateUserSetting('HIDE_COMPLETED_IN_HISTORY', hideCompleted),
       api.updateUserSetting('TAG_FILTER_SEARCH_SCOPE_ALL', tagFilterScopeAll),
-      api.updateUserSetting('SHOW_TXT_NO_COVER_INFO_BANNER', showTxtNoCoverInfoBanner),
-      api.updateUserSetting('SMART_RECOMMEND_ENABLED', smartRecommendEnabled),
-      api.updateUserSetting('BOOK_RECOMMEND_ENABLED', bookRecommendEnabled),
+      saveDetailOption('SHOW_TXT_NO_COVER_INFO_BANNER', showTxtNoCoverInfoBanner),
+      saveDetailOption('SMART_RECOMMEND_ENABLED', smartRecommendEnabled),
+      saveDetailOption('BOOK_RECOMMEND_ENABLED', bookRecommendEnabled),
       api.updateUserSetting('HOME_DASHBOARD_PLUGIN_MODE', homeDashboardPluginMode)
     ]);
     const failed = results.find(r => !r.success);

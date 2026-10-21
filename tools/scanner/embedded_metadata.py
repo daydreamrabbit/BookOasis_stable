@@ -20,12 +20,14 @@ from tools.scanner.metadata import clean_html_tags, parse_comicinfo_from_cbz
 
 # ComicInfo.xml → 일반 스캔이 신규 CBZ에 채우는 필드와 같은 집합 (docs/guide_scanner_parser.md 매핑 표)
 COMICINFO_FIELDS = (
+    'isbn', 'uci', 'localized_series', 'link', 'translator',
     'author', 'cover_artist', 'teams', 'locations', 'characters', 'books_lv',
     'publisher', 'summary', 'release_date', 'genre', 'tags',
     'document_series_name', 'document_volume_index', 'document_number', 'document_volume_count',
 )
 # EPUB은 장르(dc:subject)가 분류 문자열이라 잡음이 많아 제외한다.
-EPUB_FIELDS = ('author', 'publisher', 'summary', 'release_date', 'isbn')
+EPUB_FIELDS = ('author', 'cover_artist', 'translator', 'publisher', 'summary',
+               'release_date', 'isbn', 'uci', 'localized_series', 'link', 'tags')
 
 # 비신뢰 파일이라 읽는 XML 크기를 제한한다.
 _MAX_CONTAINER_BYTES = 256 * 1024
@@ -92,65 +94,9 @@ def _isbn_from_identifier(value, explicitly_isbn):
 
 
 def parse_epub_opf(opf):
-    """이미 파싱된 EPUB 패키지 문서(OPF)에서 작가/출판사/줄거리/출간일/ISBN을 추출한다."""
-    metadata = {}
-    package = next((e for e in opf.iter() if _local_name(e.tag) == 'metadata'), None)
-    if package is None:
-        return metadata
-
-    def dc_values(name):
-        return [_text(e) for e in package.iter() if e.tag == f'{{{_DC_NS}}}{name}' and _text(e)]
-
-    role_by_id, identifier_types = {}, set()
-    for element in package.iter():
-        if _local_name(element.tag) != 'meta':
-            continue
-        prop = element.get('property', '').lower()
-        refines = element.get('refines', '').lstrip('#')
-        if prop == 'role' and refines:
-            role_by_id[refines] = _text(element).lower()
-        elif prop == 'identifier-type' and refines:
-            identifier_types.add(refines)
-
-    # 작가: 역할이 표시된 경우 글 작가(aut)만, 역할이 하나도 없으면 전부 작가로 본다(그림 작가는 제외).
-    authors, unclassified, has_roles = [], [], False
-    for creator in (e for e in package.iter() if e.tag == f'{{{_DC_NS}}}creator' and _text(e)):
-        role = (creator.get(f'{{{_OPF_NS}}}role') or creator.get('role')
-                or role_by_id.get(creator.get('id', ''), '')).lower()
-        if role:
-            has_roles = True
-        if role in _AUTHOR_ROLES:
-            authors.append(_text(creator))
-        elif not role:
-            unclassified.append(_text(creator))
-    if authors:
-        metadata['author'] = _unique_join(authors)
-    elif not has_roles and unclassified:
-        metadata['author'] = _unique_join(unclassified)
-
-    publishers = dc_values('publisher')
-    if publishers:
-        metadata['publisher'] = _unique_join(publishers)
-    descriptions = dc_values('description')
-    if descriptions:
-        summary = clean_html_tags('\n'.join(descriptions))
-        if summary:
-            metadata['summary'] = summary
-
-    for value in dc_values('date'):
-        release_date = _normalize_date(value)
-        if release_date:
-            metadata['release_date'] = release_date
-            break
-
-    for identifier in (e for e in package.iter() if e.tag == f'{{{_DC_NS}}}identifier'):
-        scheme = identifier.get(f'{{{_OPF_NS}}}scheme', '').lower()
-        explicitly_isbn = 'isbn' in scheme or identifier.get('id', '') in identifier_types
-        isbn = _isbn_from_identifier(_text(identifier), explicitly_isbn)
-        if isbn:
-            metadata['isbn'] = isbn
-            break
-    return metadata
+    """Use the same OPF parser as normal and lazy document scans."""
+    from tools.scanner.metadata.document_metadata import parse_epub_opf_metadata
+    return parse_epub_opf_metadata(opf)
 
 
 def _read_member(archive, name, max_bytes):

@@ -58,7 +58,9 @@ def clean_html_tags(text):
 def normalize_metadata_token(token):
     if token is None:
         return ''
-    return re.sub(r'\s{2,}', ' ', str(token).strip(" \t\r\n'\"[](),")).strip()
+    text = str(token).strip(" \t\r\n'\"[],")
+    # Parentheses may be meaningful inside a keyword, e.g. TS(남녀성전환).
+    return re.sub(r'\s{2,}', ' ', text).strip()
 
 
 def normalize_metadata_list_field(value):
@@ -109,6 +111,8 @@ def _empty_meta():
         'title': '',
         'author': '',
         'translator': '',
+        'isbn': '',
+        'uci': '',
         'localized_series': '',
         'cover_artist': '',
         'link': '',
@@ -178,6 +182,14 @@ def _parse_comicinfo_from_cbz_local(file_path):
             meta['title'] = _get('Title')
             meta['author'] = _get('Writer')
             meta['translator'] = _get('Translator')
+            meta['uci'] = _get('UCI')
+            # ComicInfo stores a volume's ISBN in GTIN (legacy tools use ISBN).
+            from utils.isbn import normalize_isbn
+            for raw_isbn in (_get('GTIN'), _get('ISBN')):
+                isbn = normalize_isbn(raw_isbn)
+                if isbn:
+                    meta['isbn'] = isbn
+                    break
             meta['localized_series'] = _get('LocalizedSeries')
             meta['document_series_name'] = _get('Series')
             meta['document_volume_index'] = _parse_volume_index(_get('Volume'))

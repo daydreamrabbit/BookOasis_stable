@@ -6,6 +6,7 @@ import { currentTargetLibrary } from './context_menu.js?rev=20260922-library-kin
 import { updateRemoteWarning, enableVFSCheckForRemote, loadGdriveCopyRemotes, detectGdriveMountRoot } from './path_browser.js';
 import { loadVideoLibraryView } from '../video_library.js';
 import { buildKindOptionsHtml, isSelectableLibraryKind } from './kind_options.js?rev=20260922-library-kinds-v5';
+import { coverRatioAttr, normalizeCoverAspectRatio } from '../utils/cover_ratio.js';
 
 async function reloadLibrarySidebar() {
   if (state.currentLibraryType === 'video') {
@@ -345,8 +346,8 @@ export async function triggerEditLibrary() {
   const hideCoverEl = document.getElementById('library-form-hide-cover');
   if (hideCoverEl) hideCoverEl.checked = (hideCoverVal === '1');
 
-  const coverRatioVal = libraryItem?.dataset?.coverAspectRatio === '16:9' ? '16:9' : '4:3';
-  const coverRatioEl = document.getElementById(coverRatioVal === '16:9' ? 'library-form-cover-ratio-16-9' : 'library-form-cover-ratio-4-3');
+  const coverRatioVal = normalizeCoverAspectRatio(libraryItem?.dataset?.coverAspectRatio);
+  const coverRatioEl = document.getElementById(`library-form-cover-ratio-${coverRatioAttr(coverRatioVal)}`);
   if (coverRatioEl) coverRatioEl.checked = true;
   updateCoverRatioRowVisibility();
 
@@ -421,6 +422,8 @@ export async function triggerDeleteLibrary() {
         window.hideGlobalLoadingSpinner();
       }
       alert(i18n.t('category.delete_fail', {error: data.error}));
+      // A proxy timeout does not prove the server rolled back the deletion.
+      await reloadLibrarySidebar();
     }
   } catch (e) {
     if (typeof window.hideGlobalLoadingSpinner === 'function') {
@@ -428,6 +431,7 @@ export async function triggerDeleteLibrary() {
     }
     console.error('삭제 API 호출 오류:', e);
     alert(i18n.t('category.server_error'));
+    await reloadLibrarySidebar();
   }
 }
 

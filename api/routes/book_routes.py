@@ -127,6 +127,7 @@ def edit_media_detail():
     tags        = request.form.get('tags', '').strip()
     books_lv    = request.form.get('books_lv', '').strip()
     cover_file  = request.files.get('cover_image')
+    audiobook_id = request.form.get('audiobook_id', '').strip()
 
     if not series_name:
         return jsonify({'success': False, 'error': _t('api.err_series_name_required')}), 400
@@ -148,7 +149,8 @@ def edit_media_detail():
             tags=tags,
             cover_file=cover_file,
             series_alias=series_alias,
-            books_lv=books_lv or None
+            books_lv=books_lv or None,
+            audiobook_id=int(audiobook_id) if audiobook_id.isdigit() else None
         )
         if success:
             try:
@@ -460,6 +462,12 @@ def unlock_media_metadata():
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
 
     try:
+        if db_type == 'audiobook':
+            from repositories.audiobook_repository import AudiobookRepository
+            success = bool(book_id) and str(book_id).isdigit() and AudiobookRepository.unlock_metadata(int(book_id))
+            if success:
+                return jsonify({'success': True, 'message': '메타데이터 잠금이 해제되었습니다.'})
+            return jsonify({'success': False, 'error': '해당 오디오북을 찾을 수 없거나 이미 해제되었습니다.'}), 404
         from repositories.book_repository import BookRepository
         success = BookRepository.unlock_media_metadata(
             db_type=db_type,

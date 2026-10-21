@@ -15,3 +15,13 @@ export function matchesRetainedDetailHistory(retained, target) {
     && (!target.repBookId || String(retained.representativeBookId || '') === String(target.repBookId))
     && (!target.type || String(retained.libraryType || 'general') === String(target.type));
 }
+
+// A related series is a new navigation entry; refreshing or restoring the
+// same series must not append another entry (including browser back/forward).
+export function isDifferentDetail(previous, next) {
+  return previous?.view === 'detail' && (
+    String(previous.series || '') !== String(next.series || '')
+    || String(previous.libraryId || '') !== String(next.libraryId || '')
+    || String(previous.type || 'general') !== String(next.type || 'general')
+  );
+}

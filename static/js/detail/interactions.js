@@ -36,6 +36,11 @@ export function bindDetailInteractions() {
   document.addEventListener('pointercancel', finishDetailPointer, true);
 
   document.addEventListener('click', (event) => {
+    const unreadButton = event.target?.closest?.('[data-role="detail-mark-series-unread"]');
+    if (unreadButton) {
+      event.preventDefault();
+      return window.markSeriesUnread?.(event, unreadButton.dataset.seriesName || '', unreadButton.dataset.libraryId || '');
+    }
     if (Date.now() < suppressDetailClickUntil) {
       const draggedTarget = getDetailActionTarget(event);
       if (draggedTarget) {
@@ -45,7 +50,7 @@ export function bindDetailInteractions() {
       }
     }
     const target = event && event.target && typeof event.target.closest === 'function'
-      ? event.target.closest('[data-role="detail-listen"], [data-role="detail-genre-filter"], [data-role="detail-tag-filter"], [data-role="detail-collapse-toggle"], [data-role="detail-rescan-missing"], [data-role="detail-unlock-metadata"], [data-role="detail-cover-upload"], [data-role="detail-series-favorite"], [data-role="detail-edit-toggle"], [data-role="detail-plugin-meta-search"], [data-role="detail-rescan-series"], [data-role="detail-mark-series-complete"], [data-role="detail-save-meta"], [data-role="detail-cancel-meta"], [data-role="detail-volume-filter"], [data-role="detail-volume-sort"], [data-role="detail-summary-toggle"], [data-role="detail-continue"], [data-role="detail-book-favorite"], [data-role="detail-rescan-book"], [data-role="detail-audio-open"], [data-role="detail-audio-play"], [data-role="detail-audio-tab"], [data-role="detail-video-open"], [data-role="detail-video-play"], [data-role="detail-volume-open-reader"], [data-role="detail-download-link"]')
+      ? event.target.closest('[data-role="detail-listen"], [data-role="detail-genre-filter"], [data-role="detail-tag-filter"], [data-role="detail-collapse-toggle"], [data-role="detail-rescan-missing"], [data-role="detail-unlock-metadata"], [data-role="detail-cover-upload"], [data-role="detail-series-favorite"], [data-role="detail-edit-toggle"], [data-role="detail-plugin-meta-search"], [data-role="detail-rescan-series"], [data-role="detail-mark-series-complete"], [data-role="detail-save-meta"], [data-role="detail-cancel-meta"], [data-role="detail-volume-filter"], [data-role="detail-volume-sort"], [data-role="detail-summary-toggle"], [data-role="detail-continue"], [data-role="detail-music-shuffle"], [data-role="detail-book-favorite"], [data-role="detail-rescan-book"], [data-role="detail-audio-open"], [data-role="detail-audio-play"], [data-role="detail-audio-tab"], [data-role="detail-video-open"], [data-role="detail-video-play"], [data-role="detail-volume-open-reader"], [data-role="detail-download-link"]')
       : null;
     if (!target) return;
 
@@ -129,6 +134,11 @@ export function bindDetailInteractions() {
       wrap.classList.toggle('summary-expanded', expanded);
       target.setAttribute('aria-expanded', expanded ? 'true' : 'false');
       target.textContent = expanded ? (target.getAttribute('data-less-label') || '접기') : (target.getAttribute('data-more-label') || '더보기');
+      return;
+    }
+    if (role === 'detail-music-shuffle') {
+      const aid = Number.parseInt(target.getAttribute('data-audiobook-id') || '', 10);
+      if (Number.isFinite(aid) && aid > 0) return window.openAudioPlayerShuffled?.(aid);
       return;
     }
     if (role === 'detail-continue') {

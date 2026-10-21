@@ -67,14 +67,8 @@ def _update_lazy_scan_progress(task_id, db_type, current_remaining):
 
 
 def _collect_zip_offsets_safe(file_path):
-    """ZIP/CBZ 파일의 이미지 오프셋 메타데이터를 안전하게 수집합니다.
-    실패 시 빈 리스트를 반환하며 예외를 전파하지 않습니다."""
-    try:
-        from tools.scanner.offset import collect_zip_offsets_data
-        return collect_zip_offsets_data(file_path)
-    except Exception as e:
-        print(f"[Lazy-Scanner] 오프셋 수집 중 예외 무시: {e}")
-        return []
+    """Background cover jobs leave page-map construction to first open."""
+    return []
 
 
 def _load_lazy_scan_no_cover_retry_days():
@@ -130,14 +124,6 @@ def _fetch_lazy_scan_candidates(cursor, no_cover_retry_days=0, library_id=None,
           AND (
               (cover_image IS NULL OR cover_image = '')
               OR {no_cover_clause}
-              OR (
-                  LOWER(COALESCE(file_format, '')) IN ('zip', 'cbz')
-                  AND COALESCE(cover_image, '') NOT IN ('', 'NO_COVER')
-                  AND (
-                      COALESCE(total_pages, 0) = 0
-                      OR COALESCE(has_offsets, 0) IN (0, -1)
-                  )
-              )
           )
     """
     params = ['%.txt']
@@ -307,13 +293,15 @@ def _fetch_library_folder_cover_map(cursor):
 
 
 def _build_scan_targets(db_type, books, library_remote_map, allow_remote_offset_only=False,
-                        force_cover_book_ids=None, force_folder_cover_library_ids=None):
+                        force_cover_book_ids=None, force_folder_cover_library_ids=None,
+                        allow_page_index=False):
     """DB에서 1차 선별된 후보 도서들을 실제 물리 파일 상태까지 점검해 최종 스캔
     대상 목록((book, offset_only) 튜플 리스트)으로 좁힌다. conn/세션 누적 상태와
     무관한 순수 필터링 단계라 별도 함수로 분리해도 안전하다."""
     targets = []
     force_cover_book_ids = {int(book_id) for book_id in (force_cover_book_ids or ())}
     force_folder_cover_library_ids = {int(library_id) for library_id in (force_folder_cover_library_ids or ())}
+    desired_folder_covers = {}
     for book in books:
         if stop_requested:
             print(f"[Lazy-Scanner] ⚠️ DB({db_type}) 파일 물리 점검 도중 중단 요청(SIGTERM/SIGINT) 감지. 점검을 중단합니다.")
@@ -341,7 +329,7 @@ def _build_scan_targets(db_type, books, library_remote_map, allow_remote_offset_
         # ── 오프셋 유효성 판단 (ZIP/CBZ 전용) ──
         offset_missing = False
         file_format = (book['file_format'] or '').lower()
-        if file_format in ('zip', 'cbz'):
+        if allow_page_index and file_format in ('zip', 'cbz'):
             has_offsets = int(book['has_offsets'] or 0)
             total_pages = int(book['total_pages'] or 0)
             if total_pages == 0 or has_offsets == 0 or (has_offsets == -1 and not cover_missing):
@@ -362,6 +350,17 @@ def _build_scan_targets(db_type, books, library_remote_map, allow_remote_offset_
             int(book['library_id']) in force_folder_cover_library_ids
             and not metadata_locked
         )
+        if folder_cover_requested:
+            # A policy is not an unconditional force-rescan. Compare against
+            # the actual sidecar once per folder so completed volumes disappear
+            # from the next subprocess batch. Without a sidecar there is no
+            # shared-cover change to apply; keep existing valid covers intact.
+            folder_key = (int(book['library_id']), os.path.dirname(file_path))
+            if folder_key not in desired_folder_covers:
+                from tools.scanner.cover import get_folder_batch_cover
+                desired_folder_covers[folder_key] = get_folder_batch_cover(folder_key[1], folder_key[0])
+            desired_cover = desired_folder_covers[folder_key]
+            folder_cover_requested = bool(desired_cover and cover_image != desired_cover)
         if not cover_missing and not offset_missing and not folder_cover_requested:
             # 커버도 있고 오프셋도 있음 → 완전히 처리된 도서, 스킵
             continue
@@ -425,11 +424,14 @@ def _group_targets_by_folder(targets):
 def _update_scanned_document_metadata(cursor, book_id, metadata):
     """Fill existing book metadata from folder sidecars and an EPUB/PDF document."""
     fields = (
-        'title', 'author', 'isbn', 'publisher', 'link', 'summary', 'release_date',
+        'title', 'author', 'translator', 'isbn', 'publisher', 'link', 'summary', 'release_date',
         'genre', 'tags', 'books_lv', 'publication_status', 'cover_artist',
         'teams', 'locations', 'characters', 'localized_series',
         'document_series_name',
     )
+    from utils.book_identifiers import save_book_uci
+    if metadata.get('uci'):
+        save_book_uci(cursor, book_id, metadata['uci'])
     assignments = []
     values = []
     for field in fields:
@@ -563,8 +565,8 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None,
                 # ── DB SQL 필터링 최적화 ──
                 # 1. txt 확장자 제외
                 # 2. 커버 경로가 없거나 이전 추출에 실패한 경우
-                # 3. 표지가 있는 ZIP/CBZ 중 페이지 수/오프셋이 없거나 이전 수집 실패(-1)로 표시된 경우
-                # 위 스캔 후보 도서만 DB 인덱스 레벨에서 1차 선별하여 퍼포먼스 극대화
+                # Missing page maps are not background candidates: first open
+                # persists those without traversing unopened archives.
                 books = _fetch_lazy_scan_candidates(cursor, no_cover_retry_days=no_cover_retry_days)
                 
             if target_book_ids is not None:
@@ -870,6 +872,19 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None,
                             cover_image_path, comicinfo_meta = result, None
                             offsets_data = []
 
+                        if comicinfo_meta and not int(book['metadata_locked'] or 0):
+                            from utils.book_identifiers import save_book_uci
+                            save_book_uci(cursor, book_id, comicinfo_meta.get('uci'))
+                            conn.commit()
+                            from utils.isbn import normalize_isbn
+                            isbn = normalize_isbn(comicinfo_meta.get('isbn'))
+                            if isbn:
+                                cursor.execute(
+                                    "UPDATE books SET isbn=? WHERE id=? AND file_path=? "
+                                    "AND COALESCE(metadata_locked,0)=0 AND COALESCE(isbn,'')=''",
+                                    (isbn, book_id, file_path))
+                                conn.commit()
+
                         if force_document_metadata:
                             try:
                                 from utils.drive_helper import is_gdrive_url, is_remote_path
@@ -1004,7 +1019,7 @@ def run_lazy_cover_extraction(target_book_id=None, target_db_type=None,
             from utils.report_helper import save_scan_report
             for lib_id, err_list in lib_errors.items():
                 if err_list:
-                    save_scan_report(lib_id, err_list)
+                    save_scan_report(lib_id, err_list, db_type=db_type)
             
             try:
                 if conn:

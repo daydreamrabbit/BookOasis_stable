@@ -112,6 +112,11 @@ class StreamPageService:
         if not file_path:
             return 0
 
+        from services.on_demand_page_index import ensure_page_index
+        count = ensure_page_index(db_type, book_id, file_path)
+        if count is not None:
+            return count
+
         try:
             if file_format in ('zip', 'cbz'):
                 zf = get_zip_file_hybrid(file_path)
@@ -153,6 +158,8 @@ class StreamPageService:
     @staticmethod
     def extract_page(file_path: str, page_idx: int, db_type: str = 'general', book_id=None, is_prefetch=False):
         """단일 페이지를 (img_data, mime_type)으로 반환 (Zip 오프셋 최적화, 백그라운드 프리페치 및 Fallback 지원)"""
+        from services.on_demand_page_index import ensure_page_index
+        ensure_page_index(db_type, book_id, file_path)
         cache_key = (file_path, page_idx)
         cached = image_cache.get(cache_key)
         if cached is not None:

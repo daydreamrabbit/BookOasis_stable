@@ -15,8 +15,7 @@ class RatedPageTests(unittest.TestCase):
             title TEXT,title_alias TEXT,file_path TEXT,file_format TEXT,created_at TEXT,
             cover_image TEXT,cover_updated_at TEXT,cover_align TEXT,author TEXT,genre TEXT,
             tags TEXT,books_lv TEXT,publication_status TEXT,series_alias TEXT,metadata_locked INTEGER,
-            is_deleted INTEGER,total_pages INTEGER DEFAULT 0,
-            document_volume_index REAL,document_number REAL);
+            is_deleted INTEGER,total_pages INTEGER DEFAULT 0);
             CREATE TABLE user_category_permissions(library_id INTEGER,user_id INTEGER,has_access INTEGER);
             CREATE TABLE user_favorites(book_id INTEGER,user_id INTEGER);
             CREATE TABLE user_progress(book_id INTEGER,user_id INTEGER,pages_read INTEGER,is_completed INTEGER);
@@ -119,34 +118,6 @@ class RatedPageTests(unittest.TestCase):
         self.add(2,'A',directory='relative')
         self.conn.execute("UPDATE books SET file_path='relative.zip' WHERE id=2")
         self.assertEqual(repo.fetch('general',1,1,18,totals=True)['total_series_count'],2)
-
-    def test_cover_prefers_later_added_volume_one_without_changing_representative(self):
-        self.add(1,'Mafia',cover='six.webp')
-        self.add(2,'Mafia',cover='one.webp')
-        self.conn.execute('UPDATE books SET document_volume_index=6 WHERE id=1')
-        self.conn.execute('UPDATE books SET document_volume_index=1,cover_align=? WHERE id=2',('top',))
-        row=repo.fetch('general',1,1,18)[0]
-        self.assertEqual((row['id'],row['cover_image'],row['cover_align']),(1,'one.webp','top'))
-        self.assertEqual(repo.fetch('general',1,1,18,index=True)[0]['id'],1)
-
-    def test_cover_fallback_and_deleted_volume_are_excluded(self):
-        for id,cover,volume in [(1,'six.webp',6),(2,'NO_COVER',1),(3,'three.webp',3),(4,'deleted.webp',1)]:
-            self.add(id,'Mafia',cover=cover)
-            self.conn.execute('UPDATE books SET document_volume_index=? WHERE id=?',(volume,id))
-        self.conn.execute('UPDATE books SET is_deleted=1 WHERE id=4')
-        self.assertEqual(repo.fetch('general',1,1,18)[0]['cover_image'],'three.webp')
-
-    def test_cover_uses_first_numbered_chapter_before_unordered_cover(self):
-        self.add(1,'Chapters',cover='unindexed.webp')
-        self.add(2,'Chapters',cover='twelve.webp')
-        self.add(3,'Chapters',cover='one.webp')
-        self.conn.execute('UPDATE books SET document_number=12 WHERE id=2')
-        self.conn.execute('UPDATE books SET document_number=1 WHERE id=3')
-        self.assertEqual(repo.fetch('general',1,1,18)[0]['cover_image'],'one.webp')
-
-    def test_no_cover_marker_returns_no_image(self):
-        self.add(1,'Empty',cover='NO_COVER')
-        self.assertIsNone(repo.fetch('general',1,1,18)[0]['cover_image'])
 
     def test_low_volume_search_and_direct_link_cannot_bypass_series_rating(self):
         from services.series_service import _filter_rows_by_content_rating

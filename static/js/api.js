@@ -1,5 +1,6 @@
 // api.js – 서버와 통신하는 함수들
 import { state } from './state.js';
+import { filteredSearchUrl } from './search_filters.js';
 
 async function safeFetch(url, options = {}) {
   const res = await fetch(url, options);
@@ -29,34 +30,40 @@ export async function fetchLibraries(type) {
   return res.json();
 }
 
-export async function fetchBooksList({type, libraryId, page, limit, append, search, sort, genres = [], tags = [], groupBy, authorKey, includeHasMetadata = false, signal}) {
+export async function fetchBooksList({type, libraryId, page, limit, append, search, sort, genres = [], tags = [], groupBy, authorKey, includeHasMetadata = false, signal, advanced = null, filterMode = 'and', readFilter = state.readFilter || ''}) {
+  const filtered = filteredSearchUrl('list', {type,libraryId,page,limit,search,sort,genres,tags,advanced,filterMode,includeHasMetadata,readFilter});
+  if (filtered) return (await safeFetch(filtered,{cache:'no-store',signal})).json();
   const searchQuery = search ? `&search=${encodeURIComponent(search)}` : '';
   const sortQuery = sort ? `&sort=${sort}` : '';
   const genresQuery = genres.length > 0 ? `&genres=${encodeURIComponent(genres.join(','))}` : '';
   const tagsQuery = tags.length > 0 ? `&tags=${encodeURIComponent(tags.join(','))}` : '';
   const groupByQuery = groupBy ? `&group_by=${encodeURIComponent(groupBy)}` : '';
   const authorKeyQuery = authorKey ? `&author_key=${encodeURIComponent(authorKey)}` : '';
-  const metadataQuery = includeHasMetadata ? '&include_has_metadata=1' : '';
+  const metadataQuery = (includeHasMetadata ? '&include_has_metadata=1' : '') + `&read_filter=${encodeURIComponent(readFilter)}`;
   const url = `/api/media/list?type=${type}&library_id=${libraryId}&page=${page}&limit=${limit}${searchQuery}${sortQuery}${genresQuery}${tagsQuery}${groupByQuery}${authorKeyQuery}${metadataQuery}&_=${Date.now()}`;
   const res = await safeFetch(url, {cache: 'no-store', signal});
   return res.json();
 }
 
-export async function fetchJumpPosition({type, libraryId, search, sort, genres = [], tags = [], char, limit}) {
+export async function fetchJumpPosition({type, libraryId, search, sort, genres = [], tags = [], char, limit, advanced = null, filterMode = 'and', readFilter = state.readFilter || ''}) {
+  const filtered = filteredSearchUrl('jump', {type,libraryId,search,sort,genres,tags,char,limit,advanced,filterMode,readFilter});
+  if (filtered) return (await safeFetch(filtered,{cache:'no-store'})).json();
   const searchQuery = search ? `&search=${encodeURIComponent(search)}` : '';
   const sortQuery = sort ? `&sort=${sort}` : '';
   const genresQuery = genres.length > 0 ? `&genres=${encodeURIComponent(genres.join(','))}` : '';
   const tagsQuery = tags.length > 0 ? `&tags=${encodeURIComponent(tags.join(','))}` : '';
-  const url = `/api/media/list/jump?type=${type}&library_id=${libraryId}&limit=${limit}${searchQuery}${sortQuery}${genresQuery}${tagsQuery}&char=${encodeURIComponent(char)}&_=${Date.now()}`;
+  const url = `/api/media/list/jump?type=${type}&library_id=${libraryId}&limit=${limit}${searchQuery}${sortQuery}${genresQuery}${tagsQuery}&read_filter=${encodeURIComponent(readFilter)}&char=${encodeURIComponent(char)}&_=${Date.now()}`;
   const res = await safeFetch(url, {cache: 'no-store'});
   return res.json();
 }
 
-export async function fetchBooksTotals({type, libraryId, search, genres = [], tags = [], signal}) {
+export async function fetchBooksTotals({type, libraryId, search, genres = [], tags = [], signal, advanced = null, filterMode = 'and', readFilter = state.readFilter || ''}) {
+  const filtered = filteredSearchUrl('totals', {type,libraryId,search,genres,tags,advanced,filterMode,readFilter});
+  if (filtered) return (await safeFetch(filtered,{cache:'no-store',signal})).json();
   const searchQuery = search ? `&search=${encodeURIComponent(search)}` : '';
   const genresQuery = genres.length > 0 ? `&genres=${encodeURIComponent(genres.join(','))}` : '';
   const tagsQuery = tags.length > 0 ? `&tags=${encodeURIComponent(tags.join(','))}` : '';
-  const url = `/api/media/list-totals?type=${type}&library_id=${libraryId}${searchQuery}${genresQuery}${tagsQuery}&_=${Date.now()}`;
+  const url = `/api/media/list-totals?type=${type}&library_id=${libraryId}${searchQuery}${genresQuery}${tagsQuery}&read_filter=${encodeURIComponent(readFilter)}&_=${Date.now()}`;
   const res = await safeFetch(url, {cache: 'no-store', signal});
   return res.json();
 }
@@ -115,7 +122,10 @@ export async function submitRating(type, context, rating) {
       rating,
     }),
   });
-  return res.json();
+  if (!res.headers.get('content-type')?.includes('application/json')) throw new Error('별점 서버 응답을 확인할 수 없습니다.');
+  const result = await res.json();
+  if (res.ok && result.success) window.dispatchEvent(new CustomEvent('bookoasis:rating-changed', {detail: {type}}));
+  return result;
 }
 
 export async function fetchMediaDetail(type, libraryId, series, representativeBookId = null) {
@@ -207,7 +217,14 @@ export async function deleteLibrary(formData) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    return {success: false, error: `HTTP ${res.status} ${res.statusText}`.trim()};
+  }
+  if (!res.ok) return {success: false, error: data?.error || `HTTP ${res.status} ${res.statusText}`.trim()};
+  return data;
 }
 
 export async function deleteSeriesData(type, bookId, libraryId) {
@@ -403,6 +420,7 @@ export async function markBookAsUnread(type, bookId, options = {}) {
       library_id: options.libraryId ?? null,
     })
   });
+  if (!res.ok || !(res.headers.get('content-type') || '').includes('application/json')) throw new Error(`미독 처리 요청 실패 (HTTP ${res.status})`);
   return res.json();
 }
 
@@ -420,7 +438,16 @@ export async function markBookAsRead(type, bookId, options = {}) {
       library_id: options.libraryId ?? null,
     })
   });
-  return res.json();
+  if (!res.ok || !(res.headers.get('content-type') || '').includes('application/json')) throw new Error(`읽음 처리 요청 실패 (HTTP ${res.status})`);
+  const result = await res.json();
+  if (result.success) {
+    document.dispatchEvent(new CustomEvent('book-reading-updated', { detail: {
+      id: bookId, type, scope: options.scope || 'book',
+      seriesName: options.seriesName || '', libraryId: options.libraryId ?? null,
+      is_completed: 1,
+    } }));
+  }
+  return result;
 }
 
 export async function markSeriesAsCompleted(type, bookIds, options = {}) {
@@ -758,8 +785,8 @@ export async function editMediaDetail(formData) {
   return res.json();
 }
 
-export async function fetchScanReports(libraryId) {
-  const res = await fetch(`/api/media/libraries/${libraryId}/reports`);
+export async function fetchScanReports(libraryId, type = 'general') {
+    const res = await fetch(`/api/media/libraries/${libraryId}/reports?type=${encodeURIComponent(type)}`);
   return res.json();
 }
 

@@ -1,4 +1,92 @@
-import { getTxtPageScrollLeft, setTxtPageScrollLeft } from './txt_page_utils.js?rev=20260922-reader-session-v45';
+import { getTxtPageScrollLeft, setTxtPageScrollLeft, isTxtRtlPageFlow } from './txt_page_utils.js?rev=20260922-reader-session-v45';
+
+// Reflow anchors are deliberately separate from persisted/TTS phrase anchors.
+// DOM offsets survive column changes and inline annotation wrappers. Hit testing
+// cannot be used here: the reader's navigation hotspots cover the text.
+const ANCHOR_CHUNKS = '.txt-chunk, .txt-scroll-chunk, .epub-chunk, .txt-flow-chunk';
+
+function anchorCharRect(node, offset) {
+  if (offset < 0 || offset >= node.length) return null;
+  const range = document.createRange();
+  range.setStart(node, offset);
+  range.setEnd(node, offset + 1);
+  return Array.from(range.getClientRects()).find(r => r.width > 0 && r.height > 0) || null;
+}
+
+export function captureTxtPageAnchor({ scrollWrapper, contentArea, mode = 'page' }) {
+  if (!scrollWrapper || !contentArea) return null;
+  const view = scrollWrapper.getBoundingClientRect();
+  if (!view.width || !view.height) return null;
+  const rtl = mode === 'page' && isTxtRtlPageFlow();
+  const visible = r => r && r.width > 0 && r.height > 0
+    && r.bottom > view.top && r.top < view.bottom && r.right > view.left && r.left < view.right;
+  for (const chunk of contentArea.querySelectorAll(ANCHOR_CHUNKS)) {
+    const chunkIdx = Number(chunk.dataset.idx);
+    if (!Number.isInteger(chunkIdx) || chunkIdx < 0) continue;
+    // Flow/scroll chunks expose their fragments. Fixed-height EPUB containers
+    // do not, so their overflowing text must still be inspected on later pages.
+    if (chunk.matches('.txt-flow-chunk, .txt-scroll-chunk')
+        && !Array.from(chunk.getClientRects()).some(visible)) continue;
+    const walker = document.createTreeWalker(chunk, NodeFilter.SHOW_TEXT);
+    let node, offset = 0;
+    while ((node = walker.nextNode())) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      if (/\S/.test(node.nodeValue) && Array.from(range.getClientRects()).some(visible)) {
+        // Search by column (or line in scrolling mode), not paragraph start.
+        let lo = 0, hi = node.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          const r = anchorCharRect(node, mid);
+          const before = !r || (mode === 'scroll' ? r.bottom <= view.top
+            : rtl ? r.left >= view.right : r.right <= view.left);
+          if (before) lo = mid + 1;
+          else hi = mid;
+        }
+        // Collapsed spaces have no usable box; never anchor invisible text.
+        for (let i = lo; i < node.length; i++) {
+          const r = anchorCharRect(node, i);
+          if (visible(r) && /\S/.test(node.nodeValue[i])) {
+            const charOffset = offset + i;
+            return { chunkIdx, charOffset,
+              probe: chunk.textContent.slice(charOffset, charOffset + 32),
+              textLength: chunk.textContent.length, top: r.top - view.top };
+          }
+          if (r && (mode === 'scroll' ? r.top >= view.bottom
+            : rtl ? r.right <= view.left : r.left >= view.right)) break;
+        }
+      }
+      offset += node.length;
+    }
+  }
+  return null;
+}
+
+// Returns a logical scroll position, including for negative-scrollLeft 2|1.
+export function locateTxtPageAnchor({ scrollWrapper, contentArea, anchor, advanceWidth, mode = 'page' }) {
+  if (!anchor || !scrollWrapper || !contentArea || !Number.isInteger(anchor.chunkIdx)
+      || !Number.isInteger(anchor.charOffset) || anchor.charOffset < 0) return null;
+  const chunk = contentArea.querySelector(ANCHOR_CHUNKS.split(', ')
+    .map(selector => `${selector}[data-idx="${anchor.chunkIdx}"]`).join(', '));
+  if (!chunk || chunk.textContent.length !== anchor.textLength
+      || chunk.textContent.slice(anchor.charOffset, anchor.charOffset + 32) !== anchor.probe) return null;
+  const view = scrollWrapper.getBoundingClientRect();
+  if (!view.width || !view.height) return null;
+  const walker = document.createTreeWalker(chunk, NodeFilter.SHOW_TEXT);
+  let node, offset = anchor.charOffset;
+  while ((node = walker.nextNode())) {
+    if (offset >= node.length) { offset -= node.length; continue; }
+    const rect = anchorCharRect(node, offset);
+    if (!rect) return null;
+    if (mode === 'scroll') return Math.max(0, Math.min(scrollWrapper.scrollHeight - scrollWrapper.clientHeight,
+      scrollWrapper.scrollTop + rect.top - view.top - (anchor.top || 0)));
+    if (!(advanceWidth > 0)) return null;
+    const distance = isTxtRtlPageFlow() ? view.right - rect.right : rect.left - view.left;
+    const page = Math.max(0, Math.floor((getTxtPageScrollLeft(scrollWrapper) + distance + 0.5) / advanceWidth));
+    return Math.min(Math.max(0, scrollWrapper.scrollWidth - scrollWrapper.clientWidth), page * advanceWidth);
+  }
+  return null;
+}
 
 /**
  * startIndex 주변에서 실제 내용(비공백 5자 이상)이 포함된 30자 앵커 텍스트를 탐색.

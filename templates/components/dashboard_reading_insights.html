@@ -2,28 +2,11 @@
 <div class="dashboard-insights-container" style="margin-bottom: 1rem;">
     <div class="insights-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; width: 100%;">
         
-        <!-- 1. Reading Streak (연속 독서 일수) -->
-        <div class="insight-card streak-card" style="background: var(--app-bg-card); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; justify-content: space-between; backdrop-filter: blur(10px); box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.25);">
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-                <span style="font-size: 0.82rem; font-weight: 700; color: var(--app-text-primary); display: flex; align-items: center; gap: 0.4rem;">
-                    <i class="fa-solid fa-fire" style="color: #f97316;"></i> <span data-i18n="dashboard.insights_streak">연속 독서 일수</span>
-                </span>
-            </div>
-            <div style="text-align: center; margin: 0.3rem 0;">
-                <div style="font-size: 1.4rem; font-weight: 800; color: #f97316; line-height: 1;">
-                    <span id="streak-days-count">0</span><span style="font-size: 0.8rem; font-weight: 600; color: var(--app-text-secondary); margin-left: 0.2rem;" data-i18n="dashboard.insights_days_suffix">일 연속</span>
-                </div>
-            </div>
-            <div id="streak-dots-container" style="display: flex; justify-content: center; gap: 0.3rem; margin-top: 0.3rem;">
-                <span class="streak-dot active" style="width: 7px; height: 7px; border-radius: 50%; background: #38bdf8;"></span>
-                <span class="streak-dot active" style="width: 7px; height: 7px; border-radius: 50%; background: #38bdf8;"></span>
-                <span class="streak-dot" style="width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, 0.15);"></span>
-                <span class="streak-dot active" style="width: 7px; height: 7px; border-radius: 50%; background: #38bdf8;"></span>
-                <span class="streak-dot active" style="width: 7px; height: 7px; border-radius: 50%; background: #38bdf8;"></span>
-                <span class="streak-dot active" style="width: 7px; height: 7px; border-radius: 50%; background: #38bdf8;"></span>
-                <span class="streak-dot active" style="width: 7px; height: 7px; border-radius: 50%; background: #f97316; box-shadow: 0 0 6px #f97316;"></span>
-            </div>
-        </div>
+        <section class="insight-card dashboard-activity-card">
+            <div class="dashboard-activity-heading"><i class="fa-solid fa-calendar-days" aria-hidden="true"></i><strong>독서 활동</strong><label class="activity-color-control" title="독서 활동 색상 선택"><i class="fa-solid fa-palette" aria-hidden="true"></i><input type="color" data-activity-color aria-label="독서 활동 색상" value="#39d353"></label></div>
+            <span data-activity-color-message class="sr-only" role="status"></span>
+            <div id="dashboard-activity-calendar" aria-live="polite">독서 활동을 불러오는 중…</div>
+        </section>
 
         <!-- 2. Currently Reading (현재 읽는 중) -->
         <div class="insight-card currently-card" style="background: var(--app-bg-card); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; backdrop-filter: blur(10px); box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.25);">

@@ -18,6 +18,18 @@ system_bp = Blueprint('system', __name__)
 _LIB_NAME_MEM_CACHE = {}
 
 
+@system_bp.route('/api/system/scan-activity', methods=['GET'])
+@admin_required
+def get_scan_activity_details():
+    from services.scan_activity_service import scan_activity_details
+    try:
+        response = jsonify(success=True, **scan_activity_details())
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except Exception:
+        return jsonify(success=False, error='스캔 이력·예약을 불러오지 못했습니다.'), 503
+
+
 @system_bp.route('/api/system/metadata-history', methods=['GET'])
 @admin_required
 def metadata_collection_history():
@@ -143,27 +155,10 @@ def index():
         print(f"[Index] 홈 대시보드 초기 레이아웃 계산 실패, 클래식 레이아웃으로 폴백: {e}")
         home_layout = {'mode': 'classic', 'widgets': [], 'catalog': []}
 
+    # Keep the final layout in SSR, but let independent widgets load in parallel
+    # through their authenticated API. A slow plugin must not delay the HTML,
+    # navigation controls or the core recent/history requests.
     home_widget_initial_data = {}
-    if home_layout.get('mode') == 'plugin':
-        try:
-            from services.metadata_factory import MetadataFactory
-            for widget in home_layout.get('widgets', []):
-                if widget.get('kind') != 'plugin' or widget.get('hidden') or not widget.get('initial_data'):
-                    continue
-                plugin_id = str(widget.get('plugin_id') or '').strip()
-                if not plugin_id:
-                    continue
-                try:
-                    provider = MetadataFactory.get_provider_by_id(plugin_id)
-                    result = provider.get_dashboard_data('general', limit=widget.get('limit', 10))
-                    if not isinstance(result, dict) or not result.get('success'):
-                        continue
-                    MetadataFactory.add_dashboard_ui_bundle(plugin_id, result)
-                    home_widget_initial_data[widget.get('id')] = result
-                except Exception as e:
-                    print(f"[Index] 홈 위젯 초기 데이터 로드 실패 ({plugin_id}): {e}")
-        except Exception as e:
-            print(f"[Index] 홈 위젯 초기 데이터 조회 준비 실패: {e}")
 
     return render_template(
         'index.html', active_page='media_library', settings=settings,
@@ -280,13 +275,17 @@ def get_system_status():
             _add_library_name(activity)
 
         system_warnings = []
+        problem_cards = []
         if session.get('role') == 'admin':
             from services.system_health_service import SystemHealthService
             system_warnings = SystemHealthService.get_active_warnings(refresh=True)
+            from services.problem_service import ProblemService
+            problem_cards = ProblemService.list_cards()
 
         response = jsonify({
             'success': True,
             'system_warnings': system_warnings,
+            'problem_cards': problem_cards,
             'is_active': is_active,
             'tasks': running_tasks,
             'raw_status': status,
@@ -540,6 +539,9 @@ def trigger_scan_via_webhook():
             db_path = get_db_path_for_scan(db_type)
             from tools.scanner.core import scan_library_path
             scan_library_path(db_path, lib_id_int, target_path, force=force_requeue)
+            # 큐를 거치지 않는 즉시 스캔이라 목록(시리즈 요약 테이블/캐시) 반영을 직접 한다
+            from services.scan_refresh_service import refresh_after_direct_scan
+            refresh_after_direct_scan(db_type)
 
             return jsonify({
                 'success': True,

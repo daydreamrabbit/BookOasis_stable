@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Read book metadata embedded in EPUB OPF and PDF Info/XMP dictionaries."""
 import os
+import json
 import posixpath
 import re
 import threading
@@ -19,7 +20,7 @@ _CALIBRE_SERIES_INDEX_NS = 'http://calibre-ebook.com/xmp-namespace-series-index'
 _REMOTE_TIMEOUT_SECONDS = 15
 _MAX_XMP_BYTES = 8 * 1024 * 1024
 _METADATA_FIELDS = (
-    'title', 'author', 'cover_artist', 'isbn', 'publisher', 'summary',
+    'title', 'author', 'translator', 'cover_artist', 'isbn', 'uci', 'publisher', 'summary',
     'release_date', 'genre', 'tags', 'link', 'localized_series',
     'publication_status',
     'document_series_name', 'document_volume_index', 'document_volume_count',
@@ -166,6 +167,31 @@ def parse_epub_opf_metadata(opf):
         elif prop in ('collection-count', 'group-count') and refines:
             collection_counts[refines] = _metadata_value(element)
 
+    # Comic Book Butler stores original titles and provider URLs as OPF meta.
+    uci = named_metadata.get('comic-book-butler:uci')
+    if uci:
+        metadata['uci'] = uci.strip()
+    localized = named_metadata.get('comic-book-butler:localizedseries')
+    if localized:
+        metadata['localized_series'] = localized.strip()
+    for field, name in (('link', 'weburls'), ('tags', 'tags')):
+        raw = named_metadata.get('comic-book-butler:' + name, '')
+        if not raw:
+            continue
+        try:
+            values = json.loads(raw)
+        except (ValueError, TypeError):
+            values = raw
+        if not isinstance(values, list):
+            values = [values]
+        values = [str(v).strip() for v in values if isinstance(v, str) and v.strip()]
+        if field == 'link':
+            metadata[field] = ', '.join(dict.fromkeys(
+                url.strip() for value in values for url in re.split(r'[,\n]+', value)
+                if re.match(r'^https?://', url.strip(), re.I)))
+        else:
+            metadata[field] = normalize_metadata_list_field(', '.join(values))
+
     for key in _SERIES_NAME_KEYS:
         value = named_metadata.get(key)
         if value:
@@ -212,7 +238,7 @@ def parse_epub_opf_metadata(opf):
 
     creators = [e for e in package_metadata.iter()
                 if e.tag == f'{{{_DC_NS}}}creator' and _text(e)]
-    authors, artists, unclassified = [], [], []
+    authors, artists, translators, unclassified = [], [], [], []
     has_creator_roles = False
     for creator in creators:
         creator_id = creator.get('id', '')
@@ -224,6 +250,8 @@ def parse_epub_opf_metadata(opf):
             has_creator_roles = True
         if role in ('aut', 'author', 'cre'):
             authors.append(name)
+        elif role in ('trl', 'translator'):
+            translators.append(name)
         elif role in ('art', 'ill', 'cov'):
             artists.append(name)
         elif not role:
@@ -235,6 +263,8 @@ def parse_epub_opf_metadata(opf):
         metadata['author'] = _unique_names(unclassified or [_text(e) for e in creators])
     if artists:
         metadata['cover_artist'] = _unique_names(artists)
+    if translators:
+        metadata['translator'] = _unique_names(translators)
 
     for key, values in (
         ('publisher', dc_values('publisher')),

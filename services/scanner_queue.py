@@ -843,6 +843,10 @@ def _process_batch_book_scan(
     books = {}
     for book_id in ids:
         try:
+            if db_type == 'audiobook':
+                from repositories.audiobook_repository import AudiobookRepository
+                books[book_id] = AudiobookRepository.get_audiobook_by_id(book_id) or {}
+                continue
             books[book_id] = BookScanRepository.get_book_basic_info_raw(db_type, book_id) or {}
         except Exception as lookup_error:
             books[book_id] = {}

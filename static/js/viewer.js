@@ -40,6 +40,27 @@ export { openReader, closeMediaViewer, initViewerSeekBar };
 
 initFullscreenStateSync();
 
+function closeViewerTools({ restoreFocus = false } = {}) {
+  const button = document.getElementById('btn-viewer-more');
+  const open = button?.getAttribute('aria-expanded') === 'true';
+  button?.setAttribute('aria-expanded', 'false');
+  document.querySelector('.ridi-viewer-tools')?.classList.remove('is-tools-open');
+  if (open && restoreFocus) button.focus();
+}
+
+document.addEventListener('pointerdown', event => {
+  if (!event.target?.closest?.('.ridi-viewer-tools')) closeViewerTools();
+}, true);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.getElementById('btn-viewer-more')?.getAttribute('aria-expanded') === 'true') {
+    event.preventDefault(); event.stopImmediatePropagation();
+    closeViewerTools({ restoreFocus: true });
+  }
+}, true);
+document.addEventListener('viewer-chrome-will-hide', () => closeViewerTools());
+document.addEventListener('viewer-closed', () => closeViewerTools());
+window.matchMedia('(max-width: 1200px)').addEventListener('change', () => closeViewerTools());
+
 function closeViewerSettingsOverlay() {
   const menu = document.getElementById('comic-overlay-menu');
   if (menu && menu.style.display === 'flex') toggleComicOverlay({ suppressReopen: false });
@@ -762,6 +783,14 @@ function initMediaViewerDelegation() {
       }
     }
 
+    if (action === 'toggle-viewer-tools') {
+      const open = target.getAttribute('aria-expanded') !== 'true';
+      closeViewerSidePanels(); closeViewerSettingsOverlay();
+      target.setAttribute('aria-expanded', String(open));
+      target.closest('.ridi-viewer-tools')?.classList.toggle('is-tools-open', open);
+      return;
+    }
+    closeViewerTools();
     const isSidePanelAction = action === 'open-toc' || action === 'open-reading-notes' || action === 'open-viewer-search';
     if (!isSidePanelAction && target.closest('.ridi-viewer-toolbar-top')) closeViewerSidePanels();
     if (action !== 'toggle-overlay' && target.closest('.ridi-viewer-toolbar-top')) closeViewerSettingsOverlay();

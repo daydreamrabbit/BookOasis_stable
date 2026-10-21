@@ -1,12 +1,25 @@
 from flask import Blueprint, request, jsonify
 from services.trash_service import TrashService
+from api.auth import admin_required
 
 trash_bp = Blueprint('admin_trash', __name__)
 
 @trash_bp.route('/api/admin/trash', methods=['GET'])
+@admin_required
 def get_trash_books():
     """휴지통 목록 조회 (일반/성인 통합 또는 분리 조회 가능)"""
     try:
+        db_type = request.args.get('db_type')
+        if db_type:
+            if db_type not in ('general','adult','audiobook','video'):
+                return jsonify(success=False,error='지원하지 않는 도서 유형입니다.'),400
+            raw_id = request.args.get('library_id')
+            library_id = int(raw_id) if raw_id is not None else None
+            if library_id is not None and library_id <= 0:
+                return jsonify(success=False,error='올바른 카테고리가 필요합니다.'),400
+            response = jsonify(success=True, **{db_type:TrashService.get_deleted_books(db_type,library_id)})
+            response.headers['Cache-Control'] = 'no-store'
+            return response
         general_books = TrashService.get_deleted_books('general')
         adult_books = TrashService.get_deleted_books('adult')
         audiobook_books = TrashService.get_deleted_books('audiobook')
@@ -18,6 +31,8 @@ def get_trash_books():
             'audiobook': audiobook_books,
             'video': video_books
         })
+    except ValueError:
+        return jsonify(success=False,error='올바른 카테고리가 필요합니다.'),400
     except Exception as e:
         print(f"[API ERROR] Failed to fetch trash books: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500

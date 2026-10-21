@@ -1,12 +1,14 @@
 // ui.js – UI 렌더링 및 그리드 함수들
 import { state } from './state.js';
+import { genreBadgesHtml } from './book_card_genres.js';
 import { bindShelfDrag } from './shelf_drag.js';
 import { bindSeriesCoverRatio } from './series_cover_ratio.js';
 import { openBookDetail } from './modal.js';
-import { openReader } from './viewer.js?rev=20260927-tts-session-v8';
+import { openReader } from './reader_loader.js';
 import { showToast } from './view_manager.js';
 import { buildFallbackCoverUrl, getBookCoverSrc, buildTextCoverDataUri, coverAlignToObjectPosition } from './cover_fallback.js?rev=20260929-cover-url-cache-fix-v1';
 import { stripLeadingBracketTags, stripTrailingBracketSuffix, middleTruncateTitle } from './series_display.js';
+import { coverRatioAttr } from './utils/cover_ratio.js';
 import { initGridPruning, resetGridPruning, notifyCardsAppended, notifyCardsPrepended } from './grid_pruning.js';
 import { clearBookSelection, syncBookSelectionCard } from './book_selection.js';
 import {
@@ -221,7 +223,7 @@ export function createBookCard(item, options = {}) {
   card.className = 'book-card';
   if (isVideo) card.dataset.role = 'video-course-card';
   // 영상강좌는 항상 16:9 강제, 그 외(일반/성인/오디오북)는 카테고리별 커버 비율 설정을 따른다
-  card.dataset.coverRatio = isVideo ? '16-9' : (state.currentLibraryAspectRatio === '16:9' ? '16-9' : '4-3');
+  card.dataset.coverRatio = isVideo ? '16-9' : coverRatioAttr(state.currentLibraryAspectRatio);
   card.dataset.bookId = item.id || item.representative_book_id || '';
   card.dataset.coverAlign = item.cover_align || 'center';
   if (item.is_author_group) card.dataset.isAuthorGroup = '1';
@@ -403,10 +405,13 @@ export function createBookCard(item, options = {}) {
     <div class="book-card-info">
       <h4 class="book-card-title" title="${displayTitle}">${displayTitle}</h4>
       ${subTextHtml}
+      ${options.showGenres ? genreBadgesHtml(item.genre) : ''}
     </div>
   `;
 
   const imgEl = card.querySelector('img');
+  const genreStrip = card.querySelector('.book-card-genres');
+  if (genreStrip) bindShelfDrag(genreStrip);
   if (imgEl && !shouldHideCover) {
     imgEl.onerror = () => {
       const currentSrc = imgEl.getAttribute('src') || '';
@@ -727,6 +732,7 @@ export function renderDashboardRecentlyAdded(booksList) {
     const normalizedTitle = stripLeadingBracketTags(normalizeBookTitle(item));
     const card = createBookCard(item, {
       isNew: true,
+      showGenres: true,
       lazyLoad: false,
       actionTitle: '바로읽기',
       onPrimaryClick: (e) => openBookDetail(e, item.series_name || normalizedTitle, item.library_id, item.id),

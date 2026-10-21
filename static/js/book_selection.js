@@ -1,5 +1,6 @@
 // 라이브러리 도서 카드 선택 상태와 Ctrl/Shift 다중 선택을 관리합니다.
 import { state } from './state.js';
+import { filteredSearchUrl } from './search_filters.js';
 
 const selectedCards = new Map();
 let selectionScope = '';
@@ -11,7 +12,7 @@ let selectionVersion = 0;
 function getScope() {
   return JSON.stringify([state.currentLibraryType || 'general', state.currentLibraryId ?? '',
     state.searchQuery || '', state.currentSortDirection || 'asc', state.filterGenres || [],
-    state.filterTags || [], state.groupMode || '', state.authorKeyFilter || '']);
+    state.filterTags || [], state.groupMode || '', state.authorKeyFilter || '', state.advancedSearch, state.filterMode, state.readFilter || '']);
 }
 
 function getSelectableCard(target) {
@@ -129,7 +130,9 @@ async function selectRange(anchor, endCard) {
         start_id: anchor.id, start_library_id: anchor.libraryId,
         end_id: endTarget.id, end_library_id: endTarget.libraryId,
       });
-      const response = await fetch(`/api/media/list/selection-range?${params}`, {
+      params.set('read_filter', state.readFilter || '');
+      const filtered = filteredSearchUrl('selection-range', {...Object.fromEntries(params), libraryId:state.currentLibraryId, genres:state.filterGenres, tags:state.filterTags, advanced:state.advancedSearch, filterMode:state.filterMode, readFilter:state.readFilter || ''});
+      const response = await fetch(filtered || `/api/media/list/selection-range?${params}`, {
         cache: 'no-store', signal: controller.signal,
       });
       const data = await response.json();

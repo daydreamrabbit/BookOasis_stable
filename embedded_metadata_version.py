@@ -6,7 +6,8 @@
 LEGACY_EMBEDDED_METADATA_VERSION = 2
 COMICINFO_RATING_METADATA_VERSION = 3
 COMICINFO_TRANSLATOR_METADATA_VERSION = 4
-CURRENT_EMBEDDED_METADATA_VERSION = COMICINFO_TRANSLATOR_METADATA_VERSION
+COMICINFO_GTIN_METADATA_VERSION = 5
+CURRENT_EMBEDDED_METADATA_VERSION = COMICINFO_GTIN_METADATA_VERSION
 EMBEDDED_METADATA_FORMATS = ('zip', 'cbz', 'epub', 'pdf')
 EMBEDDED_METADATA_EXTENSIONS = tuple(f'.{item}' for item in EMBEDDED_METADATA_FORMATS)
 
@@ -33,6 +34,8 @@ def is_embedded_metadata_outdated(file_path, metadata_version, books_lv='', tran
     if version < LEGACY_EMBEDDED_METADATA_VERSION:
         return True
     is_comicinfo = path.endswith(('.cbz', '.zip'))
+    if is_comicinfo and version < COMICINFO_GTIN_METADATA_VERSION:
+        return True
     return (
         is_comicinfo
         and version < COMICINFO_RATING_METADATA_VERSION

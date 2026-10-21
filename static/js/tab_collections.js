@@ -3,7 +3,7 @@ import { state } from './state.js';
 import { createBookCard } from './ui.js?v=20260922-series-progress-v1';
 import { openBookDetail } from './modal.js';
 import { resumeSeries } from './book_list.js?rev=20260920-mobile-request-cancel-v4';
-import { openReader } from './viewer.js?rev=20260927-tts-session-v8';
+import { openReader } from './reader_loader.js';
 
 export async function renderCollectionsView() {
   const container = document.getElementById('books-list-container');

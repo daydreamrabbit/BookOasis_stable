@@ -17,7 +17,7 @@ function load(type) {
     fetch(`/api/media/libraries?type=${encodeURIComponent(type)}`, {cache:'no-store'}).then(r=>r.json()),
   ]).then(([prefs, libs]) => {
     if (!prefs.success || !libs.success) throw new Error('표지 설정을 불러오지 못했습니다.');
-    return {ratios:prefs.ratios || {}, libraries:Object.fromEntries((libs.libraries || []).map(l=>[String(l.id),l.cover_aspect_ratio]))};
+    return {ratios:prefs.ratios || {}, libraries:Object.fromEntries((libs.libraries || []).map(l=>[String(l.id),l.cover_aspect_ratio])), music:new Set((libs.libraries || []).filter(l=>l.content_kind === 'music').map(l=>String(l.id)))};
   }).catch(error=>{data.delete(type);throw error;}));
   return data.get(type);
 }
@@ -25,7 +25,8 @@ async function apply(card) {
   const type = card.dataset.coverDbType;
   const [settings, key] = await Promise.all([load(type), keyFor(card)]);
   const ratio = settings.ratios[key] || settings.libraries[card.dataset.libraryId];
-  card.dataset.coverRatio = type === 'video' || ratio === '16:9' ? '16-9' : '4-3';
+  card.dataset.coverRatio = type === 'audiobook' && settings.music.has(String(card.dataset.libraryId))
+    ? '1-1' : type === 'video' || ratio === '16:9' ? '16-9' : ratio === '1:1' ? '1-1' : '4-3';
   card.dataset.seriesCoverRatio = settings.ratios[key] || 'inherit';
 }
 export function bindSeriesCoverRatio(card, type) {

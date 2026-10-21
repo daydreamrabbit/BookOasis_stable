@@ -1,5 +1,6 @@
 // static/js/plugin_custom_view.js – 카테고리 레벨 플러그인 전용 풀페이지 뷰포트 마운트 오케스트레이터
 import { state } from './state.js';
+import { withPluginGlobals } from './utils/script_loader.js';
 import { switchActiveView } from './view_manager.js?rev=20260921-theme-mobile-v3';
 import { updateCurrentCategoryIndicator } from './category_indicator.js';
 
@@ -17,6 +18,9 @@ function escapeHtml(str) {
 // 끝나면서, 이미 다른 화면으로 넘어간 컨테이너를 낡은 내용으로 덮어쓸 수 있다.
 // static/js/dashboard.js의 dashboardLoadToken과 동일한 관례로 방지한다.
 let pluginViewLoadToken = 0;
+window.addEventListener('bookoasis:view-changing', event => {
+  if (event.detail?.viewName !== 'plugin_custom') ++pluginViewLoadToken;
+});
 
 export async function mountCategoryPluginUI(pluginId) {
   const container = document.getElementById('library-plugin-custom-view');
@@ -54,7 +58,9 @@ export async function mountCategoryPluginUI(pluginId) {
         if (bundle.js) {
           try {
             const scriptFn = new Function('pluginId', 'container', bundle.js);
-            scriptFn(pluginId, container);
+            await withPluginGlobals(bundle.js, () => {
+              if (requestToken === pluginViewLoadToken && container.isConnected) return scriptFn(pluginId, container);
+            });
           } catch (err) {
             console.error(`[PluginCustomView] Script execution error (${pluginId}):`, err);
           }

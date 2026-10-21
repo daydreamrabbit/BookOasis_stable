@@ -4,6 +4,7 @@ from functools import wraps
 import ipaddress
 import os
 import threading
+import json
 import database
 from werkzeug.security import generate_password_hash, check_password_hash
 from services.settings_service import SettingsService
@@ -16,6 +17,7 @@ from services.user_profile_service import (
     get_custom_avatar_mimetype,
     get_custom_avatar_path,
     save_custom_avatar_image,
+    normalize_profile_appearance,
 )
 
 from utils.i18n_helper import get_available_languages
@@ -94,9 +96,9 @@ def _looks_like_proxy_request():
     ])
 
 
-def _reject_oversized_auth_request():
+def _reject_oversized_auth_request(limit=MAX_AUTH_REQUEST_BYTES):
     cl = request.content_length
-    if cl is not None and cl > MAX_AUTH_REQUEST_BYTES:
+    if cl is not None and cl > limit:
         return jsonify({'success': False, 'error': 'Request payload too large'}), 413
     return None
 
@@ -233,6 +235,7 @@ def check_authentication():
             or request.path in ('/health', '/favicon.ico')
             or request.path.startswith('/opds')
             or request.path.startswith('/app-opds')   # 타치요미 전용 엔드포인트 (자체 인증 처리)
+            or request.path.startswith('/kosync/')    # KOReader 진행 동기화 (x-auth-user/x-auth-key 자체 인증)
             or request.path.startswith('/covers')
             or request.path.startswith('/api/webhook/')):
         return
@@ -477,14 +480,187 @@ def get_account_profile():
             include_adult=session.get('has_adult_access') == 1,
             year=year,
         )
+        from services.profile_reading_overview import get_profile_reading_overview
+        try:
+            payload['overview'] = get_profile_reading_overview(user_id,
+                include_adult=session.get('has_adult_access') == 1,
+                content_rating_max=session.get('content_rating_max', 18))
+        except Exception as error:
+            print(f'[UserProfile] Reading overview failed: {error}')
+            payload['overview_error'] = '독서 통계를 불러오지 못했습니다. 다시 시도해 주세요.'
     return jsonify(payload)
+
+
+@auth_bp.route('/api/account/profile/library', methods=['GET'])
+@login_required
+def get_account_profile_library():
+    """Lazy profile tabs; account identity and visibility come only from session."""
+    mode = request.args.get('mode', 'reading')
+    status = request.args.get('status', '')
+    sort = request.args.get('sort', 'title')
+    page = request.args.get('page', type=int) if 'page' in request.args else 1
+    if mode not in ('reading', 'favorites', 'statistics', 'activity') or status not in ('', 'reading', 'completed', 'planning') or sort not in ('title', 'recent', 'rating') or page is None or page < 1:
+        return jsonify(success=False, error='조회 조건이 올바르지 않습니다.'), 400
+    from services.profile_library import profile_library, profile_charts
+    works, activity, rating_error = profile_library(session['user_id'],
+        include_adult=session.get('has_adult_access') == 1,
+        content_rating_max=session.get('content_rating_max', 18),
+        include_ratings=mode in ('reading', 'statistics'), include_history=mode=='statistics')
+    if mode == 'statistics':
+        return jsonify(success=True, charts=profile_charts(works), rating_error=rating_error)
+    options = {'genres': sorted({name for row in works for name in row['genres']}),
+        'tags': sorted({name for row in works for name in row['tags']}),
+        'formats': sorted({row['file_format'] for row in works if row['file_format']}),
+        'years': sorted({row['release_year'] for row in works if row['release_year']}, reverse=True)}
+    counts = {key: sum(row['status'] == key for row in works) for key in ('reading', 'completed', 'planning')}
+    items = activity if mode == 'activity' else works
+    if mode == 'favorites':
+        items = [row for row in items if row['favorite'] or row['collected'] or row.get('bookmarked')]
+    if status and mode != 'activity':
+        items = [row for row in items if row['status'] == status]
+    query = request.args.get('q', '').strip().casefold()[:200]
+    if query:
+        items = [row for row in items if query in row['name'].casefold() or query in row['series_name'].casefold()]
+    if mode == 'reading':
+        for argument, field in [('genre', 'genres'), ('tag', 'tags'), ('format', 'file_format'), ('year', 'release_year')]:
+            value = request.args.get(argument, '').strip()[:200]
+            if value:
+                items = [row for row in items if (value in row[field] if isinstance(row[field], list) else value == row[field])]
+    if mode != 'activity':
+        if sort == 'title':
+            items.sort(key=lambda row: (row['name'].casefold(), row['db_type'], row['id']))
+        elif sort == 'recent':
+            items.sort(key=lambda row: (row['last_read_at'], row['db_type'], row['id']), reverse=True)
+        else:
+            items.sort(key=lambda row: (-(row['rating'] or 0), row['name'].casefold(), row['db_type'], row['id']))
+    limit = 60
+    return jsonify(success=True, items=items[(page-1)*limit:page*limit], total=len(items), page=page,
+        page_size=limit, counts=counts, options=options, rating_error=rating_error)
+
+
+@auth_bp.route('/api/account/profile/messages', methods=['GET', 'POST'])
+@login_required
+def account_profile_messages():
+    from services.profile_messages import list_messages, create_message
+    if request.method == 'GET':
+        page = request.args.get('page', type=int) if 'page' in request.args else 1
+        if page is None or page < 1:
+            return jsonify(success=False,error='페이지가 올바르지 않습니다.'),400
+        return jsonify(success=True,**list_messages(session['user_id'],page))
+    oversized = _reject_oversized_auth_request()
+    if oversized:
+        return oversized
+    data=request.get_json(silent=True)
+    if not isinstance(data,dict):
+        return jsonify(success=False,error='메시지 요청이 올바르지 않습니다.'),400
+    try:
+        item=create_message(session['user_id'],data.get('body'),data.get('id'))
+    except ValueError as error:
+        return jsonify(success=False,error=str(error)),400
+    return jsonify(success=True,item=item),201
+
+
+@auth_bp.route('/api/account/profile/messages/<message_id>', methods=['DELETE'])
+@login_required
+def remove_account_profile_message(message_id):
+    from services.profile_messages import delete_message
+    try:
+        removed=delete_message(session['user_id'],message_id)
+    except ValueError as error:
+        return jsonify(success=False,error=str(error)),400
+    if not removed:
+        return jsonify(success=False,error='메시지를 찾을 수 없습니다.'),404
+    return jsonify(success=True)
+
+
+@auth_bp.route('/api/account/community/settings', methods=['GET','POST'])
+@login_required
+def account_community_settings():
+    from services.profile_guestbook import public_setting,save_public_setting
+    if request.method=='GET':
+        return jsonify(success=True,user_id=session['user_id'],enabled=public_setting(session['user_id']))
+    oversized=_reject_oversized_auth_request()
+    if oversized:return oversized
+    data=request.get_json(silent=True)
+    try:
+        if not isinstance(data,dict):raise ValueError('공개 설정을 확인해 주세요.')
+        enabled=save_public_setting(session['user_id'],data.get('enabled'))
+    except ValueError as error:
+        return jsonify(success=False,error=str(error)),400
+    except LookupError:
+        return jsonify(success=False,error='사용자를 찾을 수 없습니다.'),404
+    return jsonify(success=True,user_id=session['user_id'],enabled=enabled)
+
+
+@auth_bp.route('/api/account/community/members', methods=['GET'])
+@login_required
+def account_community_members():
+    from services.profile_guestbook import member_directory
+    page=request.args.get('page',type=int) if 'page' in request.args else 1
+    if page is None or page<1:return jsonify(success=False,error='페이지가 올바르지 않습니다.'),400
+    return jsonify(success=True,**member_directory(request.args.get('q','').strip()[:80],page))
+
+
+@auth_bp.route('/api/account/community/profiles/<int:owner_id>', methods=['GET'])
+@login_required
+def account_member_profile(owner_id):
+    from services.profile_guestbook import member_profile
+    try:
+        profile=member_profile(owner_id,session['user_id'])
+    except LookupError:
+        return jsonify(success=False,error='공개된 프로필을 찾을 수 없습니다.'),404
+    return jsonify(success=True,profile=profile)
+
+
+@auth_bp.route('/api/account/community/profiles/<int:owner_id>/avatar', methods=['GET'])
+@login_required
+def account_member_avatar(owner_id):
+    from services.profile_guestbook import member_profile
+    try:member_profile(owner_id,session['user_id'])
+    except LookupError:return jsonify(success=False,error='이미지를 찾을 수 없습니다.'),404
+    path=get_custom_avatar_path(owner_id)
+    if not path.is_file():return jsonify(success=False,error='이미지를 찾을 수 없습니다.'),404
+    response=send_file(path,mimetype=get_custom_avatar_mimetype(owner_id),conditional=True,max_age=0)
+    response.headers['Cache-Control']='private, no-store'
+    return response
+
+
+@auth_bp.route('/api/account/community/profiles/<int:owner_id>/guestbook', methods=['GET','POST'])
+@login_required
+def account_member_guestbook(owner_id):
+    from services.profile_guestbook import guestbook_entries,create_guest_entry
+    try:
+        if request.method=='GET':
+            page=request.args.get('page',type=int) if 'page' in request.args else 1
+            if page is None or page<1:raise ValueError('페이지가 올바르지 않습니다.')
+            return jsonify(success=True,**guestbook_entries(owner_id,session['user_id'],page))
+        oversized=_reject_oversized_auth_request()
+        if oversized:return oversized
+        data=request.get_json(silent=True)
+        if not isinstance(data,dict):raise ValueError('메시지 요청이 올바르지 않습니다.')
+        item=create_guest_entry(owner_id,session['user_id'],data.get('body'),data.get('id'))
+        return jsonify(success=True,item=item),201
+    except LookupError:
+        return jsonify(success=False,error='공개된 프로필을 찾을 수 없습니다.'),404
+    except ValueError as error:
+        return jsonify(success=False,error=str(error)),400
+
+
+@auth_bp.route('/api/account/community/profiles/<int:owner_id>/guestbook/<message_id>', methods=['DELETE'])
+@login_required
+def remove_member_guestbook_message(owner_id,message_id):
+    from services.profile_guestbook import delete_guest_entry
+    try:removed=delete_guest_entry(owner_id,session['user_id'],message_id)
+    except ValueError as error:return jsonify(success=False,error=str(error)),400
+    if not removed:return jsonify(success=False,error='메시지를 찾을 수 없습니다.'),404
+    return jsonify(success=True)
 
 
 @auth_bp.route('/api/account/profile', methods=['POST'])
 @login_required
 def update_account_profile():
     """표시 이름과 서버 동기화되는 프리셋 프로필 이미지를 저장한다."""
-    oversized = _reject_oversized_auth_request()
+    oversized = _reject_oversized_auth_request(256 * 1024)
     if oversized:
         return oversized
     data = request.get_json(silent=True) or {}
@@ -494,9 +670,12 @@ def update_account_profile():
         return jsonify({'success': False, 'error': '표시 이름은 40자까지 입력할 수 있습니다.'}), 400
     if avatar not in PROFILE_AVATARS and not (avatar == 'custom' and get_custom_avatar_path(session['user_id']).is_file()):
         return jsonify({'success': False, 'error': '지원하지 않는 프로필 이미지입니다.'}), 400
-    profile = UserProfileService.save_preferences(
-        session['user_id'], session.get('username', ''), display_name, avatar
-    )
+    try:
+        profile = UserProfileService.save_preferences(
+            session['user_id'], session.get('username', ''), display_name, avatar, data.get('appearance')
+        )
+    except ValueError as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
     return jsonify({'success': True, 'profile': profile})
 
 
@@ -508,6 +687,41 @@ def get_account_profile_avatar():
     if not path.is_file():
         return jsonify({'success': False, 'error': '등록된 프로필 이미지가 없습니다.'}), 404
     return send_file(path, mimetype=get_custom_avatar_mimetype(session['user_id']), conditional=True, max_age=86400)
+
+
+@auth_bp.route('/api/account/profile/bio-images', methods=['POST'])
+@login_required
+def upload_profile_bio_image():
+    from services.profile_bio_images import MAX_BIO_IMAGE_BYTES, save_image
+    if request.content_length is not None and request.content_length > MAX_BIO_IMAGE_BYTES + 256 * 1024:
+        return jsonify(success=False, error='소개 이미지는 파일당 5MB 이하만 사용할 수 있습니다.'), 413
+    upload = request.files.get('image')
+    if upload is None:
+        return jsonify(success=False, error='붙여넣을 이미지를 선택해 주세요.'), 400
+    try:
+        url = save_image(session['user_id'], upload.stream)
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    return jsonify(success=True, url=url), 201
+
+
+@auth_bp.route('/api/account/profile/bio-images/<int:owner_id>/<key>', methods=['GET'])
+@login_required
+def get_profile_bio_image(owner_id, key):
+    from services.profile_bio_images import image_path, is_referenced
+    from services.profile_guestbook import public_setting
+    try:
+        path = image_path(owner_id, key)
+    except ValueError:
+        return jsonify(success=False, error='이미지를 찾을 수 없습니다.'), 404
+    if owner_id != session['user_id'] and (not public_setting(owner_id) or not is_referenced(owner_id, key)):
+        return jsonify(success=False, error='이미지를 찾을 수 없습니다.'), 404
+    if not path.is_file():
+        return jsonify(success=False, error='이미지를 찾을 수 없습니다.'), 404
+    response = send_file(path, mimetype='image/webp', conditional=True, max_age=0)
+    response.headers['Cache-Control'] = 'private, no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 @auth_bp.route('/api/account/profile/avatar', methods=['POST'])
@@ -524,9 +738,12 @@ def upload_account_profile_avatar():
     if len(display_name) > 40:
         return jsonify({'success': False, 'error': '표시 이름은 40자까지 입력할 수 있습니다.'}), 400
     try:
+        appearance = None
+        if 'appearance' in request.form:
+            appearance = normalize_profile_appearance(json.loads(request.form['appearance']))
         save_custom_avatar_image(session['user_id'], upload.stream)
         profile = UserProfileService.save_preferences(
-            session['user_id'], session.get('username', ''), display_name, 'custom'
+            session['user_id'], session.get('username', ''), display_name, 'custom', appearance
         )
     except ValueError as error:
         return jsonify({'success': False, 'error': str(error)}), 400

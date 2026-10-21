@@ -8,6 +8,7 @@ from functools import lru_cache
 from urllib.parse import urlencode
 from dotenv import load_dotenv
 load_dotenv()
+import plugin_framework  # Keep plugin contract identity stable across mounted old plugins.
 
 # 다른 어떤 print()보다 먼저 실행되어야 한다 - Windows(특히 한국어 로캘, CP949) 콘솔에서
 # 로그의 한글/이모지가 깨지거나 UnicodeEncodeError가 나는 문제의 근본 수정.
@@ -382,6 +383,13 @@ if not IS_WORKER:
 
         return ('', 204)
 
+    from utils.request_failure_log import log_failed_write_request
+    app.after_request(log_failed_write_request)
+    from utils.request_debug_log import init_app as init_request_debug_log
+    init_request_debug_log(app)
+    from services.user_activity_service import init_app as init_user_activity
+    init_user_activity(app)
+
     @app.after_request
     def add_fingerprint_headers(response):
         response.headers['X-Powered-By'] = ENGINE_NAME
@@ -418,6 +426,17 @@ if not IS_WORKER:
         # /static/lib/**(서드파티 라이브러리)은 별도로 영구 캐시 대상이라 여기서 제외.
         if request.path.startswith('/static/js/') or request.path.startswith('/static/css/'):
             response.headers['Cache-Control'] = 'no-cache, must-revalidate'
+            # Only immutable content-addressed URLs may skip revalidation.
+            # Arbitrary or legacy ?v= values must still pick up later fixes.
+            asset = request.args.get('asset', '')
+            if response.status_code in (200, 304) and len(asset) == 16:
+                try:
+                    path = os.path.join(app.static_folder, request.path[len('/static/'):])
+                    stat = os.stat(path)
+                    if asset == _static_asset_content_hash(path, stat.st_mtime_ns, stat.st_size):
+                        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+                except OSError:
+                    pass
             return response
 
         is_cacheable_path = request.path.startswith('/static/lib/') or request.path.startswith('/static/fonts/')

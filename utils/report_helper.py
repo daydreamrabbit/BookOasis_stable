@@ -13,10 +13,31 @@ def get_reports_dir():
     os.makedirs(REPORTS_DIR, exist_ok=True)
     return REPORTS_DIR
 
-def save_scan_report(library_id, error_list):
+_VALID_DB_TYPES = ('general', 'adult', 'audiobook', 'video')
+
+
+def _report_prefix(library_id, db_type):
+    """리포트 파일명 접두어. library_id는 DB(general/adult/...)마다 독립적으로 매겨져
+    일반 19번과 성인 19번이 겹치므로 db_type까지 붙여 구분한다."""
+    if db_type not in _VALID_DB_TYPES:
+        raise ValueError('지원하지 않는 리포트 미디어 종류입니다.')
+    library_id = int(library_id)
+    if library_id <= 0:
+        raise ValueError('유효하지 않은 카테고리 ID입니다.')
+    return f"{db_type}-{library_id}"
+
+
+def list_report_files(library_id, db_type='general'):
+    """해당 카테고리의 리포트 파일 경로 목록(정렬 안 됨).
+    db_type 없이 '{library_id}_*.json'으로 저장되던 구형 리포트는 어느 DB 것인지 알 수 없어 제외한다."""
+    pattern = os.path.join(get_reports_dir(), f"{_report_prefix(library_id, db_type)}_*.json")
+    return glob.glob(pattern)
+
+
+def save_scan_report(library_id, error_list, db_type='general'):
     """
-    스캔 결과 감지된 오류 목록을 {library_id}_{timestamp}.json 파일로 저장합니다.
-    이후 해당 library_id 기준 리포트 수가 10개를 초과할 시 가장 오래된 파일을 순환 소거합니다.
+    스캔 결과 감지된 오류 목록을 {db_type}-{library_id}_{timestamp}.json 파일로 저장합니다.
+    이후 해당 카테고리 기준 리포트 수가 10개를 초과할 시 가장 오래된 파일을 순환 소거합니다.
     """
     if not error_list:
         print(f"[ReportHelper] 카테고리 {library_id} 에러 내역이 없어 리포트 저장을 생략합니다.")
@@ -24,11 +45,12 @@ def save_scan_report(library_id, error_list):
 
     reports_dir = get_reports_dir()
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    filename = f"{library_id}_{timestamp}.json"
+    filename = f"{_report_prefix(library_id, db_type)}_{timestamp}.json"
     file_path = os.path.join(reports_dir, filename)
 
     report_data = {
         'library_id': library_id,
+        'db_type': db_type,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'errors_count': len(error_list),
         'errors': error_list
@@ -44,8 +66,7 @@ def save_scan_report(library_id, error_list):
 
     # 카테고리(library_id)별 링 버퍼 순환 소거 실행 (최대 10개 유지)
     try:
-        pattern = os.path.join(reports_dir, f"{library_id}_*.json")
-        existing_files = glob.glob(pattern)
+        existing_files = list_report_files(library_id, db_type)
         
         # 파일 이름(타임스탬프 포함) 기준으로 정렬하여 가장 오래된 것부터 추출
         existing_files.sort(key=os.path.basename)
@@ -64,12 +85,10 @@ def save_scan_report(library_id, error_list):
 
     return filename
 
-def delete_all_reports(library_id):
-    """카테고리 삭제 시, 해당 library_id로 시작하는 모든 리포트 파일을 일괄 제거합니다."""
-    reports_dir = get_reports_dir()
-    pattern = os.path.join(reports_dir, f"{library_id}_*.json")
+def delete_all_reports(library_id, db_type='general'):
+    """카테고리 삭제 시, 해당 카테고리(db_type + library_id)의 모든 리포트 파일을 일괄 제거합니다."""
     try:
-        files = glob.glob(pattern)
+        files = list_report_files(library_id, db_type)
         removed_count = 0
         for f in files:
             try:

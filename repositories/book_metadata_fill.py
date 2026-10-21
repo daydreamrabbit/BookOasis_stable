@@ -5,6 +5,7 @@
 FILLABLE_METADATA_COLUMNS = (
     'author', 'cover_artist', 'teams', 'locations', 'characters', 'books_lv',
     'publisher', 'summary', 'release_date', 'genre', 'tags', 'isbn',
+    'localized_series', 'link', 'translator',
 )
 # 예전 메타데이터 가져오기가 "설명 없음"의 의미로 저장하던 자리표시 문구 - 빈 값과 같게 취급한다.
 SUMMARY_PLACEHOLDER = '등록된 설명이 없습니다.'

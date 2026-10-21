@@ -8,18 +8,18 @@ import database
 
 
 def get_deleted_books(db_type):
-    conn = database.get_connection(db_type)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT b.id, b.title, b.file_path, b.deleted_at, b.library_id, l.name AS library_name
-        FROM books b
-        LEFT JOIN libraries l ON b.library_id = l.id
-        WHERE COALESCE(b.is_deleted, 0) = 1
-        ORDER BY b.deleted_at DESC, b.title ASC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    with database.connection(db_type) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT b.id, b.title, b.file_path, b.deleted_at, b.library_id, l.name AS library_name
+            FROM books b
+            LEFT JOIN libraries l ON b.library_id = l.id
+            WHERE COALESCE(b.is_deleted, 0) = 1
+            ORDER BY b.deleted_at DESC, b.title ASC
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
 
 
 def restore_books(db_type, book_ids, placeholder):
@@ -46,42 +46,42 @@ def restore_books(db_type, book_ids, placeholder):
 
 
 def get_deleted_book_ids_by_library(db_type, library_id, placeholder):
-    conn = database.get_connection(db_type)
-    cursor = conn.cursor()
-    cursor.execute(f"SELECT id FROM books WHERE library_id = {placeholder} AND COALESCE(is_deleted, 0) = 1", (library_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [r['id'] for r in rows]
+    with database.connection(db_type) as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT id FROM books WHERE library_id = {placeholder} AND COALESCE(is_deleted, 0) = 1", (library_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [r['id'] for r in rows]
 
 
 def get_all_deleted_book_ids(db_type):
-    conn = database.get_connection(db_type)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM books WHERE COALESCE(is_deleted, 0) = 1")
-    rows = cursor.fetchall()
-    conn.close()
-    return [r['id'] for r in rows]
+    with database.connection(db_type) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM books WHERE COALESCE(is_deleted, 0) = 1")
+        rows = cursor.fetchall()
+        conn.close()
+        return [r['id'] for r in rows]
 
 
 def fetch_book_covers(db_type, book_ids, placeholder):
     if not book_ids:
         return []
-    conn = database.get_connection(db_type)
-    cursor = conn.cursor()
-    placeholders = ','.join([placeholder] * len(book_ids))
-    cursor.execute(f"SELECT cover_image FROM books WHERE id IN ({placeholders})", book_ids)
-    rows = cursor.fetchall()
-    conn.close()
-    return [r['cover_image'] for r in rows if r['cover_image']]
+    with database.connection(db_type) as conn:
+        cursor = conn.cursor()
+        placeholders = ','.join([placeholder] * len(book_ids))
+        cursor.execute(f"SELECT cover_image FROM books WHERE id IN ({placeholders})", book_ids)
+        rows = cursor.fetchall()
+        conn.close()
+        return [r['cover_image'] for r in rows if r['cover_image']]
 
 
 def check_cover_reference_count(db_type, cover_image, placeholder):
-    conn = database.get_connection(db_type)
-    cursor = conn.cursor()
-    cursor.execute(f"SELECT COUNT(1) AS cnt FROM books WHERE cover_image = {placeholder}", (cover_image,))
-    row = cursor.fetchone()
-    conn.close()
-    return row['cnt'] if row else 0
+    with database.connection(db_type) as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(1) AS cnt FROM books WHERE cover_image = {placeholder}", (cover_image,))
+        row = cursor.fetchone()
+        conn.close()
+        return row['cnt'] if row else 0
 
 
 def hard_delete_books_transaction(db_type, book_ids, target_covers, placeholder):

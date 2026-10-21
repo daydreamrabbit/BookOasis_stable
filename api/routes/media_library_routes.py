@@ -16,6 +16,17 @@ from utils.i18n import _t
 media_library_routes_bp = Blueprint('media_library_browse_routes', __name__)
 
 
+@media_library_routes_bp.before_request
+def route_series_filter_mode():
+    # One permission-aware SQL pipeline for AND/OR lists, totals, jumps and selection.
+    actions = {'/api/media/list':'list', '/api/media/list-totals':'totals',
+               '/api/media/list/jump':'jump', '/api/media/list/selection-range':'selection-range'}
+    action = actions.get(request.path)
+    if action and request.args.get('type','general') in ('general','adult') and (request.args.get('genres') or request.args.get('tags')):
+        from api.routes.advanced_search_routes import advanced_search
+        return advanced_search(action)
+
+
 def _parse_csv_filter_values(raw_value):
     if not raw_value:
         return []
@@ -105,7 +116,8 @@ def get_media_list():
             author_key=author_key,
             include_has_metadata=include_has_metadata,
             content_rating_max=content_rating_max,
-            return_has_more=True
+            return_has_more=True,
+            read_filter=request.args.get('read_filter', '')
         )
         if has_more:
             series_list = series_list[:limit]
@@ -137,6 +149,7 @@ def get_media_selection_range():
             tag_filters=_parse_csv_filter_values(request.args.get('tags')),
             user_id=session.get('user_id'), role=session.get('role'),
             content_rating_max=session.get('content_rating_max', 18), selection_anchors=anchors,
+            read_filter=request.args.get('read_filter', ''),
         )
         return jsonify(success=True, **result)
     except (ValueError, KeyError) as exc:
@@ -181,6 +194,7 @@ def get_media_list_jump_position():
             user_id=user_id,
             role=role,
             content_rating_max=content_rating_max,
+            read_filter=request.args.get('read_filter', ''),
         )
         print(
             f"[API-PROFILE] GET /api/media/list/jump "
@@ -217,6 +231,7 @@ def get_media_list_totals():
             user_id=session.get('user_id'),
             role=session.get('role'),
             content_rating_max=session.get('content_rating_max', 18),
+            read_filter=request.args.get('read_filter', ''),
         )
         return jsonify({'success': True, **totals})
     except Exception as error:

@@ -1,17 +1,21 @@
 // tab_media_library.js – 도서관 코어 엔트리 오케스트레이터 및 메인 라우터
 import { state } from './state.js';
+import { initializeOnce } from './app_boot_guard.js';
+import { whenIdle } from './utils/lazy_module.js';
+import { ensureJSZip } from './utils/script_loader.js';
+import { readOpenViewerSession, forgetOpenViewer } from './viewer/open_session.js';
 import * as api from './api.js';
 import { openBookDetail, goBackToList } from './modal.js';
 import { matchesRetainedDetailHistory, restoreBehindDetail } from './detail/history_navigation.js?rev=20260927-detail-back-v2';
 import { updateCurrentCategoryIndicator } from './category_indicator.js';
-import { openReader, closeMediaViewer, toggleFullscreenViewer, setComicFitMode, changeFontSize, toggleReaderTheme, initKeyboardListener, nextComicPage, prevComicPage, nextPdfPage, prevPdfPage, epubPrevPage, epubNextPage, prevTxtPage, nextTxtPage } from './viewer.js?rev=20260927-tts-session-v8';
+import { openReader, closeMediaViewer, toggleFullscreenViewer, setComicFitMode, changeFontSize, toggleReaderTheme, initKeyboardListener, nextComicPage, prevComicPage, nextPdfPage, prevPdfPage, epubPrevPage, epubNextPage, prevTxtPage, nextTxtPage, flushProgress } from './reader_loader.js';
 import { switchActiveView } from './view_manager.js?rev=20260921-theme-mobile-v3';
-import { flushProgress } from './viewer_progress.js?rev=20260927-tts-session-v8';
 import './header_scroll_behavior.js';
 
 // category.js CRUD 임포트
 import { loadLibraries, triggerAddLibrary, triggerEditLibrary, triggerDeleteLibrary, closeLibraryModal, submitLibraryForm, triggerScanLibrary, triggerScanLibraryCovers, triggerCancelScanLibrary } from './category.js?rev=20260922-library-kinds-v5';
 import { applySidebarShowMore, expandGroupContainingCategory } from './category/index.js?rev=20260922-library-kinds-v5';
+import { resolveCoverAspectRatio } from './utils/cover_ratio.js';
 
 // scheduler.js 임포트
 import { loadLibrarySchedules, saveLibrarySchedule, runLibraryScanNow } from './scheduler.js';
@@ -46,7 +50,7 @@ import { mountCategoryPluginUI } from './plugin_custom_view.js?rev=20260921-them
 import { switchSettingsTab, getPreferredSettingsTab, loadInitialSystemSettings, loadGeneralSettings, submitGeneralSettings, initReportsTab, loadReportList, loadReportDetail, loadViewerSettings, submitViewerSettings, applySettingsTabAccessControl } from './settings_tab.js?rev=20260921-plugin-settings-account-sync-v6';
 
 // 장르/태그 및 사이드바 제어 모듈
-import { initFloatingFilter, toggleFilterModal, refreshFilterCategory } from './genre_tag_filter.js?rev=20260926-filter-chip-click-stays-open-v1';
+import { initFloatingFilter, toggleFilterModal, refreshFilterCategory, setMetadataFilterState } from './genre_tag_filter.js?rev=20260926-filter-chip-click-stays-open-v1';
 import { initSidebarInteractions, restoreDesktopSidebarState, toggleDesktopSidebar, syncSidebarResponsiveControls, runAfterMobileSidebarClose } from './sidebar_manager.js?rev=20260921-mobile-header-v6';
 import { decodeDetailParams } from './url_obfuscator.js';
 
@@ -58,12 +62,12 @@ import { handleLibrarySearchDraft, initLibrarySearchPreview } from './library_se
 import { setSelectCategoryHandler } from './category_navigation.js?rev=20260920-library-content-kind-v2';
 import { initUserProfile, loadUserProfile } from './user_profile.js?rev=20260922-profile-image-v2';
 
-import './viewer/viewer_padding.js';
 import './audio_player.js';
 import './video_library.js';
 import './author_group_context_menu.js';
 import './video_player.js';
 import './plugin_webview_api.js?rev=20260923-access-v1';
+whenIdle(() => ensureJSZip().catch(error => console.debug('[JSZip] deferred load will retry when needed', error)));
 
 // 새로고침/뒤로가기 시 브라우저가 이전 스크롤 위치(내부 스크롤 컨테이너 포함)를
 // 되살리면서 .library-main-content가 scrollTop 0이 아닌 채로 시작해 상단 검색창이
@@ -457,6 +461,8 @@ async function initTabMediaLibrary() {
         await loadLibraries();
       }
       const searchQuery = String(event.state.searchQuery || '');
+      state.advancedSearch = event.state.advancedSearch || null;
+      window.dispatchEvent(new Event('bookoasis:advanced-search-changed'));
       restoreLibrarySearchQuery(searchQuery);
       await selectCategory(event.state.libraryId || 'all', true, {
         preserveSearch: true,
@@ -631,8 +637,10 @@ async function initTabMediaLibrary() {
   });
 
   const initialHash = window.location.hash || '';
+  const resumeViewer = initialHash === '#viewer' ? readOpenViewerSession() : null;
+  if (resumeViewer && canAccessLibraryType(resumeViewer.type)) state.currentLibraryType = resumeViewer.type;
   const isDetailDeepLink = initialHash.startsWith('#detail');
-  const targetMediaType = parseMediaTypeFromUrl();
+  const targetMediaType = resumeViewer ? resumeViewer.type : parseMediaTypeFromUrl();
 
   if (targetMediaType) {
     if (!canAccessLibraryType(targetMediaType)) {
@@ -644,7 +652,7 @@ async function initTabMediaLibrary() {
     applyLibraryTypeButtonState(state.currentLibraryType || 'general');
   }
 
-  const targetLibraryId = parseLibraryIdFromUrl();
+  const targetLibraryId = resumeViewer ? resumeViewer.libraryId : parseLibraryIdFromUrl();
   const homeLanding = !isDetailDeepLink && (!targetLibraryId || targetLibraryId === 'home');
   let sidebarLoadPromise = null;
 
@@ -657,6 +665,38 @@ async function initTabMediaLibrary() {
   } else {
     await loadLibraries();
   }
+
+  if (resumeViewer && canAccessLibraryType(resumeViewer.type)) {
+    const restoreHash = window.location.hash;
+    const restoreHistory = history.state;
+    try {
+      // Permission-aware progress lookup is authoritative; local session values
+      // only describe the fallback location, never grant access to a book.
+      const res = await fetch(`/api/media/progress-state?db_type=${encodeURIComponent(resumeViewer.type)}&book_id=${resumeViewer.bookId}`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      if (!res.ok || !(res.headers.get('content-type') || '').includes('application/json')) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.success || !data.state) throw new Error('도서 위치를 확인하지 못했습니다.');
+      if (window.location.hash !== restoreHash || JSON.stringify(history.state) !== JSON.stringify(restoreHistory)) return;
+      await selectCategory(resumeViewer.libraryId || 'home', true);
+      if (window.location.hash !== restoreHash) return;
+      history.replaceState({ ...(restoreHistory || {}), view: 'viewer', bookId: resumeViewer.bookId,
+        libraryId: resumeViewer.libraryId, type: resumeViewer.type }, '', '#viewer');
+      // Restore the underlying detail without adding another history entry.
+      const back = resumeViewer.returnHistory;
+      if (back?.view === 'detail') await openBookDetail(null, back.series, back.libraryId, back.repBookId, back.displayTitle || '');
+      if (window.location.hash !== '#viewer') return;
+      openReader(resumeViewer.bookId, resumeViewer.format, resumeViewer.title,
+        resumeViewer.format === 'epub' ? 0 : Number(data.state.pages_read ?? resumeViewer.pageIdx) || 0,
+        Number(data.state.total_pages ?? resumeViewer.totalPages) || 0);
+      return;
+    } catch (error) {
+      forgetOpenViewer();
+      window.showToast?.('열려 있던 도서를 복원하지 못했습니다. 목록에서 다시 열어 주세요.', 'warning');
+    }
+  } else if (initialHash === '#viewer') {
+    forgetOpenViewer();
+  }
+  if (initialHash === '#viewer') history.replaceState(null, '', window.location.pathname + window.location.search);
 
   if (isDetailDeepLink) {
     const restoredDetail = decodeDetailParams(initialHash);
@@ -851,8 +891,14 @@ export async function selectCategory(id, skipHistory = false, options = {}) {
   if (typeof window.clearMetadataFilters === 'function') {
     window.clearMetadataFilters();
   }
+  // Quick genre/tag navigation must carry its conditions into the FIRST list
+  // request, after clearing the old category's filters and before loading.
+  if (options.metadataFilters) {
+    setMetadataFilterState(options.metadataFilters);
+  }
 
   const preserveSearch = options && options.preserveSearch === true;
+  if (options.advancedSearch) state.advancedSearch = options.advancedSearch;
   if (preserveSearch) {
     const query = Object.prototype.hasOwnProperty.call(options, 'searchQuery')
       ? options.searchQuery
@@ -875,6 +921,7 @@ export async function selectCategory(id, skipHistory = false, options = {}) {
       history.pushState(
         {
           view: 'search',
+          advancedSearch: state.advancedSearch,
           type: state.currentLibraryType,
           libraryId: id,
           returnLibraryId,
@@ -906,6 +953,7 @@ export async function selectCategory(id, skipHistory = false, options = {}) {
       history.pushState(
         {
           view: 'search',
+          advancedSearch: state.advancedSearch,
           type: state.currentLibraryType,
           libraryId: id,
           searchQuery,
@@ -963,7 +1011,7 @@ export async function selectCategory(id, skipHistory = false, options = {}) {
     if (sidebarEl) applySidebarShowMore(sidebarEl, id);
   }
   state.currentLibraryHideCovers = !!(activeItem && activeItem.dataset && activeItem.dataset.type === 'custom' && activeItem.dataset.hideCover === '1');
-  state.currentLibraryAspectRatio = (activeItem && activeItem.dataset && activeItem.dataset.coverAspectRatio === '16:9') ? '16:9' : '4:3';
+  state.currentLibraryAspectRatio = resolveCoverAspectRatio(activeItem?.dataset, state.currentLibraryType);
   state.currentLibraryHideTitles = !!(activeItem && activeItem.dataset && activeItem.dataset.type === 'custom' && activeItem.dataset.hideTitle === '1');
   updateCurrentCategoryIndicator(id, activeItem);
 
@@ -1071,7 +1119,7 @@ window.toggleLibrarySort = toggleLibrarySort;
 window.resumeSeries = resumeSeries;
 
 document.addEventListener('DOMContentLoaded', () => {
-  initTabMediaLibrary()
+  initializeOnce('__bookoasisLibraryBoot', initTabMediaLibrary)
     .catch((error) => {
       console.error('[Library-Init] 초기 화면 구성 실패:', error);
     })

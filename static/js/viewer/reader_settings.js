@@ -152,6 +152,7 @@ export function syncTapZoneDirectionUI() {
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-pressed', String(active));
   });
+  if (typeof CustomEvent === 'function') document.dispatchEvent?.(new CustomEvent('viewer-reading-direction-changed'));
 }
 
 export function initTapZoneDirection() {
@@ -301,9 +302,13 @@ export function syncReaderSettingsUI() {
   syncFitUI();
 }
 
-export function setFitMode(mode) {
+export function hasStoredFitMode() {
+  return VALID_FIT_MODES.has(localStorage.getItem('comic_fit_mode'));
+}
+
+export function setFitMode(mode, { persist = true } = {}) {
   comicFitMode = VALID_FIT_MODES.has(mode) ? mode : 'height';
-  localStorage.setItem('comic_fit_mode', comicFitMode);
+  if (persist) localStorage.setItem('comic_fit_mode', comicFitMode);
   syncFitUI();
   return comicFitMode;
 }

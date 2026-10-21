@@ -1,5 +1,6 @@
 // viewer_progress.js – 독서 진행률 API 전송 디바운싱 및 동기화 모듈
 import { state } from './state.js';
+import { updateOpenViewerProgress } from './viewer/open_session.js';
 import { flushReadReport, noteReadActivity } from './viewer/tts_sync.js?rev=20260927-tts-session-v8';
 
 let progressTimeout = null;
@@ -35,6 +36,7 @@ export function saveProgress(bookId, pageIdx, totalPages, extraData = null) {
       ...extraData
     };
   }
+  updateOpenViewerProgress(pendingProgress);
 
   // 90% 이상 도달 시 다음 편 백그라운드 사전 캐싱 트리거 (1페이지짜리 단독 도서 예외 방지: totalPages > 1)
   if (totalPages > 1) {
@@ -112,7 +114,7 @@ export function flushProgress(useBeacon = false, flushImmediately = false) {
   // 모바일 탭 닫기/이탈 시 sendBeacon을 사용하여 100% 안전 전송 보장
   if (useBeacon && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
     try {
-      const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify({ ...data, flush_immediately: true })], { type: 'application/json' });
       const sent = navigator.sendBeacon('/api/media/progress', blob);
       if (sent) {
         console.log('[Viewer-Progress] sendBeacon successfully sent progress payload');
@@ -138,6 +140,10 @@ export function flushProgress(useBeacon = false, flushImmediately = false) {
     return response;
   }).catch(err => {
     console.error('[Viewer-Progress] Failed to save progress on flush:', err);
+    // Keep a failed snapshot for the next lifecycle flush, but never replace
+    // a newer position or attach an old book's snapshot to the next reader.
+    if (!pendingProgress && String(state.activeBookId) === String(data.book_id)
+        && state.currentLibraryType === data.db_type) pendingProgress = data;
     if (flushImmediately) throw err;
     return null;
   });
@@ -145,7 +151,7 @@ export function flushProgress(useBeacon = false, flushImmediately = false) {
 
 function prepareActiveViewerSnapshot() {
   try {
-    snapshotProvider?.();
+    snapshotProvider?.({ useBeacon: true });
   } catch (e) {}
 }
 

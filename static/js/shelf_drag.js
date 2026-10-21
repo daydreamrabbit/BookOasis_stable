@@ -8,6 +8,9 @@ export function bindShelfDrag(row) {
   row.addEventListener('dragstart', event => event.preventDefault());
   row.addEventListener('pointerdown', event => {
     if (event.pointerType !== 'mouse' || event.button !== 0) return;
+    // A nested genre strip owns its horizontal drag, not the entire bookshelf.
+    const genres = event.target.closest?.('.book-card-genres');
+    if (genres && genres !== row) return;
     suppressClick = false;
     active = { id: event.pointerId, x: event.clientX, left: row.scrollLeft, dragging: false };
   });

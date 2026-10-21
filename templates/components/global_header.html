@@ -25,6 +25,7 @@
     </h2>
 
     <div class="library-search-box library-search-center">
+        <button type="button" id="btn-advanced-search" aria-expanded="false" aria-controls="advanced-search-panel">상세검색</button>
         <input type="text" id="library-search" data-role="library-search-input" class="form-control input-sm" placeholder="제목, 시리즈, 작가 검색...">
         <button id="btn-library-search-action" data-role="library-search-action" class="btn-search-icon"
             data-i18n-title="common.search" title="검색">
@@ -35,6 +36,7 @@
             aria-label="검색 미리보기" aria-live="polite"></section>
     </div>
 
+    <div id="advanced-search-active" hidden aria-label="적용한 상세검색 조건"></div>
     <div id="group-mode-toggle-group" class="library-toggle-group library-toggle-group--compact">
         <button class="btn-toggle active" id="btn-group-default" data-role="grouping-mode-toggle" data-group-mode="default" data-i18n="header.group_mode_default">기본</button>
         <button class="btn-toggle" id="btn-group-author" data-role="grouping-mode-toggle" data-group-mode="author" data-i18n="header.group_mode_author">작가별</button>
@@ -80,16 +82,27 @@
                         <strong>스캔 활동</strong>
                         <span id="scan-activity-summary">대기 중</span>
                     </div>
+                    <button id="btn-clear-scan-activity" class="scan-activity-text-button" type="button" title="완료 항목만 이 브라우저에서 숨깁니다. 서버 이력은 삭제하지 않습니다.">완료 숨기기</button>
                     <button id="btn-close-scan-activity" type="button" aria-label="닫기" title="닫기">
                         <i class="fa-solid fa-xmark" aria-hidden="true"></i>
                     </button>
                 </header>
+                <nav class="scan-activity-tabs" aria-label="스캔 활동 필터">
+                    <button type="button" data-scan-tab="all" aria-pressed="true">전체</button>
+                    <button type="button" data-scan-tab="attention" aria-pressed="false">확인 필요</button>
+                    <button type="button" data-scan-tab="jobs" aria-pressed="false">작업</button>
+                </nav>
+                <div id="scan-activity-notice" role="status" hidden></div>
+                <div class="scan-activity-scroll-body">
                 <div id="scan-activity-list" class="scan-activity-list">
                     <div class="scan-activity-empty">
                         <i class="fa-regular fa-circle-check" aria-hidden="true"></i>
                         <span>진행 중인 스캔이 없습니다.</span>
                     </div>
                 </div>
+                <section id="scan-activity-upcoming" class="scan-activity-upcoming" hidden></section>
+                </div>
+                <footer class="scan-activity-footer"><button type="button" id="btn-scan-activity-settings">예약·대기열 보기 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button></footer>
             </section>
         </div>
         <button id="btn-lib-sort" data-role="library-sort-toggle" class="btn-toggle"
@@ -124,6 +137,23 @@
                         <i class="fa-solid fa-gear" aria-hidden="true"></i>
                         <span data-i18n="sidebar.settings">환경설정</span>
                     </button>
+                <!-- KOReader 진행 동기화(kosync): 동기화 비밀번호 설정 - static/js/kosync_settings.js -->
+                <button type="button" id="btn-kosync-settings" class="account-menu-item" aria-expanded="false" aria-controls="kosync-settings-panel">
+                    <i class="fa-solid fa-book-open-reader" aria-hidden="true"></i>
+                    <span>KOReader 동기화</span>
+                    <span id="kosync-status-badge" class="kosync-status-badge" hidden>켜짐</span>
+                </button>
+                <div id="kosync-settings-panel" class="kosync-settings" hidden>
+                    <div class="kosync-row"><span>서버</span><code id="kosync-server-url">-</code></div>
+                    <div class="kosync-row"><span>사용자명</span><code id="kosync-username">-</code></div>
+                    <input type="password" id="kosync-password" class="kosync-input" placeholder="동기화 비밀번호 (4자 이상)" autocomplete="new-password">
+                    <div class="kosync-actions">
+                        <button type="button" id="btn-kosync-save" class="kosync-btn kosync-btn-primary">저장</button>
+                        <button type="button" id="btn-kosync-clear" class="kosync-btn" hidden>해제</button>
+                    </div>
+                    <p id="kosync-message" class="kosync-message" aria-live="polite"></p>
+                    <p class="kosync-hint">KOReader → 진행 상황 동기화 → 사용자 지정 동기화 서버에 위 서버 주소, 로그인에 사용자명과 이 비밀번호를 넣으세요. BookOasis 로그인 비밀번호와 따로 정합니다. OPDS로 내려받은 책이 동기화됩니다.</p>
+                </div>
                     <a href="/logout" data-i18n-title="sidebar.logout_title" title="로그아웃" class="account-menu-logout">
                         <i class="fa-solid fa-power-off" aria-hidden="true"></i>
                         <span data-i18n="sidebar.logout_title">로그아웃</span>

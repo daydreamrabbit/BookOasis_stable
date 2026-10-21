@@ -131,7 +131,7 @@ def _merge_comicinfo_fallback(target, comicinfo):
     if not isinstance(target, dict) or not isinstance(comicinfo, dict):
         return
     for key in (
-        'title', 'author', 'translator', 'localized_series', 'cover_artist', 'teams', 'locations',
+        'title', 'author', 'translator', 'isbn', 'uci', 'localized_series', 'cover_artist', 'teams', 'locations',
         'characters', 'publisher', 'summary', 'release_date', 'genre', 'tags',
         'books_lv', 'link', 'document_series_name', 'document_volume_index',
         'document_number', 'document_volume_count',
@@ -362,8 +362,6 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                             # A legacy row can look complete in its headline
                             # fields while newer embedded fields were never read.
                             continue
-                        if file_ext in ('.zip', '.cbz') and not is_remote and full_path not in db_offsets_cached:
-                            continue
                         # TXT는 오프셋/표지 강제 재시도가 필요 없으므로 mtime/size 동일 시 바로 스킵
                         if file_ext == '.txt':
                             skipped_files.add(filename)
@@ -527,7 +525,6 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             and not meta_changed
             and not meta_has_data
             and full_path in db_meta_full
-            and full_path in db_offsets_cached
             and full_path not in db_metadata_title_unchecked
             and full_path not in db_embedded_metadata_outdated
         ):
@@ -552,41 +549,6 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
             # Fully cached book — only emit a minimal cover update when its shared
             # folder-cover reference differs from the configured sidecar.
 
-        elif (
-            not force and
-            not meta_changed and
-            not meta_has_data and
-            full_path in db_meta_full and
-            full_path not in db_offsets_cached and
-            full_path not in db_metadata_title_unchecked and
-            full_path not in db_embedded_metadata_outdated and
-            file_format in ('zip', 'cbz') and
-            (not is_remote or root.startswith(('gdrive:', 'gdrive://')))
-        ):
-            # ── [Offset-only Fast Path] ──
-            # If existing book has cover/meta but no offset:
-            # Completely skip ComicInfo parsing and cover extraction pipeline
-            # Only read ZIP central directory (collect offsets) - Minimize I/O
-            # (gdrive:// 가상 경로면 전체 다운로드 없이 Range 요청만으로 처리 — _compute_offsets 참조)
-            offset_only = True
-            if needs_folder_cover_update:
-                folder_cover_only_update = True
-                cover_image = batch_cover_image
-            try:
-                offsets_data = _compute_offsets(full_path, filename, is_remote, root, gdrive_file_ids)
-                if offsets_data:
-                    print(f"[Scanner-DEBUG-Task] ⚡ [Offset-only] '{filename}' ({len(offsets_data)}p)")
-                else:
-                    print(f"[Scanner-DEBUG-Task] ⚡ [Offset-only] Skip ZIP without images: '{filename}'")
-            except Exception as e:
-                print(f"[Scanner-DEBUG-Task] ❌ Offset-only collection failed: '{filename}' - {e}")
-                errors.append({
-                    'file_path': full_path,
-                    'filename': filename,
-                    'error_type': 'OffsetError',
-                    'message': f"Offset-only collection failed: {str(e)}"
-                })
-
         else:
             # ── [General Path] Cover extraction + Offset collection ──
             print(f"[Scanner-DEBUG-Task]   - File processing started: '{filename}'")
@@ -601,7 +563,7 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                 # only API-backed gdrive:// paths must defer archive reads.
                 can_read_comicinfo = not (is_remote and root.startswith(('gdrive:', 'gdrive://')))
                 comicinfo_fields = (
-                    'title', 'author', 'translator', 'localized_series', 'cover_artist', 'teams',
+                    'title', 'author', 'translator', 'isbn', 'uci', 'localized_series', 'cover_artist', 'teams',
                     'locations', 'characters', 'publisher', 'summary',
                     'release_date', 'genre', 'tags', 'books_lv', 'link',
                     'document_series_name', 'document_volume_index',
@@ -626,8 +588,9 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                         )
                         if has_yaml:
                             _merge_comicinfo_rating(book_meta, comicinfo)
-                            if comicinfo.get('translator') and not book_meta.get('translator'):
-                                book_meta['translator'] = comicinfo['translator']
+                            for field in ('translator', 'isbn', 'uci'):
+                                if comicinfo.get(field) and not book_meta.get(field):
+                                    book_meta[field] = comicinfo[field]
                         else:
                             _merge_comicinfo_fallback(book_meta, comicinfo)
                         embedded_metadata_checked = bool(comicinfo_status.get('parsed'))
@@ -793,7 +756,7 @@ def process_folder_task(root, files, force, db_meta_full, db_offsets_cached, db_
                 if cancellation_requested():
                     print(f"[Scanner-Cancel] File skipped before offset processing: '{filename}'")
                     return None
-                if file_format in ('zip', 'cbz') and (force or full_path not in db_offsets_cached):
+                if _compat_kwargs.get('collect_page_offsets', False) and file_format in ('zip', 'cbz') and (force or full_path not in db_offsets_cached):
                     print(f"[Scanner-DEBUG-Task]     - Offset analysis started: '{filename}'")
                     offsets_data = _compute_offsets(full_path, filename, is_remote, root, gdrive_file_ids)
             except Exception as e:

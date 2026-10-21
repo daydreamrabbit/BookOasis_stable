@@ -40,21 +40,21 @@ class PluginRepository:
     @staticmethod
     def get_latest_load_status(db_type):
         """플러그인별 가장 최근 로드 시도 상태 1건씩 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT e.plugin_id, e.status, e.message, e.occurred_at
-            FROM plugin_load_events e
-            INNER JOIN (
-                SELECT plugin_id, MAX(id) AS max_id
-                FROM plugin_load_events
-                GROUP BY plugin_id
-            ) latest ON latest.plugin_id = e.plugin_id AND latest.max_id = e.id
-            ORDER BY e.occurred_at DESC
-        """)
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT e.plugin_id, e.status, e.message, e.occurred_at
+                FROM plugin_load_events e
+                INNER JOIN (
+                    SELECT plugin_id, MAX(id) AS max_id
+                    FROM plugin_load_events
+                    GROUP BY plugin_id
+                ) latest ON latest.plugin_id = e.plugin_id AND latest.max_id = e.id
+                ORDER BY e.occurred_at DESC
+            """)
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
 
     @staticmethod
     def prune_stale_load_events(db_type, valid_plugin_ids):
@@ -83,15 +83,15 @@ class PluginRepository:
     @staticmethod
     def get_recent_load_events(db_type, limit=100):
         """최근 플러그인 로드 이력(상태 변화 포함) 조회"""
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT plugin_id, status, message, occurred_at FROM plugin_load_events ORDER BY occurred_at DESC, id DESC LIMIT %s",
-            (limit,)
-        )
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT plugin_id, status, message, occurred_at FROM plugin_load_events ORDER BY occurred_at DESC, id DESC LIMIT %s",
+                (limit,)
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
 
     @staticmethod
     def execute_custom_query(db_type, query, params=None, commit=False):

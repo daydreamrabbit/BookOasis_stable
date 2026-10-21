@@ -196,6 +196,7 @@ CREATE TABLE IF NOT EXISTS audiobooks (
     total_tracks INT DEFAULT 1,
     file_type VARCHAR(50) DEFAULT 'multi',
     is_favorite INT DEFAULT 0,
+    metadata_locked INT DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     is_deleted INT DEFAULT 0,
@@ -244,6 +245,43 @@ CREATE TABLE IF NOT EXISTS audiobook_track_progress (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_audiobook_track_user_progress (audiobook_id, track_id, user_id),
     INDEX idx_audiobook_track_progress_lookup (audiobook_id, user_id, track_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS kosync_credentials (
+    user_id BIGINT PRIMARY KEY,
+    key_hash VARCHAR(255) NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS kosync_documents (
+    document VARCHAR(64) PRIMARY KEY,
+    db_type VARCHAR(20) NOT NULL,
+    book_id BIGINT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS kosync_progress (
+    user_id BIGINT NOT NULL,
+    document VARCHAR(64) NOT NULL,
+    progress TEXT,
+    percentage DOUBLE,
+    device VARCHAR(255),
+    device_id VARCHAR(255),
+    timestamp BIGINT NOT NULL,
+    PRIMARY KEY (user_id, document)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS audiobook_music_lookups (
+    audiobook_id BIGINT PRIMARY KEY,
+    status VARCHAR(20) NOT NULL,
+    source VARCHAR(100),
+    artist VARCHAR(500),
+    year VARCHAR(20),
+    genres VARCHAR(500),
+    summary TEXT,
+    cover_url TEXT,
+    source_url TEXT,
+    looked_up_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 CREATE TABLE IF NOT EXISTS videos (
@@ -447,6 +485,40 @@ CREATE TABLE IF NOT EXISTS mcp_pending_changes (
     INDEX idx_mcp_pending_changes_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
+CREATE TABLE IF NOT EXISTS problem_occurrences (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    code VARCHAR(150) NOT NULL,
+    severity VARCHAR(30) NOT NULL DEFAULT 'notice',
+    source VARCHAR(150) NOT NULL DEFAULT 'system',
+    db_type VARCHAR(20) NOT NULL DEFAULT 'general',
+    library_id BIGINT DEFAULT NULL,
+    target_type VARCHAR(20) NOT NULL,
+    target_id VARCHAR(255) NOT NULL,
+    target_path TEXT,
+    series_key TEXT,
+    group_key VARCHAR(255) NOT NULL,
+    title TEXT,
+    detail TEXT,
+    message TEXT,
+    context TEXT,
+    occurrence_count INT NOT NULL DEFAULT 1,
+    first_seen_ms BIGINT NOT NULL,
+    last_seen_ms BIGINT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'open',
+    resolved_ms BIGINT DEFAULT NULL,
+    UNIQUE KEY uq_problem_occurrences_target (code, db_type, target_type, target_id),
+    INDEX idx_problem_occurrences_status_group (status, group_key),
+    INDEX idx_problem_occurrences_last_seen (last_seen_ms),
+    INDEX idx_problem_occurrences_target (db_type, target_type, target_id),
+    INDEX idx_problem_occurrences_library (db_type, library_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS problem_groups (
+    group_key VARCHAR(255) PRIMARY KEY,
+    muted_ms BIGINT DEFAULT NULL,
+    muted_count INT NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
 CREATE TABLE IF NOT EXISTS scan_history (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     task_type VARCHAR(100) NOT NULL,
@@ -482,6 +554,7 @@ CREATE TABLE IF NOT EXISTS users (
     has_video_access INT DEFAULT 1,
     has_download_access INT DEFAULT 1,
     content_rating_max INT DEFAULT 18,
+    last_seen_at DATETIME DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 

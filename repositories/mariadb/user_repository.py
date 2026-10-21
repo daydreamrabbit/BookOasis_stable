@@ -48,13 +48,26 @@ class UserRepository:
     @staticmethod
     def get_all_users(db_type):
         """전체 사용자 목록 조회"""
+        activity_column = 'last_seen_at' if db_type == 'general' else 'NULL AS last_seen_at'
         with database.connection(db_type) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, username, role, is_default_password, has_adult_access, has_audiobook_access, has_video_access, has_download_access, content_rating_max, created_at FROM users ORDER BY id ASC"
+                f"SELECT id, username, role, is_default_password, has_adult_access, has_audiobook_access, has_video_access, has_download_access, content_rating_max, created_at, {activity_column} FROM users ORDER BY id ASC"
             )
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+    @staticmethod
+    def touch_last_seen(user_id, timestamp, cutoff):
+        """UTC activity time; conditional write also throttles across app workers."""
+        with database.connection('general', wait_timeout=0.25) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET last_seen_at = %s WHERE id = %s "
+                "AND (last_seen_at IS NULL OR last_seen_at < %s)",
+                (timestamp, int(user_id), cutoff),
+            )
+            conn.commit()
 
     @staticmethod
     def count_by_role(db_type, role):

@@ -44,6 +44,19 @@ DB_DIR = os.path.join(MEDIA_SERVER_DIR, 'db')
 stop_requested = False
 
 
+def _load_folder_mtimes(cursor, path_scope=None):
+    """Read only the literal subtree for partial scans, not every library's cache."""
+    if path_scope:
+        from tools.scanner.path_utils import descendant_like_pattern
+        cursor.execute(
+            "SELECT folder_path, dir_mtime, meta_mtime FROM folder_mtimes "
+            "WHERE folder_path = ? OR folder_path LIKE ? ESCAPE '!'",
+            (canonical_path(path_scope), descendant_like_pattern(path_scope)),
+        )
+    else:
+        cursor.execute("SELECT folder_path, dir_mtime, meta_mtime FROM folder_mtimes")
+
+
 def _uses_library_scan_checkpoints(path_scope):
     """Only full-library scans may read or write the shared resume checkpoints.
 
@@ -342,6 +355,41 @@ def _make_metadata_scan_progress_callback(db_type, event_payload):
 
     return report
 
+def _existing_book_ids(cursor, library_id, paths, *, lock=False):
+    """Read actual identities, bounded by the scan's category."""
+    result = {}
+    paths = list(dict.fromkeys(canonical_path(p) for p in paths))
+    for start in range(0, len(paths), 900):
+        chunk = paths[start:start + 900]
+        placeholders = ','.join('?' for _ in chunk)
+        scope = 'library_id = ? AND ' if library_id is not None else ''
+        # Category moves must not race a path-based bulk writer. MariaDB's
+        # locking read also sees current rows under REPEATABLE READ.
+        locking = ' FOR UPDATE' if lock and hasattr(cursor, '_cursor') else ''
+        cursor.execute(
+            f'SELECT id, file_path FROM books WHERE {scope}file_path IN ({placeholders}){locking}',
+            (library_id, *chunk) if library_id is not None else tuple(chunk),
+        )
+        result.update((canonical_path(r['file_path']), r['id']) for r in cursor.fetchall())
+    return result
+
+
+def _record_scan_problems(db_type, library_id, **details):
+    if db_type not in ('general', 'adult'):
+        return
+    from services import scan_problem_service
+    with database.connection(db_type) as conn:
+        cursor = conn.cursor()
+        scan_problem_service.record_trashed(
+            cursor, db_type, library_id, details.pop('trashed_paths'), details.pop('db_books'))
+        error_paths = scan_problem_service.record_scan_errors(
+            cursor, db_type, library_id, details.pop('library_errors'))
+        # Incomplete listings cannot prove absent paths or library roots healed.
+        if details.get('held') == 'incomplete':
+            return
+        scan_problem_service.reconcile(cursor, db_type, library_id, error_paths=error_paths, **details)
+
+
 def _scan_library_internal(
     conn, db_path, library_id, physical_path, force, db_type, target_paths,
     is_remote, threads_to_use, library_errors, path_scope=None,
@@ -349,6 +397,7 @@ def _scan_library_internal(
     allow_missing=True,
     gdrive_listing=None,
     moves_reconciled=False,
+    result_summary=None,
 ):
     # Every scanner entry (including direct path scans) must preserve identity
     # before loading its per-library book cache or inserting destination rows.
@@ -492,7 +541,7 @@ def _scan_library_internal(
             f"{len(db_metadata_title_unchecked)}; checking during this scan."
         )
 
-    cursor.execute("SELECT folder_path, dir_mtime, meta_mtime FROM folder_mtimes")
+    _load_folder_mtimes(cursor, path_scope)
     db_folder_mtimes = {canonical_path(row['folder_path']): (row['dir_mtime'], row['meta_mtime']) for row in cursor.fetchall()}
 
     # 0. Load completely scanned folders from previous checkpoint. An explicit
@@ -673,6 +722,19 @@ def _scan_library_internal(
     file_lock = threading.Lock()
 
     def process_batch(cur, ins_list, upd_list):
+        existing = _existing_book_ids(cur, library_id, [d['full_path'] for d in upd_list], lock=True)
+        recovered = [d for d in upd_list if canonical_path(d['full_path']) not in existing]
+        # Cover/offset-only work has no complete metadata payload; report a
+        # missing target rather than manufacturing a sparse replacement book.
+        ins_list = list(ins_list) + [d for d in recovered
+                                    if not d.get('folder_cover_only') and not d.get('is_offset_only')]
+        upd_list = [d for d in upd_list if canonical_path(d['full_path']) in existing]
+        # A category move may have transferred ownership during this scan.
+        # The path-unique upsert must not pull that row back into this library.
+        candidates = [d['full_path'] for d in ins_list]
+        foreign_paths = (_existing_book_ids(cur, None, candidates, lock=True).keys()
+                         - _existing_book_ids(cur, library_id, candidates, lock=True).keys())
+        ins_list = [d for d in ins_list if canonical_path(d['full_path']) not in foreign_paths]
         if upd_list:
             update_data = []
             folder_cover_update_data = []
@@ -804,15 +866,20 @@ def _scan_library_internal(
                 (CURRENT_EMBEDDED_METADATA_VERSION, library_id, *chunk),
             )
 
-        all_paths = [canonical_path(d['full_path']) for d in ins_list] + [canonical_path(d['full_path']) for d in upd_list if d.get('offsets_data')]
+        all_paths = [canonical_path(d['full_path']) for d in ins_list + upd_list]
         if all_paths:
-            path_to_id = {}
-            for i in range(0, len(all_paths), 900):
-                chunk = all_paths[i:i+900]
-                placeholders = ','.join(['?']*len(chunk))
-                cur.execute(f"SELECT id, file_path FROM books WHERE file_path IN ({placeholders})", chunk)
-                for row in cur.fetchall():
-                    path_to_id[canonical_path(row['file_path'])] = row['id']
+            path_to_id = _existing_book_ids(cur, library_id, all_paths)
+            db_books.update(path_to_id)
+            # Bulk metadata writers restore is_deleted but do not clear the
+            # old trash timestamp. Complete restoration for every saved row.
+            persisted_paths = list(path_to_id)
+            for start in range(0, len(persisted_paths), 900):
+                chunk = persisted_paths[start:start + 900]
+                placeholders = ','.join('?' for _ in chunk)
+                cur.execute(
+                    f'UPDATE books SET is_deleted = 0, deleted_at = NULL '
+                    f'WHERE library_id = ? AND file_path IN ({placeholders})',
+                    (library_id, *chunk))
             
             offsets_to_save = []
             for d in upd_list + ins_list:
@@ -830,6 +897,12 @@ def _scan_library_internal(
     pending_folders = []
     detected_new_books = []
     folder_processing_errors = []
+    processed_file_paths = set()
+    db_write_missing = set()
+
+    def unpersisted(items):
+        existing = _existing_book_ids(cursor, library_id, [d['full_path'] for d in items])
+        return [d for d in items if canonical_path(d['full_path']) not in existing]
 
     def flush_pending_data(is_final=False):
         if not pending_inserts and not pending_updates and not pending_folders:
@@ -858,6 +931,9 @@ def _scan_library_internal(
                     f"[Scanner-DB] Flush start (attempt {attempt}/{max_attempts}, is_final={is_final}) "
                     f"ins={len(pending_inserts)} upd={len(pending_updates)} folders={len(pending_folders)}"
                 )
+                # End MariaDB REPEATABLE READ's old snapshot before deciding
+                # whether an UPDATE target still exists.
+                conn.commit()
                 # 1. DB Bulk Update
                 if pending_inserts or pending_updates:
                     process_batch(cursor, pending_inserts, pending_updates)
@@ -874,7 +950,24 @@ def _scan_library_internal(
                         cursor.execute("INSERT OR REPLACE INTO folder_mtimes (folder_path, dir_mtime, meta_mtime) VALUES (?, ?, ?)", (pf['root'], pf['dir_mtime'], pf['meta_mtime']))
 
                 # 3. Commit ALL at once (Atomic Transaction)
-                _commit_with_retry(conn, 'flush-pending')
+                if not _commit_with_retry(conn, 'flush-pending'):
+                    raise RuntimeError('Scanner batch commit failed')
+                items = pending_inserts + pending_updates
+                retry_items = unpersisted(items)
+                if retry_items:
+                    process_batch(cursor, [], retry_items)
+                    if not _commit_with_retry(conn, 'flush-pending-recover'):
+                        raise RuntimeError('Scanner recovery commit failed')
+                    missing = unpersisted(retry_items)
+                else:
+                    missing = []
+                missing_paths = {canonical_path(d['full_path']) for d in missing}
+                db_write_missing.difference_update(canonical_path(d['full_path']) for d in items)
+                db_write_missing.update(missing_paths)
+                processed_file_paths.update(
+                    canonical_path(d['full_path']) for d in items
+                    if canonical_path(d['full_path']) not in missing_paths)
+                conn.commit()
                 time.sleep(0.05)
 
                 # 4. Append to JSONL log
@@ -932,6 +1025,11 @@ def _scan_library_internal(
                     # 않게 하고, 로그도 실제 원인 그대로 남긴 뒤 스캔 자체는 계속 진행한다
                     # (한 폴더의 데이터 문제로 라이브러리 전체 스캔을 중단시키지 않기 위해).
                     dropped_ins, dropped_upd, dropped_folders = len(pending_inserts), len(pending_updates), len(pending_folders)
+                    for item in pending_inserts + pending_updates:
+                        library_errors.append({'file_path': item['full_path'],
+                                               'error_type': 'DBWriteError', 'message': str(e)})
+                    if path_scope:
+                        return False
                     pending_inserts.clear()
                     pending_updates.clear()
                     pending_folders.clear()
@@ -1068,6 +1166,7 @@ def _scan_library_internal(
                 dir_mtime = res.get('dir_mtime')
                 meta_mtime = res.get('meta_mtime')
                 merged_meta = res['merged_meta']
+                processed_file_paths.add(canonical_path(root_folder))
                 if 'errors' in res and res['errors']:
                     library_errors.extend(res['errors'])
 
@@ -1116,7 +1215,8 @@ def _scan_library_internal(
                         pending_updates.append({
                             "action": "update", "library_id": library_id, "is_offset_only": is_offset_only, "folder_cover_only": folder_cover_only_update, "full_path": full_path,
                             "cover_image": cover_image, "banner_image": banner_image, "clear_banner": clear_banner, "merged_meta": {} if folder_cover_only_update else item_metadata, "offsets_data": offsets_data,
-                            "filename": filename, "series_name": series_name, "file_mtime": item.get('file_mtime', 0.0), "file_size": item.get('file_size', 0)
+                            "filename": filename, "file_format": file_format, "title": title,
+                            "series_name": series_name, "file_mtime": item.get('file_mtime', 0.0), "file_size": item.get('file_size', 0)
                         })
                     else:
                         pending_inserts.append({
@@ -1273,11 +1373,33 @@ def _scan_library_internal(
         log_pool_stats('scan-final-flush')
         cleanup_jsonl_file()
 
+    if result_summary is not None:
+        result_summary['new_books'] = len(detected_new_books)
+    for missing_path in sorted(db_write_missing):
+        library_errors.append({'file_path': missing_path, 'error_type': 'DBWriteInvariantError',
+                               'message': 'Book row missing after scanner write and recovery'})
+    if db_write_missing and path_scope:
+        _record_scan_problems(
+            db_type, library_id, library_errors=library_errors, trashed_paths=set(), db_books=db_books,
+            found_file_paths=found_file_paths, processed_paths=set(), scope_paths=[path_scope], held='incomplete')
+        raise RuntimeError(f'Partial scan DB registration failed: {sorted(db_write_missing)}')
 
     # 3. Real-time deletion monitoring: Remove book info disappeared from file system
-    print(f"[Scanner-DB] Deletion sync begin db={db_type} library_id={library_id}")
+    if not _commit_with_retry(conn, 'pre-deletion-gate'):
+        raise RuntimeError('Scanner pre-deletion commit failed')
+    # Discard stale ownership after category/path moves before trash handling.
+    current_books = _existing_book_ids(cursor, library_id, db_books, lock=True)
+    db_books = {p: bid for p, bid in db_books.items() if current_books.get(p) == bid}
+    deleted_paths = set(deleted_paths).intersection(db_books)
+    deletion_ok, deletion_held, newly_missing_paths = False, 'incomplete', set()
+    if allow_missing and not traversal_errors:
+        from services import scan_problem_service
+        deletion_ok, deletion_held, newly_missing_paths = scan_problem_service.gate_deletions(
+            cursor, db_type, library_id, deleted_paths, db_books, target_paths, len(found_file_paths))
+    trashed_paths = set(newly_missing_paths) if deletion_ok else set()
+    print(f"[Scanner-DB] Deletion sync begin db={db_type} library_id={library_id} held={deletion_held}")
     missing_options = {} if allow_missing else {'allow_missing': False}
-    if not handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_file_paths, **missing_options):
+    if not handle_deleted_books(cursor, db_books, deleted_paths if deletion_ok else set(), target_paths, found_file_paths, **missing_options):
         print(f"[Scanner-DB] Deletion sync aborted db={db_type} library_id={library_id}")
         conn.close()
         return
@@ -1285,7 +1407,8 @@ def _scan_library_internal(
 
     # DB 변경을 확정한 뒤 현재 어떤 도서에서도 참조하지 않는 생성 배너만
     # 제거한다. 다른 권이나 성인/일반 DB가 같은 파일을 참조하면 보존한다.
-    _commit_with_retry(conn, 'scan-deletion-sync')
+    if not _commit_with_retry(conn, 'scan-deletion-sync'):
+        raise RuntimeError('Scanner deletion commit failed')
     if banner_cache_cleanup_candidates:
         try:
             referenced_banner_images = set()
@@ -1372,12 +1495,22 @@ def _scan_library_internal(
     # Save scan result error reports
     if folder_processing_errors:
         library_errors.extend(folder_processing_errors)
+    _record_scan_problems(
+        db_type, library_id, library_errors=library_errors, trashed_paths=trashed_paths, db_books=db_books,
+        found_file_paths=found_file_paths, processed_paths=processed_file_paths,
+        scope_paths=[path_scope] if path_scope else target_paths,
+        # A successful subtree cannot clear a library-wide root alert. 'root'
+        # retains that alert while still reconciling found files in this scope.
+        held=('root' if path_scope and deletion_held != 'incomplete' else deletion_held))
+    report_file = None
     if library_errors:
         try:
             from utils.report_helper import save_scan_report
-            save_scan_report(library_id, library_errors)
+            report_file = save_scan_report(library_id, library_errors, db_type=db_type)
         except Exception as report_err:
             print(f"[Scanner ERROR] Scan report save failed: {report_err}")
+    if result_summary is not None:
+        result_summary.update(new_books=len(detected_new_books), errors=len(library_errors), report_file=report_file)
 
     if detected_new_books:
         def _async_event_worker(books, target_db, lib_id, lib_name):

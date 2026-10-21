@@ -1,9 +1,6 @@
-export function isEpubImageOnlyHtml(html) {
-  if (typeof html !== 'string' || !html.includes('<img')) return false;
-  const probe = document.createElement('div');
-  probe.innerHTML = html;
-  return !!probe.querySelector('img') && !probe.textContent.trim();
-}
+import { getEpubImageLayout, resolveEpubImageSpread, getEpubImageSheets, epubImageSheetSignature } from './epub_image_layout.js';
+
+export function isEpubImageOnlyHtml(html) { return getEpubImageLayout(html) !== 'text'; }
 
 export function renderTxtChunkView({
   contentArea,
@@ -16,8 +13,12 @@ export function renderTxtChunkView({
   emptyText,
   pageStep = 1,
   coverAlone = false,
+  imageSpread = null,
 }) {
   if (!contentArea) return false;
+  contentArea.classList.remove('epub-image-sequence');
+  contentArea.classList.remove('epub-single-landscape');
+  delete contentArea.dataset.imageSheetSignature;
 
   if (!Array.isArray(txtChunks) || txtChunks.length === 0) {
     contentArea.textContent = emptyText || '';
@@ -36,11 +37,25 @@ export function renderTxtChunkView({
     if (isEpub) {
       const currentHtml = txtChunks[currentChunkIdx];
       const nextHtml = txtChunks[currentChunkIdx + 1];
-      const pairImageChapters = pageStep === 2
-        && !(coverAlone && currentChunkIdx === 0)
-        && isEpubImageOnlyHtml(currentHtml)
-        && isEpubImageOnlyHtml(nextHtml);
-      contentArea.classList.toggle('epub-image-spread', pairImageChapters);
+      const layout = imageSpread || resolveEpubImageSpread(txtChunks, currentChunkIdx, { coverAlone });
+      const imageOnly = isEpubImageOnlyHtml(currentHtml);
+      if (getEpubImageLayout(currentHtml) === 'sequence') {
+        const sheets = getEpubImageSheets(currentHtml, pageStep);
+        contentArea.classList.toggle('epub-single-landscape', pageStep === 1 && sheets.some(sheet => sheet.wide));
+        contentArea.classList.add('epub-image-spread', 'epub-image-sequence');
+        contentArea.classList.remove('epub-image-wide');
+        contentArea.dataset.renderedChunkSpan = '1';
+        contentArea.dataset.imageSheetSignature = epubImageSheetSignature(sheets);
+        contentArea.dataset.imageCount = String(sheets.at(-1).last);
+        contentArea.innerHTML = sheets.map(sheet =>
+          `<div class="epub-image-sheet${sheet.images.length === 1 ? ' epub-image-sheet-wide' : ''}${sheet.wide ? ' epub-landscape-sheet' : ''}" data-image-first="${sheet.first}" data-image-last="${sheet.last}">${sheet.images.map(image => `<div class="txt-chunk epub-chunk epub-image-only-chunk" data-idx="${currentChunkIdx}"><div>${image.outerHTML}</div></div>`).join('')}</div>`).join('');
+        return true;
+      }
+      const pairImageChapters = pageStep === 2 && layout.span === 2;
+      const singleLandscape = pageStep === 1 && getEpubImageLayout(currentHtml) === 'wide';
+      contentArea.classList.toggle('epub-single-landscape', singleLandscape);
+      contentArea.classList.toggle('epub-image-spread', (pageStep === 2 && imageOnly) || singleLandscape);
+      contentArea.classList.toggle('epub-image-wide', (pageStep === 2 && imageOnly && layout.span === 1) || singleLandscape);
       contentArea.dataset.renderedChunkSpan = pairImageChapters ? '2' : '1';
       contentArea.innerHTML = pairImageChapters
         ? `<div class="txt-chunk epub-chunk epub-image-only-chunk" data-idx="${currentChunkIdx}">${currentHtml}</div><div class="txt-chunk epub-chunk epub-image-only-chunk" data-idx="${currentChunkIdx + 1}">${nextHtml}</div>`
@@ -56,6 +71,7 @@ export function renderTxtChunkView({
         epubChunk.classList.add('epub-image-only-chunk');
       }
     } else {
+      contentArea.classList.remove('epub-image-wide');
       contentArea.classList.remove('epub-image-spread');
       contentArea.dataset.renderedChunkSpan = '1';
       // Keep stable chunk IDs for existing annotations, but let columns flow
@@ -67,6 +83,7 @@ export function renderTxtChunkView({
       }
     }
   } else if (initMode || !contentArea.querySelector('.txt-full-content')) {
+    contentArea.classList.remove('epub-image-wide');
     contentArea.classList.remove('epub-image-spread');
     contentArea.dataset.renderedChunkSpan = '1';
     if (isEpub) {

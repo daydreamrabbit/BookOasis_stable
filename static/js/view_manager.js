@@ -1,5 +1,6 @@
 // view_manager.js – 화면(뷰) 상태 제어 및 렌더링 영역 전환 매니저
 import { state } from './state.js';
+import { clearViewerReportAction, showViewerReportAction } from './viewer/report_problem.js';
 import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js';
 
 /**
@@ -77,7 +78,8 @@ export function switchActiveView(viewName) {
     if (btnFilter) btnFilter.style.display = 'flex';
     if (groupModeToggle) groupModeToggle.style.removeProperty('display');
     if (activeFilterBar) {
-      const hasActiveFilters = (state.filterGenres || []).length > 0 || (state.filterTags || []).length > 0;
+      const hasActiveFilters = (state.filterGenres || []).length > 0 || (state.filterTags || []).length > 0
+        || (state.currentLibraryType !== 'video' && !!state.readFilter);
       activeFilterBar.style.display = hasActiveFilters ? 'flex' : 'none';
     }
   }
@@ -143,6 +145,7 @@ export function switchActiveView(viewName) {
  */
 
 export function showViewerLoading(message = i18n.t("viewer.loading_title_default"), subMessage = i18n.t("viewer.loading_sub_default")) {
+  clearViewerReportAction();
   if (document.getElementById('media-viewer-modal')?.style.display === 'none') return;
   const overlay = document.getElementById('viewer-common-overlay');
   const spinner = document.getElementById('viewer-common-spinner');
@@ -165,6 +168,7 @@ export function showViewerLoading(message = i18n.t("viewer.loading_title_default
 }
 
 export function hideViewerLoading() {
+  clearViewerReportAction();
   const overlay = document.getElementById('viewer-common-overlay');
   if (overlay) {
     overlay.style.display = 'none';
@@ -172,6 +176,7 @@ export function hideViewerLoading() {
 }
 
 export function showViewerError(message = i18n.t("viewer.error_title_default"), subMessage = i18n.t("viewer.error_sub_default")) {
+  showViewerReportAction(message, subMessage);
   if (document.getElementById('media-viewer-modal')?.style.display === 'none') return;
   const overlay = document.getElementById('viewer-common-overlay');
   const spinner = document.getElementById('viewer-common-spinner');
@@ -218,7 +223,7 @@ export function showToast(message, type = 'success') {
       box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), 0 0 15px rgba(168, 85, 247, 0.25);
       z-index: 99999;
       opacity: 0;
-      transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      transition: opacity 0.3s ease-out, transform 0.3s ease-out;
       pointer-events: none;
       display: flex;
       align-items: center;
@@ -245,19 +250,21 @@ export function showToast(message, type = 'success') {
   container.style.opacity = '0';
   container.style.transform = 'translateX(-50%) translateY(20px)';
   
-  // 브라우저 repaint 후 활성화
+  const generation = (window.__toastGeneration = (window.__toastGeneration || 0) + 1);
+  // A background tab pauses rAF: start the hide timer only after this toast is shown.
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
+      if (generation !== window.__toastGeneration) return;
       container.style.opacity = '1';
       container.style.transform = 'translateX(-50%) translateY(0)';
+      if (window.toastTimer) clearTimeout(window.toastTimer);
+      window.toastTimer = setTimeout(() => {
+        if (generation !== window.__toastGeneration) return;
+        container.style.opacity = '0';
+        container.style.transform = 'translateX(-50%) translateY(20px)';
+      }, 3000);
     });
   });
-
-  // 3초 뒤 비활성화
-  window.toastTimer = setTimeout(() => {
-    container.style.opacity = '0';
-    container.style.transform = 'translateX(-50%) translateY(20px)';
-  }, 3000);
 }
 
 let viewerBoundaryTimer = null;

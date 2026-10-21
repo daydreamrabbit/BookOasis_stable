@@ -1,13 +1,19 @@
 <!-- CSS 및 외부 라이브러리 로드 -->
 <link rel="stylesheet" href="{{ static_asset_url('css/style.css', sig='boe-tts-listen-v1') }}">
+<link rel="stylesheet" href="{{ static_asset_url('css/problem_cards.css') }}">
 <link rel="stylesheet" href="{{ static_asset_url('css/tab_media_library_viewer.css', sig='boe-reader-session-v45') }}">
 <link rel="stylesheet" href="{{ static_asset_url('css/mobile.css', sig='boe-tts-listen-v1') }}" media="screen and (max-width: 1200px)">
+<link rel="stylesheet" href="{{ static_asset_url('css/sidebar_home_sub.css') }}">
 <link rel="stylesheet" href="/api/media/settings/custom-themes.css">
-<script src="{{ static_asset_url('lib/jszip/jszip.min.js') }}"></script>
-<script src="{{ static_asset_url('lib/pdfjs/pdf.min.js') }}"></script>
+<link rel="stylesheet" href="{{ static_asset_url('css/dashboard_welcome.css') }}">
+<link rel="stylesheet" href="{{ static_asset_url('css/reading_activity.css') }}">
+<link rel="stylesheet" href="{{ static_asset_url('css/profile_customization.css') }}">
 <script>
-    // pdfjs worker 설정
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '{{ static_asset_url('lib/pdfjs/pdf.worker.min.js') }}';
+    window.__BO_LIB_URLS = {{ {
+      'jszip': static_asset_url('lib/jszip/jszip.min.js'),
+      'pdfjs': static_asset_url('lib/pdfjs/pdf.min.js'),
+      'pdfjsWorker': static_asset_url('lib/pdfjs/pdf.worker.min.js')
+    } | tojson }};
 </script>
 
 <div class="media-library-container">
@@ -74,6 +80,7 @@
             <div id="active-filter-badges" class="active-filter-badges">
                 <!-- JS에서 동적으로 뱃지 렌더링 -->
             </div>
+            <span id="active-filter-result-count" role="status" aria-live="polite" style="color:#fff;font-size:.85rem;font-weight:700;">결과 조회 중…</span>
             <button id="btn-active-filter-reset" data-role="library-filter-reset" class="btn-active-filter-reset" title="모든 필터 해제">
                 <i class="fa-solid fa-rotate-left"></i> <span data-i18n="filter.reset_all">전체 해제</span>
             </button>
@@ -113,6 +120,14 @@
             </div>
         </div>
         <div class="filter-modal-body">
+            <section id="filter-read-state" class="filter-read-state" aria-label="읽음 상태">
+                <span>읽음 상태</span>
+                <div class="filter-read-options" role="group" aria-label="읽음 상태 필터">
+                    <button type="button" class="filter-read-option" data-read-filter="">전체</button>
+                    <button type="button" class="filter-read-option" data-read-filter="exclude_read">읽은 도서 제외</button>
+                    <button type="button" class="filter-read-option" data-read-filter="only_read">읽은 도서만</button>
+                </div>
+            </section>
             <!-- 선택된 태그 목록 (Chips) -->
             <div class="selected-chips-container" id="selected-chips-container" style="display: none;">
                 <!-- 동적 칩 렌더링 -->

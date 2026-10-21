@@ -1,6 +1,8 @@
 // plugins.js - 메타데이터 플러그인 설정 제어 모듈
 import { state } from '../state.js';
 import * as api from '../api.js';
+import { withPluginGlobals } from '../utils/script_loader.js';
+import { loadInitialSystemSettings } from './general.js';
 
 const PLUGIN_SETTINGS_ORDER_STORAGE_KEY = 'bookoasis:pluginSettingsOrder';
 const PLUGIN_SETTINGS_ORDER_SETTING_KEY = 'PLUGIN_SETTINGS_ORDER';
@@ -209,7 +211,7 @@ export async function loadPluginsSettings() {
 
       injectPluginSettingsStyles(data.plugins);
       applyConfigValues(container, data.plugins);
-      initPluginSettingsScripts(container, data.plugins);
+      await initPluginSettingsScripts(container, data.plugins);
 
       // 이벤트 바인딩
       bindPluginEvents();
@@ -298,6 +300,7 @@ export async function loadDetailViewProviderSettings(plugins) {
           // (안 그러면 openBookDetail()이 여전히 페이지 로드 시점의 구값을 참조해
           // "선택은 했는데 화면이 안 바뀐다"는 혼란을 준다).
           state.detailViewProviders[sessionKey] = value;
+          await loadInitialSystemSettings();
           if (typeof window.showToast === 'function') window.showToast('저장되었습니다. 도서 상세페이지를 다시 열면 반영됩니다.', 'success');
         } else {
           alert(res.error || '저장 실패');
@@ -416,19 +419,21 @@ function applyConfigValues(container, plugins) {
   });
 }
 
-function initPluginSettingsScripts(container, plugins) {
-  plugins.forEach((p) => {
-    if (!p.settings_ui || !p.settings_ui.js) return;
+async function initPluginSettingsScripts(container, plugins) {
+  for (const p of plugins) {
+    if (!p.settings_ui || !p.settings_ui.js) continue;
     const root = container.querySelector(`[data-plugin-settings-root="${p.id}"]`);
-    if (!root || root.dataset.pluginScriptInited === '1') return;
+    if (!root || root.dataset.pluginScriptInited === '1') continue;
     try {
       const fn = new Function('window', 'pluginId', 'root', 'config', p.settings_ui.js);
-      fn(window, p.id, root, p.config || {});
+      await withPluginGlobals(p.settings_ui.js, () => {
+        if (root.isConnected) return fn(window, p.id, root, p.config || {});
+      });
       root.dataset.pluginScriptInited = '1';
     } catch (e) {
       console.error(`[Plugins-Settings] custom script init failed (${p.id}):`, e);
     }
-  });
+  }
 }
 
 function buildPluginReloadStatusText(res) {
@@ -486,6 +491,7 @@ function bindPluginEvents() {
       try {
         const res = await api.toggleMetadataPlugin(state.currentLibraryType, pluginId, isEnabled);
         if (res.success) {
+          await loadInitialSystemSettings();
           if (statusText) {
             statusText.innerText = isEnabled ? '활성화됨' : '비활성화됨';
             statusText.classList.toggle('is-enabled', isEnabled);

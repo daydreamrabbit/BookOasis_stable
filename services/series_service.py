@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from utils.cover_helper import get_cover_image_with_t, resolve_series_cover
 from repositories.series_repository import SeriesRepository
 from repositories import rated_series_page
+from services import series_read_filter
 from utils.bounded_cache import BoundedCache
 
 _CHOSEONG = [
@@ -451,6 +452,8 @@ def _build_series_entries(db_type, rows, user_id=None):
             'has_metadata': has_metadata,
             'latest_added': latest_added,
             'representative_book_id': representative['id'],
+            'score': representative.get('score') or 0,
+            'plugin_rating': representative.get('plugin_rating'),
             'library_id': lib_id,
             'genre': genre,
             'tags': tags,
@@ -628,8 +631,40 @@ def _build_author_entries(db_type, rows):
     return entries
 
 
-def _sort_entries(entries, sort='asc'):
+def _sort_entries(entries, sort='asc', db_type=None):
     sort_key = (sort or 'asc').lower()
+    if sort_key in ('rating_desc', 'rating_asc'):
+        from services.plugin_rating_sort import sort_entries
+        sort_entries(entries, sort_key, db_type)
+        return
+    if sort_key == 'score_desc':
+        # Legacy text/author search returns a lightweight metadata projection.
+        # Fetch only scores for its representatives, never reopen media files.
+        if db_type in ('general', 'adult', 'audiobook') and entries:
+            from database import get_connection
+            conn = get_connection(db_type)
+            try:
+                cur = conn.cursor()
+                table = 'audiobooks' if db_type == 'audiobook' else 'books'
+                column = 'ratings * 20' if db_type == 'audiobook' else 'score'
+                ids = [int(entry['representative_book_id']) for entry in entries]
+                scores = {}
+                for offset in range(0, len(ids), 500):
+                    batch = ids[offset:offset + 500]
+                    cur.execute(f"SELECT id,{column} AS score FROM {table} WHERE id IN ({','.join('?' for _ in batch)})", tuple(batch))
+                    scores.update((row['id'], row['score']) for row in cur.fetchall())
+                for entry in entries:
+                    entry['score'] = scores.get(entry['representative_book_id']) or 0
+            finally:
+                conn.close()
+        def score(entry):
+            try:
+                value = float(entry.get('score') or 0)
+                return value if 0 <= value <= 100 else 0
+            except (TypeError, ValueError):
+                return 0
+        entries.sort(key=lambda entry: (-score(entry), int(entry.get('representative_book_id') or 0)))
+        return
     if sort_key in ('asc', 'desc'):
         reverse = (sort_key == 'desc')
         entries.sort(
@@ -801,7 +836,7 @@ class SeriesService:
 
     @staticmethod
     @_single_list_build
-    def get_books_list(db_type, library_id, page, limit, search_query, sort='asc', genre_filters=None, tag_filters=None, user_id=None, role=None, group_by=None, author_key=None, include_has_metadata=False, return_has_more=False, content_rating_max=None, _refresh_index=False, _totals_only=False):
+    def get_books_list(db_type, library_id, page, limit, search_query, sort='asc', genre_filters=None, tag_filters=None, user_id=None, role=None, group_by=None, author_key=None, include_has_metadata=False, return_has_more=False, content_rating_max=None, _refresh_index=False, _totals_only=False, read_filter=''):
         import time
         t0 = time.perf_counter()
         _sync_local_books_cache_with_shared_epoch(db_type)
@@ -815,13 +850,18 @@ class SeriesService:
         content_rating_max = _normalize_content_rating_max(content_rating_max)
         rating_filter_active = _content_rating_filter_active(db_type, content_rating_max)
 
+        read_filter = series_read_filter.normalize(read_filter) if db_type != 'video' else ''
+        # Completion can change after every reader close. Never reuse a filtered
+        # legacy index built from an older progress snapshot.
+        _refresh_index = _refresh_index or bool(read_filter) or sort in ('rating_desc', 'rating_asc')
+
         offset = max(0, (page - 1) * limit)
         if rated_series_page.supported(db_type, content_rating_max, search_query,
-                                      normalized_genres, normalized_tags, group_by, author_key) and not include_has_metadata and sort in ('asc', 'desc', 'date_asc', 'date_desc'):
+                                      normalized_genres, normalized_tags, group_by, author_key) and not include_has_metadata and sort in ('asc', 'desc', 'date_asc', 'date_desc', 'score_desc', 'rating_desc', 'rating_asc'):
             if _totals_only:
-                return rated_series_page.fetch(db_type, library_id, user_id, content_rating_max, totals=True)
+                return rated_series_page.fetch(db_type, library_id, user_id, content_rating_max, totals=True, read_filter=read_filter)
             rows = rated_series_page.fetch(db_type, library_id, user_id, content_rating_max,
-                                          limit=limit + 1 if limit > 0 else 0, offset=offset, sort=sort)
+                                          limit=limit + 1 if limit > 0 else 0, offset=offset, sort=sort, read_filter=read_filter)
             entries = _build_series_entries(db_type, rows)
             progress_by_id = {r['id']: r for r in rows}
             for entry in entries:
@@ -843,6 +883,7 @@ class SeriesService:
             or bool(group_by)
             or bool(author_key)
             or rating_filter_active
+            or bool(read_filter)
         )
 
         now = time.time()
@@ -935,6 +976,7 @@ class SeriesService:
             t2 = time.perf_counter()
 
             rows = _filter_rows_by_content_rating(db_type, rows, content_rating_max)
+            rows = series_read_filter.filter_rows(db_type, rows, library_id, user_id, content_rating_max, read_filter)
 
             if author_key:
                 from repositories.series_search_query import normalize_author_key
@@ -946,10 +988,11 @@ class SeriesService:
                 entries = _build_series_entries(db_type, rows)
             t3 = time.perf_counter()
 
-            _sort_entries(entries, sort=sort)
+            _sort_entries(entries, sort=sort, db_type=db_type)
             t4 = time.perf_counter()
 
-            _store_list_index(cache_key, entries, index_generation)
+            if not read_filter:
+                _store_list_index(cache_key, entries, index_generation)
             if _totals_only:
                 return {'total_series_count': len(entries), 'total_book_count': sum(int(e.get('book_count') or 0) for e in entries)}
             paged = _visible_list_page(db_type, entries, offset, limit, user_id)
@@ -981,7 +1024,7 @@ class SeriesService:
         _strip_series_entry_internal_fields(entries)
         t3 = time.perf_counter()
 
-        _sort_entries(entries, sort=sort)
+        _sort_entries(entries, sort=sort, db_type=db_type)
         t4 = time.perf_counter()
 
         paged = entries if sql_limit is not None else entries[offset:offset + limit + 1]
@@ -994,7 +1037,7 @@ class SeriesService:
     @staticmethod
     def find_jump_position(db_type, library_id, search_query, sort, target_char, limit,
                             genre_filters=None, tag_filters=None, user_id=None, role=None,
-                            content_rating_max=None, selection_anchors=None):
+                            content_rating_max=None, selection_anchors=None, read_filter=''):
         """
         가나다(초성) 바로가기: 전체 목록을 동일한 정렬 기준으로 구성한 뒤 target_char로
         시작하는 첫 항목의 절대 인덱스를 찾아 페이지/오프셋으로 환산합니다.
@@ -1010,11 +1053,13 @@ class SeriesService:
         content_rating_max = _normalize_content_rating_max(content_rating_max)
         rating_filter_active = _content_rating_filter_active(db_type, content_rating_max)
         sort_key = (sort or 'asc').lower()
-        if sort_key not in ('asc', 'desc'):
+        if sort_key not in ('asc', 'desc', 'date_asc', 'date_desc', 'score_desc', 'rating_desc', 'rating_asc'):
             sort_key = 'asc'
 
+        read_filter = series_read_filter.normalize(read_filter) if db_type != 'video' else ''
+
         if rated_series_page.supported(db_type, content_rating_max, search_query, normalized_genres, normalized_tags):
-            rows = rated_series_page.fetch(db_type, library_id, user_id, content_rating_max, sort=sort_key, index=True)
+            rows = rated_series_page.fetch(db_type, library_id, user_id, content_rating_max, sort=sort_key, index=True, read_filter=read_filter)
             if selection_anchors is not None:
                 positions = []
                 for anchor in selection_anchors:
@@ -1035,7 +1080,7 @@ class SeriesService:
             page = found // safe_limit + 1
             del rows
             entries = SeriesService.get_books_list(db_type, library_id, page, safe_limit, '', sort_key,
-                                                   user_id=user_id, role=role, content_rating_max=content_rating_max)
+                                                   user_id=user_id, role=role, content_rating_max=content_rating_max, read_filter=read_filter)
             return {'found': True, 'index': found, 'page': page, 'offset_in_page': found % safe_limit,
                     'total': total, 'series': entries[:safe_limit], 'has_more': page * safe_limit < total}
 
@@ -1056,10 +1101,10 @@ class SeriesService:
             _list_security_scope(db_type, user_id),
         )
         cached = _LIST_QUERY_CACHE.get(cache_key)
-        if cached and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
+        if cached and not read_filter and sort_key not in ('rating_desc', 'rating_asc') and (now - cached[0] < _LIST_QUERY_CACHE_TTL):
             entries = cached[1]
             lightweight = False
-        elif rating_filter_active:
+        elif rating_filter_active or read_filter or sort_key in ('rating_desc', 'rating_asc'):
             rows = SeriesRepository.fetch_books_for_grouping(
                 db_type,
                 library_id,
@@ -1075,9 +1120,11 @@ class SeriesService:
                 include_all_rows=True,
             )
             rows = _filter_rows_by_content_rating(db_type, rows, content_rating_max)
+            rows = series_read_filter.filter_rows(db_type, rows, library_id, user_id, content_rating_max, read_filter)
             entries = _build_series_entries(db_type, rows)
-            _sort_entries(entries, sort=sort_key)
-            _store_list_index(cache_key, entries)
+            _sort_entries(entries, sort=sort_key, db_type=db_type)
+            if not read_filter:
+                _store_list_index(cache_key, entries)
             lightweight = False
         else:
             jump_cached = _JUMP_INDEX_CACHE.get(cache_key)
@@ -1185,8 +1232,12 @@ class SeriesService:
 
     @staticmethod
     @_single_list_build
-    def get_books_totals(db_type, library_id, search_query='', genre_filters=None, tag_filters=None, user_id=None, role=None, content_rating_max=None):
+    def get_books_totals(db_type, library_id, search_query='', genre_filters=None, tag_filters=None, user_id=None, role=None, content_rating_max=None, read_filter=''):
         import time
+        if series_read_filter.normalize(read_filter) and db_type != 'video':
+            return SeriesService.get_books_list(db_type, library_id, 1, 0, search_query,
+                genre_filters=genre_filters, tag_filters=tag_filters, user_id=user_id, role=role,
+                content_rating_max=content_rating_max, read_filter=read_filter, _totals_only=True)
         _sync_local_books_cache_with_shared_epoch(db_type)
         library_id = _normalize_library_id(library_id)
         favorite_only = library_id == 'favorite'

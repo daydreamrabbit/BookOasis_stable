@@ -29,24 +29,24 @@ class McpPendingChangesRepository:
 
     @staticmethod
     def list(status=None):
-        conn = database.get_connection('general')
-        cursor = conn.cursor()
-        if status:
-            cursor.execute("SELECT * FROM mcp_pending_changes WHERE status = ? ORDER BY id DESC", (status,))
-        else:
-            cursor.execute("SELECT * FROM mcp_pending_changes ORDER BY id DESC")
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+        with database.connection('general') as conn:
+            cursor = conn.cursor()
+            if status:
+                cursor.execute("SELECT * FROM mcp_pending_changes WHERE status = ? ORDER BY id DESC", (status,))
+            else:
+                cursor.execute("SELECT * FROM mcp_pending_changes ORDER BY id DESC")
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
 
     @staticmethod
     def get(change_id):
-        conn = database.get_connection('general')
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM mcp_pending_changes WHERE id = ?", (change_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        with database.connection('general') as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM mcp_pending_changes WHERE id = ?", (change_id,))
+            row = cursor.fetchone()
+            conn.close()
+            return dict(row) if row else None
 
     @staticmethod
     def update_status(change_id, status, decided_by, decision_note=None):

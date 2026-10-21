@@ -1,5 +1,6 @@
 // static/js/dashboard_insights.js - 대시보드 독서 동기부여 위젯 컨트롤러 (Compact & Slim)
 import { getBookCoverSrc, buildFallbackCoverUrl } from './cover_fallback.js';
+import { loadDashboardActivity } from './reading_activity.js';
 
 if (!window.__dashboardInsightsDelegationBound) {
   document.addEventListener('click', (event) => {
@@ -31,36 +32,12 @@ export async function loadDashboardInsights(libraryType = 'general') {
     if (slot) slot.style.display = isShow ? '' : 'none';
     window.refreshHomeWidgetDividers?.();
     if (!isShow) return;
+    loadDashboardActivity(libraryType);
 
     const res = await fetch(`/api/dashboard/insights?library_type=${encodeURIComponent(libraryType)}`);
     if (!res.ok) return;
     const data = await res.json();
     if (!data.success) return;
-
-    // 1. Reading Streak
-    const streakDaysEl = document.getElementById('streak-days-count');
-    if (streakDaysEl) streakDaysEl.textContent = data.streak.days || 0;
-
-    const dotsContainer = document.getElementById('streak-dots-container');
-    if (dotsContainer && Array.isArray(data.streak.last_7_days)) {
-      dotsContainer.innerHTML = '';
-      data.streak.last_7_days.forEach((isRead, idx) => {
-        const dot = document.createElement('span');
-        dot.className = 'streak-dot';
-        dot.style.cssText = `width: 7px; height: 7px; border-radius: 50%; transition: all 0.3s;`;
-        if (isRead) {
-          if (idx === 6) {
-            dot.style.background = '#f97316';
-            dot.style.boxShadow = '0 0 6px #f97316';
-          } else {
-            dot.style.background = '#38bdf8';
-          }
-        } else {
-          dot.style.background = 'rgba(255, 255, 255, 0.15)';
-        }
-        dotsContainer.appendChild(dot);
-      });
-    }
 
     // 2. Currently Reading
     const currentlyContainer = document.getElementById('currently-reading-list');

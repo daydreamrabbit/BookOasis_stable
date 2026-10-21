@@ -1,6 +1,7 @@
 // viewer_pdf.js – PDF 뷰어 로직
 import { state } from './state.js';
 import { pdfTextRects } from './viewer/pdf_text_hit.js';
+import { ensurePdfJs } from './utils/script_loader.js';
 import { showViewerLoading, hideViewerLoading, showViewerError, showViewerBoundaryNotice } from './view_manager.js';
 import { saveProgress } from './viewer_progress.js?rev=20260927-tts-session-v8';
 import { getComicPageStep, getComicReadingDirection, getSpreadShiftOffset, resetSpreadShiftOffset } from './viewer_comic.js';
@@ -17,6 +18,7 @@ let pdfObserver = null;
 // 그대로 보여주기 위한 세대(generation) 번호. 사용자가 렌더 완료 전에 또 페이지를 넘기면
 // 값이 올라가므로, 뒤늦게 도착한 이전 세대의 렌더 결과가 최신 화면을 덮어쓰지 않도록 막는다.
 let pdfRenderGeneration = 0;
+let pdfInitGeneration = 0;
 
 window.isPointOnPdfText = (x, y) => {
   for (const canvas of document.querySelectorAll('#pdf-render-area canvas')) {
@@ -31,6 +33,13 @@ window.isPointOnPdfText = (x, y) => {
 };
 
 export async function initPdfViewer(bookId, pagesRead, totalPages) {
+  const generation = ++pdfInitGeneration;
+  const openingType = state.currentLibraryType;
+  const isCurrent = () => generation === pdfInitGeneration
+    && state.currentLibraryType === openingType && String(state.activeBookId) === String(bookId)
+    && state.currentViewerFormat === 'pdf';
+  const pdfjsLib = await ensurePdfJs();
+  if (!isCurrent()) return;
   isInitializingPdfProgress = true;
   resetSpreadShiftOffset(); // 이전 책에서 켜뒀던 "한 장 밀기" 보정이 새 책에 남지 않도록 초기화
   // 만화 뷰어를 거치지 않고 PDF를 세션 첫 책으로 열어도 2쪽보기 버튼/한 장 밀기 버튼
@@ -57,6 +66,7 @@ export async function initPdfViewer(bookId, pagesRead, totalPages) {
     console.warn('[Viewer-Pdf] Failed to fetch server progress-state:', err);
   }
 
+  if (!isCurrent()) return;
   pdfCurrentPage = initialPage;
   pdfTotalPages = totalPages || 0;
   
@@ -75,6 +85,7 @@ export async function initPdfViewer(bookId, pagesRead, totalPages) {
     }
   }
 
+  if (!isCurrent()) return;
   showViewerLoading(i18n.t("viewer.loading_pdf_title") || "PDF 준비 중", i18n.t("viewer.loading_pdf_sub") || "잠시만 기다려 주세요...");
   
   const url = `/api/media/pdf?db_type=${state.currentLibraryType}&book_id=${bookId}`;
@@ -86,6 +97,7 @@ export async function initPdfViewer(bookId, pagesRead, totalPages) {
     cMapPacked: true
   }).promise
     .then(doc => { 
+      if (!isCurrent()) { doc.destroy(); return; }
       pdfDoc = doc; 
       pdfTotalPages = doc.numPages; 
       hideViewerLoading();
@@ -93,6 +105,7 @@ export async function initPdfViewer(bookId, pagesRead, totalPages) {
       isInitializingPdfProgress = false;
     })
     .catch(err => { 
+      if (!isCurrent()) return;
       isInitializingPdfProgress = false;
       hideViewerLoading();
       showViewerError(i18n.t("viewer.error_pdf_title"), err.message);
@@ -477,6 +490,8 @@ export function movePdfPageByOne(direction) {
 }
 
 export function clearPdfViewer() {
+  ++pdfInitGeneration;
+  isInitializingPdfProgress = false;
   pdfRenderGeneration++; // 진행 중이던 오프스크린 렌더가 나중에 끝나도 화면에 반영되지 않도록 폐기
   if (pdfObserver) {
     pdfObserver.disconnect();

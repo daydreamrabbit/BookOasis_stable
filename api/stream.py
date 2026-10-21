@@ -19,6 +19,23 @@ import hashlib
 stream_bp = Blueprint('media_stream', __name__)
 
 
+def _reader_book_access(db_type, book_id, user_id, series_name=None, library_id=None):
+    """Progress restoration/reset must not trust client-supplied category IDs."""
+    if db_type not in ('general', 'adult', 'audiobook', 'video'):
+        return False
+    table, title = {'general': ('books', 'series_name'), 'adult': ('books', 'series_name'),
+                    'audiobook': ('audiobooks', 'title'), 'video': ('videos', 'title')}[db_type]
+    with database.connection(db_type) as conn:
+        cur = conn.cursor()
+        cur.execute(f'''SELECT b.library_id, b.{title} AS series_name FROM {table} b
+            JOIN user_category_permissions p ON p.library_id=b.library_id AND p.user_id=? AND p.has_access=1
+            WHERE b.id=? AND COALESCE(b.is_deleted,0)=0''', (user_id, book_id))
+        row = cur.fetchone()
+    if not row or (series_name is not None and (str(row['library_id']) != str(library_id) or row['series_name'] != series_name)):
+        return False
+    return db_type not in ('general', 'adult') or check_book_rating_permission(db_type, book_id)
+
+
 BASE_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from services.cover_storage_service import get_covers_dir
 
@@ -594,6 +611,8 @@ def get_viewer_progress_state():
             return jsonify({'success': False, 'error': _t('api.err_book_id_required')}), 400
 
         user_id = session.get('user_id', 1)
+        if not _reader_book_access(db_type, book_id, user_id):
+            return jsonify(success=False, error='접근할 수 없는 도서입니다.'), 403
         state = StreamService.get_progress_state(db_type, book_id, user_id=user_id)
         if not state:
             return jsonify({'success': False, 'error': 'book not found'}), 404
@@ -624,6 +643,10 @@ def mark_book_as_unread():
             return jsonify({'success': False, 'error': '지원하지 않는 읽지 않음 범위입니다.'}), 400
         if scope == 'series' and (not series_name or library_id is None):
             return jsonify({'success': False, 'error': '시리즈명 또는 라이브러리 ID가 누락되었습니다.'}), 400
+
+        if not _reader_book_access(db_type, book_id, user_id,
+                                   series_name if scope == 'series' else None, library_id):
+            return jsonify(success=False, error='접근할 수 없는 도서입니다.'), 403
 
         affected_count = ReadingProgressService.mark_unread(
             db_type,

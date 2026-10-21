@@ -1,4 +1,20 @@
 // settings_trash.js - 휴지통(삭제 관리) 클라이언트 처리 로직
+let trashLibraryFilter = null;
+let trashListSerial = 0;
+window.setTrashLibraryFilter = (type,id,name) => {
+    document.getElementById('trash-db-type').value = type;
+    trashLibraryFilter = {id:Number(id),name:String(name || '')};
+};
+function updateTrashFilterLabel() {
+    const label = document.getElementById('trash-library-filter');
+    if (!label) return;
+    label.hidden = !trashLibraryFilter;
+    label.style.display = trashLibraryFilter ? 'inline-flex' : 'none';
+    label.textContent = trashLibraryFilter ? `${trashLibraryFilter.name} · 전체 카테고리 보기 ×` : '';
+}
+function refreshTrashSidebar() {
+    window.refreshLibraryCounts?.()?.catch(error=>console.warn('휴지통 카테고리 표시 갱신 실패',error));
+}
 
 // ── 전체 화면 잠금 오버레이 제어 ────────────────────────────────
 function _showTrashOverlay(msg) {
@@ -22,6 +38,9 @@ function initTrashDelegation() {
     if (window.__trashDelegationBound) return;
 
     document.addEventListener('click', (event) => {
+        if (event.target.closest?.('[data-role="trash-clear-filter"]')) {
+            trashLibraryFilter = null; loadTrashList(); return;
+        }
         const target = event && event.target && typeof event.target.closest === 'function'
             ? event.target.closest('[data-role="trash-restore-selected"], [data-role="trash-delete-selected"], [data-role="trash-empty-all"], [data-role="trash-restore-single"], [data-role="trash-delete-single"]')
             : null;
@@ -44,6 +63,7 @@ function initTrashDelegation() {
         const target = event && event.target;
         if (!target) return;
         if (target.matches && target.matches('[data-role="trash-db-type"]')) {
+            trashLibraryFilter = null;
             loadTrashList();
             return;
         }
@@ -59,6 +79,10 @@ function initTrashDelegation() {
 function loadTrashList() {
     initTrashDelegation();
     const dbType = document.getElementById('trash-db-type').value;
+    const serial = ++trashListSerial;
+    updateTrashFilterLabel();
+    const params = new URLSearchParams({db_type:dbType});
+    if (trashLibraryFilter) params.set('library_id',trashLibraryFilter.id);
     const body = document.getElementById('trash-list-body');
     const emptyState = document.getElementById('trash-empty-state');
     const selectAllCheckbox = document.getElementById('trash-select-all');
@@ -70,11 +94,15 @@ function loadTrashList() {
     body.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 2rem; color: var(--app-text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> 목록 로딩 중...</td></tr>';
     emptyState.style.display = 'none';
 
-    fetch('/api/admin/trash')
-        .then(res => res.json())
+    fetch('/api/admin/trash?'+params,{cache:'no-store',headers:{Accept:'application/json'}})
+        .then(res => {
+            if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) throw new Error('휴지통 목록 조회 실패');
+            return res.json();
+        })
         .then(data => {
+            if (serial !== trashListSerial) return;
             if (!data.success) {
-                body.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2rem; color: #ef4444;">데이터 로드 실패: ${data.error}</td></tr>`;
+                body.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2rem; color: #ef4444;">데이터 로드 실패: ${escapeHtml(data.error)}</td></tr>`;
                 return;
             }
 
@@ -102,7 +130,8 @@ function loadTrashList() {
             `).join('');
         })
         .catch(err => {
-            body.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2rem; color: #ef4444;">API 통신 오류: ${err.message}</td></tr>`;
+            if (serial !== trashListSerial) return;
+            body.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2rem; color: #ef4444;">API 통신 오류: ${escapeHtml(err.message)}</td></tr>`;
         });
 }
 
@@ -146,6 +175,7 @@ function restoreTrashBooks(bookIds) {
         if (data.success) {
             alert(data.message);
             loadTrashList();
+            refreshTrashSidebar();
         } else {
             alert('복구 실패: ' + data.error);
         }
@@ -187,6 +217,7 @@ function deleteTrashBooks(bookIds) {
         if (data.success) {
             alert(data.message);
             loadTrashList();
+            refreshTrashSidebar();
         } else {
             alert('삭제 실패: ' + data.error);
         }
@@ -207,8 +238,10 @@ const TRASH_DB_LABELS = {
 function emptyTrashAll() {
     const dbType = document.getElementById('trash-db-type').value;
     const dbLabel = TRASH_DB_LABELS[dbType] || dbType;
+    const libraryId = trashLibraryFilter?.id;
+    const scopeLabel = trashLibraryFilter ? `${dbLabel} · ${trashLibraryFilter.name} 카테고리` : `${dbLabel} 데이터베이스`;
     
-    if (!confirm(`주의! 현재 ${dbLabel} 데이터베이스 휴지통 내의 모든 도서 데이터를 영구 삭제하시겠습니까?\n이 작업은 모든 읽기 상태와 기록을 완전히 삭제하며 되돌릴 수 없습니다.`)) {
+    if (!confirm(`주의! 현재 ${scopeLabel} 휴지통 내의 모든 도서 데이터를 영구 삭제하시겠습니까?\n이 작업은 모든 읽기 상태와 기록을 완전히 삭제하며 되돌릴 수 없습니다.`)) {
         return;
     }
 
@@ -218,7 +251,7 @@ function emptyTrashAll() {
     fetch('/api/admin/trash/empty', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db_type: dbType })
+        body: JSON.stringify({ db_type: dbType, ...(libraryId ? {library_id:libraryId} : {}) })
     })
     .then(res => res.json())
     .then(data => {
@@ -226,6 +259,7 @@ function emptyTrashAll() {
         if (data.success) {
             alert(data.message);
             loadTrashList();
+            refreshTrashSidebar();
         } else {
             alert('휴지통 비우기 실패: ' + data.error);
         }

@@ -57,8 +57,18 @@ def rclone_listing(remote):
         if result.returncode == 3:
             raise ValueError(f'rclone 목록 조회 실패: 원격 폴더가 없습니다 ({remote}). 라이브러리 경로를 확인하세요.')
         raise ValueError('rclone 목록 조회 실패. 리모트 설정과 연결을 확인하세요.')
+    entries = json.loads(result.stdout)
+    if not entries:
+        # A successful empty recursive response alone must not authorize deletion.
+        # Independently prove that the remote directory itself still exists.
+        status = subprocess.run(['rclone', *_rclone_config_args(), 'lsjson', remote, '--stat',
+                                 '--retries', '1', '--low-level-retries', '1',
+                                 '--contimeout', '15s', '--timeout', '60s'],
+                                capture_output=True, text=True, timeout=100)
+        if status.returncode or not json.loads(status.stdout).get('IsDir'):
+            raise ValueError('빈 원격 폴더의 연결/존재 여부를 확인할 수 없습니다. 삭제 반영을 보류합니다.')
     files = {}
-    for entry in json.loads(result.stdout):
+    for entry in entries:
         path = relative_path(entry['Path'])
         if supported(path):
             files[path] = [entry['Size'], entry.get('ModTime', ''), entry.get('ID', '')]

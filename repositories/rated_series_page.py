@@ -24,9 +24,9 @@ def _sort(value):
     return re.sub(r'^\s*(?:(?:\[[^\]]+\]|\{[^}]+\})\s*)+', '', raw).strip() or raw
 
 
-def _query(conn, library_id, user_id, rating, series_scope=None):
+def _rating_expressions(conn, keywords=None):
     maria = database.is_mariadb_mode()
-    keywords = ContentRatingService.get_adult_keywords()
+    keywords = ContentRatingService.get_adult_keywords() if keywords is None else keywords
     params = []
     if maria:
         cases = []
@@ -52,7 +52,15 @@ def _query(conn, library_id, user_id, rating, series_scope=None):
         conn.create_function('bo_sort', 1, _sort)
         level = 'bo_rating(b.books_lv,b.genre,b.tags)'
         directory = 'bo_dir(b.file_path,b.file_format)'
+    return level, directory, params
+
+
+def _query(conn, library_id, user_id, rating, series_scope=None, library_ids=None, read_filter=''):
+    level, directory, params = _rating_expressions(conn)
     where = ['(b.is_deleted=0 OR b.is_deleted IS NULL)']
+    if library_ids:
+        where.append('b.library_id IN (' + ','.join('?' for _ in library_ids) + ')')
+        params.extend(map(int, library_ids))
     if str(library_id) not in ('all', 'home', 'history', 'favorite', 'None'):
         where.append('b.library_id=?')
         params.append(int(library_id))
@@ -64,6 +72,8 @@ def _query(conn, library_id, user_id, rating, series_scope=None):
         params.extend(series_scope)
     params.append(rating)
     safe_user = int(user_id or 0)
+    read_condition = {'only_read': ' AND MIN(series_completed)=1',
+                      'exclude_read': ' AND MIN(series_completed)=0'}.get(read_filter, '')
     sql = f"""WITH raw_books AS (
         SELECT b.id,b.library_id,COALESCE(NULLIF(b.series_name,''),'기타 단행본') AS group_name,
                {directory} AS group_dir,b.created_at,b.cover_image,b.author,b.genre,b.tags,
@@ -75,23 +85,30 @@ def _query(conn, library_id, user_id, rating, series_scope=None):
         FROM books b LEFT JOIN user_progress p ON p.book_id=b.id AND p.user_id={safe_user}
         WHERE {' AND '.join(where)}
     ), scoped AS (
-        SELECT raw_books.*,MAX(effective_level) OVER(PARTITION BY library_id,group_name,group_dir) AS series_level FROM raw_books
+        SELECT raw_books.*,MAX(effective_level) OVER(PARTITION BY library_id,group_name,group_dir) AS series_level,
+            MIN(completed) OVER(PARTITION BY library_id,group_name,group_dir) AS series_completed FROM raw_books
     ), eligible AS (
         SELECT * FROM scoped {'WHERE favorite=1' if library_id == 'favorite' else ''}
     ), grouped AS (
         SELECT library_id,group_name,group_dir,MIN(id) AS representative_id,
                COUNT(*) AS series_book_count,MAX(created_at) AS series_latest_added,
                MAX(COALESCE(metadata_locked,0)) AS any_locked,
-               MIN(completed) AS all_completed, MAX(CASE WHEN completed=1 OR pages_read>0 THEN 1 ELSE 0 END) AS has_progress,
+               MIN(series_completed) AS all_completed, MAX(CASE WHEN completed=1 OR pages_read>0 THEN 1 ELSE 0 END) AS has_progress,
                MAX(favorite) AS is_favorite,MAX(series_level) AS series_level,
                {series_cover_id_sql('eligible', database.is_mariadb_mode(), fallback=False)} AS cover_id,
                {','.join(f"MIN(CASE WHEN {field} IS NOT NULL AND {field}<>'' THEN id END) AS {field}_id" for field in ('author','genre','tags','books_lv','publication_status','series_alias'))}
-        FROM eligible GROUP BY library_id,group_name,group_dir HAVING MAX(series_level)<=?
+        FROM eligible GROUP BY library_id,group_name,group_dir HAVING MAX(series_level)<=?{read_condition}
     ) """
     return sql, params
 
 
 def _order(maria, sort):
+    if sort in ('rating_desc', 'rating_asc'):
+        direction = 'DESC' if sort == 'rating_desc' else 'ASC'
+        return f'COALESCE(pr.rating,0) {direction}, g.representative_id ASC'
+    if sort == 'score_desc':
+        cast = 'DECIMAL(12,4)' if maria else 'REAL'
+        return f'CAST(COALESCE(b.score,0) AS {cast}) DESC, g.representative_id ASC'
     direction = 'DESC' if sort in ('desc', 'date_desc') else 'ASC'
     if sort in ('date_asc', 'date_desc'):
         return f"g.series_latest_added {direction}, g.representative_id ASC"
@@ -104,14 +121,31 @@ def _order(maria, sort):
     return f"{norm('g.group_name')} {direction}, {title} {direction}, g.representative_id ASC"
 
 
-def fetch(db_type, library_id, user_id, rating, *, limit=31, offset=0, sort='asc', totals=False, index=False):
+def fetch(db_type, library_id, user_id, rating, *, limit=31, offset=0, sort='asc', totals=False, index=False, filters=None, read_filter=''):
     conn = database.get_connection(db_type)
+    plugin_sort = sort in ('rating_desc', 'rating_asc') and not totals
     try:
-        sql, params = _query(conn, library_id, user_id, rating)
+        if filters is not None:
+            from services.advanced_search_service import filtered_query
+            sql, params = filtered_query(conn, library_id, user_id, rating, filters)
+        else:
+            sql, params = _query(conn, library_id, user_id, rating, read_filter=read_filter)
+        plugin_join = ''
+        if plugin_sort:
+            from services import plugin_rating_sort
+            expression = plugin_rating_sort.prepare(conn, db_type)
+            sql += f''' , plugin_rated AS (
+                SELECT g.representative_id, MAX(r.rating) AS rating FROM grouped g
+                JOIN scoped s ON s.library_id=g.library_id AND s.group_name=g.group_name AND s.group_dir=g.group_dir
+                JOIN books rb ON rb.id=s.id LEFT JOIN bo_plugin_sort r ON r.key_hash={expression}
+                GROUP BY g.representative_id
+            ) '''
+            plugin_join = ' LEFT JOIN plugin_rated pr ON pr.representative_id=g.representative_id '
+        prefix_length = len(sql)
         if totals:
             sql += 'SELECT COUNT(*) AS total_series_count, COALESCE(SUM(series_book_count),0) AS total_book_count FROM grouped'
         elif index:
-            sql += "SELECT g.representative_id AS id,g.library_id,g.group_name AS series_name,g.group_dir,g.series_level,b.title,b.title_alias,b.file_format FROM grouped g JOIN books b ON b.id=g.representative_id ORDER BY " + _order(database.is_mariadb_mode(), sort)
+            sql += "SELECT g.representative_id AS id,g.library_id,g.group_name AS series_name,g.group_dir,g.series_level,b.title,b.title_alias,b.file_format FROM grouped g JOIN books b ON b.id=g.representative_id " + plugin_join + ' ORDER BY ' + _order(database.is_mariadb_mode(), sort)
         else:
             # Rich fields are fetched only for the selected page, not all books.
             sql += """SELECT b.id,b.library_id,b.series_name,b.title,b.title_alias,b.file_path,b.file_format,b.created_at,
@@ -119,11 +153,15 @@ def fetch(db_type, library_id, user_id, rating, *, limit=31, offset=0, sort='asc
                 g.all_completed,g.has_progress,g.is_favorite,g.series_level,
                 cover.cover_image AS rated_cover,cover.cover_updated_at AS rated_cover_updated,
                 cover.cover_align AS rated_cover_align,
-            """ + ','.join(f'{field}_book.{field} AS rated_{field}' for field in ('author','genre','tags','books_lv','publication_status','series_alias'))
-            sql += " FROM grouped g JOIN books b ON b.id=g.representative_id LEFT JOIN books cover ON cover.id=g.cover_id "
+            """ + ('b.score AS score,' if sort == 'score_desc' else '') + ','.join(f'{field}_book.{field} AS rated_{field}' for field in ('author','genre','tags','books_lv','publication_status','series_alias'))
+            if plugin_sort:
+                sql += ',pr.rating AS plugin_rating'
+            sql += " FROM grouped g JOIN books b ON b.id=g.representative_id " + plugin_join + ' LEFT JOIN books cover ON cover.id=g.cover_id '
             sql += ' '.join(f'LEFT JOIN books {field}_book ON {field}_book.id=g.{field}_id' for field in ('author','genre','tags','books_lv','publication_status','series_alias'))
             sql += ' ORDER BY ' + _order(database.is_mariadb_mode(), sort) + ' LIMIT ? OFFSET ?'
             params.extend([max(0, int(limit)), max(0, int(offset))])
+        if filters is not None:
+            sql = sql[:prefix_length] + sql[prefix_length:].replace('FROM grouped', 'FROM filtered')
         cur = conn.cursor()
         cur.execute(sql, tuple(params))
         if totals:
@@ -141,7 +179,12 @@ def fetch(db_type, library_id, user_id, rating, *, limit=31, offset=0, sort='asc
             row['has_metadata'] = None
         return rows
     finally:
-        conn.close()
+        try:
+            if plugin_sort:
+                from services import plugin_rating_sort
+                plugin_rating_sort.cleanup(conn)
+        finally:
+            conn.close()
 
 
 def level_for_book(db_type, book_id):
@@ -153,9 +196,15 @@ def level_for_book(db_type, book_id):
         row = cur.fetchone()
         if not row:
             return None
-        sql, params = _query(conn, row['library_id'], None, 20,
-                            (row['series_name'] or '기타 단행본', _dir(row['file_path'], row['file_format'])))
-        cur.execute(sql + 'SELECT MAX(series_level) AS level FROM grouped', tuple(params))
+        level, directory, params = _rating_expressions(conn)
+        params.extend((row['library_id'], row['series_name'] or '기타 단행본',
+                       _dir(row['file_path'], row['file_format'])))
+        # Permission lookup needs one aggregate, not the listing's windows,
+        # progress/favorite joins, rich metadata selection and sorting.
+        cur.execute(f"""SELECT MAX({level}) AS level FROM books b
+            WHERE (b.is_deleted=0 OR b.is_deleted IS NULL) AND b.library_id=?
+              AND COALESCE(NULLIF(b.series_name,''),'기타 단행본')=?
+              AND ({directory})=?""", tuple(params))
         result = cur.fetchone()
         return result['level'] if result else None
     finally:

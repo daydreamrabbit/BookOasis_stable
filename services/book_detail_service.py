@@ -26,6 +26,26 @@ def _series_book_display_title(book):
     return title
 
 
+# album.yaml genres의 분류 머리말처럼 정보가 없는 값
+_MUSIC_GENRE_NOISE = {'전체', 'all'}
+
+
+def _music_year_and_genres(audiobook_row, lookup):
+    """음악 앨범 상세 머리 정보 줄용 (발매 연도, 장르 문자열). album.yaml(발매일·장르) → 외부 조회 결과 순."""
+    year = str(audiobook_row.get('premiered') or '')[:4]
+    genres = []
+    folder = audiobook_row.get('folder_path')
+    if folder:
+        from services.music_lyrics_service import load_album_yaml
+        raw = (load_album_yaml(folder) or {}).get('genres')
+        if isinstance(raw, list):
+            genres = [str(g).strip() for g in raw if str(g).strip() and str(g).strip().lower() not in _MUSIC_GENRE_NOISE]
+    if lookup:
+        year = year or str(lookup.get('year') or '')[:4]
+        if not genres and lookup.get('genres'):
+            genres = [g.strip() for g in str(lookup['genres']).split(',') if g.strip()]
+    return (year if year.isdigit() else ''), ', '.join(genres)
+
 class BookDetailService:
     @staticmethod
     def get_media_detail(db_type, series_name, library_id='all', user_id=1, role=None, restrict_same_directory=True, representative_book_id=None, content_rating_max=None):
@@ -47,7 +67,9 @@ class BookDetailService:
                 return {'series_name': series_name, 'author': '-', 'publisher': '-', 'summary': '등록된 오디오북이 없습니다.', 'cover_image': ''}, []
 
             aid = audiobook_row['id']
-            
+            from services.category_service import CategoryService
+            is_music = CategoryService.is_music_library(audiobook_row.get('library_id'))
+
             # 사용자 진행도
             prog_row = AudiobookRepository.get_audiobook_progress(aid, user_id)
             current_track_id = prog_row['current_track_id'] if prog_row else None
@@ -75,7 +97,8 @@ class BookDetailService:
                 'code': audiobook_row['code'] or '',
                 'ratings': audiobook_row['ratings'] or 0.0,
                 'summary': audiobook_row['description'] or audiobook_row['author_intro'] or '등록된 설명이 없습니다.',
-                'cover_image': f"/api/media/audiobooks/{aid}/cover",
+                # 목록/대시보드와 같이 updated_at으로 주소를 바꿔, 표지를 바꾼 뒤 브라우저 캐시(1일)가 옛 표지를 보여 주지 않게 한다
+                'cover_image': get_cover_image_with_t(f"/api/media/audiobooks/{aid}/cover", audiobook_row.get('updated_at')),
                 'total_duration': audiobook_row['total_duration'] or 0.0,
                 'total_tracks': audiobook_row['total_tracks'] or len(track_rows),
                 'file_type': audiobook_row['file_type'] or 'multi',
@@ -84,15 +107,29 @@ class BookDetailService:
                 'current_time': current_time,
                 'total_progress_pct': total_progress_pct,
                 'is_completed': is_completed,
-                'metadata_locked': 0
+                'is_music': is_music,
+                'metadata_locked': int(audiobook_row.get('metadata_locked') or 0)
             }
+            if is_music:
+                # album.yaml이 없던 앨범: 외부 조회 결과(플러그인 폴백)를 빈 칸에만 채운다
+                from services.music_lookup_service import get_found_lookup
+                lookup = get_found_lookup(aid)
+                if lookup:
+                    if meta['author'] in ('', '-') and lookup.get('artist'):
+                        meta['author'] = lookup['artist']
+                    if not (audiobook_row['description'] or audiobook_row['author_intro']) and lookup.get('summary'):
+                        meta['summary'] = lookup['summary']
+                    meta['music_lookup'] = {k: lookup.get(k) for k in ('source', 'year', 'genres', 'source_url')}
+                # 상세 머리 정보 줄용: 발매 연도·장르 (album.yaml → 외부 조회 결과)
+                meta['music_year'], meta['music_genres'] = _music_year_and_genres(audiobook_row, lookup)
 
             books_list = []
             for t in track_rows:
                 dur_sec = t['duration'] or 0.0
                 mins = int(dur_sec // 60)
                 secs = int(dur_sec % 60)
-                time_str = f"{mins:02d}:{secs:02d}"
+                # 원격 카테고리는 재생하기 전엔 길이를 모른다(스캔이 파일을 열지 않음) - 00:00 대신 '-'
+                time_str = '-' if dur_sec <= 0 else f"{mins:02d}:{secs:02d}"
                 saved_track_progress = track_progress.get(int(t['id']))
                 if is_completed:
                     track_progress_pct = 100.0
@@ -115,7 +152,9 @@ class BookDetailService:
                     'audiobook_id': aid,
                     'track_number': t['track_number'],
                     'track_code': t['track_code'] or str(t['track_number']),
-                    'title': t['filename'],
+                    # 음악 카테고리는 태그(없으면 파일명에서 만든) 곡 제목/아티스트를 보여준다
+                    'title': (t.get('title') if is_music else None) or t['filename'],
+                    'artist': t.get('artist') if is_music else None,
                     'file_format': t['format'] or 'mp3',
                     'duration': dur_sec,
                     'time_str': time_str,
@@ -124,7 +163,8 @@ class BookDetailService:
                     'file_size': t['file_size'] or 0,
                     'file_path': t['file_path'],
                     'total_pages': mins if mins > 0 else 1,
-                    'cover_image': meta['cover_image'],
+                    # 음악: 곡마다 원래 앨범이 다를 수 있어(차트 모음) 곡 파일의 내장 아트를 쓴다
+                    'cover_image': f"/api/media/audiobooks/{aid}/tracks/{t['id']}/cover" if is_music else meta['cover_image'],
                     'is_completed': 1 if prog_row and prog_row['is_completed'] else 0,
                     'is_favorite': meta['is_favorite'],
                 })
@@ -171,7 +211,7 @@ class BookDetailService:
                 'summary': video_row['description'] or '등록된 설명이 없습니다.',
                 'genre': video_row['genres'] or '',
                 'tags': '',
-                'cover_image': f"/api/media/videos/{vid}/cover",
+                'cover_image': get_cover_image_with_t(f"/api/media/videos/{vid}/cover", video_row.get('updated_at')),
                 'total_duration': video_row['total_duration'] or 0.0,
                 'total_episodes': video_row['total_episodes'] or len(episode_rows),
                 'is_favorite': video_row['is_favorite'] or 0,
@@ -406,25 +446,36 @@ class BookDetailService:
         return meta, books_list
 
     @staticmethod
-    def update_media_detail(db_type, series_name, author, isbn, publisher, summary, link, genre='', tags='', cover_file=None, series_alias=None, books_lv=None, publication_status=None):
+    def update_media_detail(db_type, series_name, author, isbn, publisher, summary, link, genre='', tags='', cover_file=None, series_alias=None, books_lv=None, publication_status=None, audiobook_id=None):
         import hashlib
 
         if db_type == 'audiobook':
+            dest_path = None
             try:
-                cover_image_url = None
+                previous_poster = None
+                if audiobook_id:
+                    previous_poster = (AudiobookRepository.get_audiobook_by_id(int(audiobook_id)) or {}).get('poster')
                 if cover_file:
-                    covers_dir = get_covers_dir()
-                    target_covers_dir = os.path.join(covers_dir, 'audiobook')
+                    # poster는 커버 캐시(/api/media/audiobooks/<id>/cover)가 읽는 로컬 경로여야 한다.
+                    # 캐시·ETag가 경로 기준이라 올릴 때마다 내용 해시로 새 파일명을 쓴다.
+                    data = cover_file.read()
+                    target_covers_dir = os.path.join(get_covers_dir(), 'audiobook')
                     os.makedirs(target_covers_dir, exist_ok=True)
+                    owner = f"id{int(audiobook_id)}" if audiobook_id else hashlib.md5(series_name.encode('utf-8')).hexdigest()[:12]
+                    dest_path = os.path.join(target_covers_dir, f"audiobook_{owner}_{hashlib.sha1(data).hexdigest()[:12]}.jpg")
+                    with open(dest_path, 'wb') as f:
+                        f.write(data)
 
-                    series_hash = hashlib.md5(series_name.encode('utf-8')).hexdigest()
-                    cover_filename = f"audiobook_series_{series_hash}.jpg"
-                    dest_path = os.path.join(target_covers_dir, cover_filename)
-                    cover_file.save(dest_path)
-                    cover_image_url = f"/api/media/covers/audiobook/{cover_filename}"
+                AudiobookRepository.update_media_detail(series_name, author, isbn, publisher, summary,
+                                                        poster=dest_path, audiobook_id=audiobook_id)
+                # 예전에 올린 수동 표지 파일 정리 (폴더 이미지 등 라이브러리 쪽 파일은 건드리지 않는다)
+                if dest_path and previous_poster and os.path.normpath(previous_poster) != os.path.normpath(dest_path) \
+                        and os.path.dirname(os.path.normpath(previous_poster)) == os.path.normpath(target_covers_dir):
+                    try:
+                        os.remove(previous_poster)
+                    except OSError:
+                        pass
 
-                AudiobookRepository.update_media_detail(series_name, author, isbn, publisher, summary, cover_image_url=cover_image_url)
-                
                 # In-Memory 및 Redis 캐시 파기
                 invalidate_series_cover_cache(db_type='audiobook', lib_id=None, series_name=series_name)
                 try:
@@ -436,6 +487,11 @@ class BookDetailService:
                 return True, f'"{series_name}" 메타정보가 성공적으로 수정되었습니다.'
             except Exception as e:
                 print(f"[BookDetailService] 오디오북 메타정보 수정 에러: {e}")
+                if dest_path:  # DB에 반영되지 않은 표지 파일을 남기지 않는다
+                    try:
+                        os.remove(dest_path)
+                    except OSError:
+                        pass
                 return False, f'DB 업데이트 오류: {str(e)}'
         
         # 1. 해당 시리즈에 속한 도서의 library_id와 대표 book 레코드 1개 조회

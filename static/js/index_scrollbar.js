@@ -71,6 +71,9 @@ function captureJumpContext() {
     type: state.currentLibraryType,
     libraryId: String(state.currentLibraryId || ''),
     search: state.searchQuery || '',
+    advanced: JSON.stringify(state.advancedSearch),
+    filterMode: state.filterMode,
+    readFilter: state.readFilter || '',
     sort: state.currentSortDirection || 'asc',
     genres: JSON.stringify((state.filterGenres || []).map(normalizeMetadataToken).filter(Boolean)),
     tags: JSON.stringify((state.filterTags || []).map(normalizeMetadataToken).filter(Boolean)),
@@ -120,6 +123,8 @@ async function handleIndexClick(char) {
     const jumpContext = captureJumpContext();
     const limit = state.LIMIT || 60;
     const result = await api.fetchJumpPosition({
+      advanced: state.advancedSearch,
+      filterMode: state.filterMode,
       type: state.currentLibraryType,
       libraryId: state.currentLibraryId,
       search: state.searchQuery || '',

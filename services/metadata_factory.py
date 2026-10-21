@@ -8,9 +8,10 @@ import hashlib
 import threading
 import time
 import traceback
+from functools import lru_cache
 from datetime import datetime
 from flask import json
-from plugins.metadata.base import BaseMetadataProvider
+from plugin_framework.metadata_base import BaseMetadataProvider
 
 class SecurityError(PermissionError):
     pass
@@ -80,6 +81,12 @@ def _find_forbidden_calls_in_source(source, filename):
     return hits
 
 
+@lru_cache(maxsize=512)
+def _cached_forbidden_calls(filename, source):
+    # Bound retention; source content, not mtime alone, invalidates analysis.
+    return tuple(_find_forbidden_calls_in_source(source, filename))
+
+
 def _scan_plugin_for_forbidden_subprocess_usage(plugin_dir, single_file=None, provider_name=None):
     """plugin_dir(폴더형) 또는 single_file(단일 파일형) 플러그인 소스에서 subprocess 사용을 찾는다.
 
@@ -103,12 +110,12 @@ def _scan_plugin_for_forbidden_subprocess_usage(plugin_dir, single_file=None, pr
                         source = f.read()
                 except Exception:
                     continue
-                forbidden_hits.extend(_find_forbidden_calls_in_source(source, fpath))
+                forbidden_hits.extend(_cached_forbidden_calls(fpath, source))
     elif single_file and os.path.isfile(single_file):
         try:
             with open(single_file, 'r', encoding='utf-8', errors='replace') as f:
                 source = f.read()
-            forbidden_hits.extend(_find_forbidden_calls_in_source(source, single_file))
+            forbidden_hits.extend(_cached_forbidden_calls(single_file, source))
         except Exception:
             pass
 

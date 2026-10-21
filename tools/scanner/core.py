@@ -84,6 +84,17 @@ def _run_db_self_recovery(db_type):
     except Exception as rec_err:
         print(f"[Scanner-SelfHealing ERROR] Auto recovery failed: {rec_err}")
 
+def _save_report_unless_saved(library_id, library_errors, result_summary, db_type='general'):
+    if not library_errors or 'errors' in result_summary:
+        return
+    try:
+        from utils.report_helper import save_scan_report
+        result_summary['report_file'] = save_scan_report(library_id, library_errors, db_type=db_type)
+        result_summary['errors'] = len(library_errors)
+    except Exception as report_err:
+        print(f"[Scanner ERROR] Scan report save failed: {report_err}")
+
+
 @scanner_print_control_decorator
 def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refresh=False, progress_callback=None, cancel_event=None):
     """Scan library path and sync DB with file system (force full reindex if force=True).
@@ -142,10 +153,21 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
             failed_paths.append((path, last_error_msg))
 
     if failed_paths:
+        from services.scan_problem_service import ROOT_UNREACHABLE_MARKER, report_root_unreachable
         err_details = [f"'{p}' (사유: {msg})" for p, msg in failed_paths]
-        err_msg = f"스캔 대상 경로 접근 실패 (HDD/NAS Wake-up 실패): " + ", ".join(err_details)
+        err_msg = f"{ROOT_UNREACHABLE_MARKER} 스캔 대상 경로 접근 실패 (HDD/NAS Wake-up 실패): " + ", ".join(err_details)
         print(f"[Scanner-WakeUp ERROR] {err_msg}")
+        # 루트 접근 불가 - 알림센터 "원격 드라이브 연결 끊김" 카드로 남는다(순단이면 유예 시간 안에 해제되어
+        # 보이지 않는다). 도서는 다음 스캔이 삭제 판정 단계까지 정상 진행되면, 오디오북/영상은 다음 스캔이
+        # 루트에 접근하면 자동으로 해제된다.
+        report_root_unreachable(db_type, library_id, failed_paths)
         raise FileNotFoundError(err_msg)
+
+    if db_type in ('audiobook', 'video'):
+        # 도서 스캔은 reconcile()이 해제하지만, 오디오북/영상 파이프라인엔 그 단계가 없어 여기서 해제한다
+        from services.problem_service import ProblemService
+        from services.scan_problem_service import CODE_REMOTE_UNAVAILABLE
+        ProblemService.resolve(CODE_REMOTE_UNAVAILABLE, 'library', library_id, db_type=db_type)
 
     if not skip_vfs_refresh:
         trigger_vfs_refresh(db_path, library_id, physical_path)
@@ -195,6 +217,7 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
     except Exception as check_err:
         print(f"[Scanner-SelfHealing] 사전 무결성 점검 경고 (무시하고 계속): {check_err}")
 
+    result_summary = {}
     conn = database.get_connection(db_type)
     try:
         _scan_library_internal(
@@ -202,6 +225,7 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
             is_remote, threads_to_use, library_errors,
             progress_callback=progress_callback,
             cancel_event=cancel_event,
+            result_summary=result_summary,
         )
     finally:
         try:
@@ -210,13 +234,8 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
             pass
         gc.collect()
 
-    # Save scan result error reports
-    if library_errors:
-        try:
-            from utils.report_helper import save_scan_report
-            save_scan_report(library_id, library_errors)
-        except Exception as report_err:
-            print(f"[Scanner ERROR] Scan report save failed: {report_err}")
+    _save_report_unless_saved(library_id, library_errors, result_summary, db_type=db_type)
+    return result_summary
 
 @scanner_print_control_decorator
 def scan_library_path(
@@ -254,6 +273,14 @@ def scan_library_path(
     if not is_gdrive and not os.path.exists(target_path):
         raise FileNotFoundError(f"스캔 대상 경로를 찾을 수 없습니다: {target_path}")
 
+    # A file is not an os.walk root. Keep traversal, deletion scope and VFS
+    # refresh aligned when a caller supplied the original file as its scope.
+    if not is_gdrive and os.path.isfile(target_path):
+        from tools.scanner.path_utils import canonical_path
+        if path_scope and canonical_path(path_scope) == canonical_path(target_path):
+            path_scope = os.path.dirname(target_path)
+        target_path = os.path.dirname(target_path)
+
     if not skip_vfs_refresh:
         trigger_vfs_refresh(db_path, library_id, target_path)
 
@@ -273,6 +300,7 @@ def scan_library_path(
 
     threads_to_use = 1 if is_remote else MAX_SCANNER_THREADS
 
+    result_summary = {}
     conn = database.get_connection(db_type)
     try:
         from tools.scanner.path_utils import canonical_path
@@ -284,6 +312,7 @@ def scan_library_path(
             allow_missing=allow_missing,
             gdrive_listing=gdrive_listing,
             moves_reconciled=moves_reconciled,
+            result_summary=result_summary,
         )
     finally:
         try:
@@ -292,12 +321,8 @@ def scan_library_path(
             pass
         gc.collect()
 
-    if library_errors:
-        try:
-            from utils.report_helper import save_scan_report
-            save_scan_report(library_id, library_errors)
-        except Exception as report_err:
-            print(f"[Scanner ERROR] Scan report save failed: {report_err}")
+    _save_report_unless_saved(library_id, library_errors, result_summary, db_type=db_type)
+    return result_summary
 
 
 @scanner_print_control_decorator

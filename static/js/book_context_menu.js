@@ -21,6 +21,14 @@ let touchStartY = 0;
 const touchMoveThreshold = 10;
 let contextMenuLoadSeq = 0;
 let menuOpenedByTouchUntil = 0;
+let menuOpeningTouch = null;
+let activeBookMenuTouch = null;
+// Plugin detail cards can open the menu via native contextmenu in a ShadowRoot,
+// without calling the core long-press helper. Track that gesture at document level.
+document.addEventListener('touchstart', event => {
+  activeBookMenuTouch = event.touches.length === 1
+    ? { identifier: event.touches[0].identifier } : null;
+}, { capture: true, passive: true });
 let lastEventX = 0;
 let lastEventY = 0;
 let cachedSearchPlugins = null;
@@ -257,6 +265,10 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
 
   if (Date.now() < contextMenuSuppressUntil) return;
   menuLastShownAt = Date.now();
+  if (activeBookMenuTouch) {
+    menuOpeningTouch = { ...activeBookMenuTouch };
+    menuOpenedByTouchUntil = Date.now() + 900;
+  }
   
   lastEventX = x;
   lastEventY = y;
@@ -302,6 +314,8 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
   if (menuTitle) menuTitle.textContent = isMultiSelection ? `도서 메뉴 (${selectedBooks.length}개 선택)` : '도서 메뉴';
 
   const canForceScan = canRunForceBookScan() && Number(currentTargetBook.id) > 0;
+  const embeddedRefresh = document.getElementById('ctx-refresh-embedded');
+  if (embeddedRefresh) embeddedRefresh.style.display = canForceScan && !isMultiSelection && ['general','adult'].includes(state.currentLibraryType) ? '' : 'none';
   const forceSeriesItem = document.getElementById('ctx-force-scan-series');
   if (forceSeriesItem) {
     const showSeriesScan = canForceScan && !isMultiSelection && !!seriesName;
@@ -349,6 +363,11 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
 
   // "페이지 넘김으로 보기(실험적)"는 이미지 기반 만화(zip/cbz)에서만 의미가 있음
   const pageTurnItem = document.getElementById('ctx-page-turn-book');
+  const diagnoseItem = document.getElementById('ctx-diagnose-book');
+  if (diagnoseItem) diagnoseItem.style.display = (!isMultiSelection
+    && (state.currentUser || window.currentUser)?.role === 'admin'
+    && ['general', 'adult'].includes(state.currentLibraryType)
+    && (currentTargetBook.isVolumeDetail || (Number(currentTargetBook.bookCount) || 1) <= 1)) ? '' : 'none';
   if (pageTurnItem) {
     const fmt = String(context.fileFormat || '').toLowerCase();
     pageTurnItem.style.display = (!isMultiSelection && (fmt === 'zip' || fmt === 'cbz')) ? '' : 'none';
@@ -424,6 +443,8 @@ export function showBookContextMenu(x, y, bookId, bookTitle, isVolumeDetail = fa
     }
   }
   
+  const multiRead=document.getElementById('ctx-read-selected-books');
+  if(multiRead){multiRead.style.display=isMultiSelection&&state.currentLibraryType!=='video'?'':'none';multiRead.querySelector('span').textContent=`선택한 ${selectedBooks.length}개 작품 읽음 처리 (완독)`;}
   // 메타정보 검색 메뉴의 플러그인 활성 상태 동적 검사
   const metaSearchEl = document.getElementById('ctx-search-meta-book');
   if (metaSearchEl) {
@@ -931,12 +952,30 @@ export async function triggerMarkAsUnreadAction() {
 
 window.triggerMarkAsUnreadAction = triggerMarkAsUnreadAction;
 
-// "읽지 않은 상태로 변경"의 대칭 액션. 다중 선택 시에는 상태가 혼재될 수 있어(일부만 완독 등)
-// 토글 자체를 노출하지 않으므로(showBookContextMenu 참고) 단일 대상만 처리한다.
+// Single targets keep their progress toggle; mixed selections expose both actions.
+let markReadBusy=false;
 export async function triggerMarkAsReadAction() {
+  if(markReadBusy)return;
   if (!currentTargetBook || !currentTargetBook.id) return;
   const { id, title, markUnreadScope, seriesName, libraryId } = currentTargetBook;
   const isSeriesScope = markUnreadScope === 'series';
+  const selected=[...(currentTargetBook.selectedBooks||[])],dbType=state.currentLibraryType;
+  if(selected.length>1){
+    markReadBusy=true;
+    try{
+      const vm=await import('./view_manager.js');
+      const targets=[...new Map(selected.map(book=>[`${book.libraryId}:${book.id}`,book])).values()];
+      let succeeded=0;
+      for(const book of targets){
+        try{const result=await api.markBookAsRead(dbType,book.id,{scope:book.markUnreadScope==='series'?'series':'book',seriesName:book.seriesName,libraryId:book.libraryId});if(result?.success)succeeded++;}
+        catch(error){console.warn('[BookContextMenu] 읽음 처리 실패',book.id,error.message);}
+      }
+      vm.showToast(`선택 항목 완독 처리: ${succeeded}/${targets.length}개${succeeded<targets.length?' · 실패한 항목은 다시 시도해 주세요.':''}`,succeeded===targets.length?'success':'warning');
+      closeBookContextMenu();if(succeeded===targets.length)clearBookSelection();
+      if(state.currentLibraryType===dbType){if(state.currentLibraryId==='home')await loadDashboardData({force:true});else if(state.currentLibraryId==='history')await loadReadingHistory();else await loadBooksList();}
+    }finally{markReadBusy=false;}
+    return;
+  }
 
   import('./view_manager.js').then(async (vm) => {
     try {
@@ -1064,8 +1103,25 @@ document.addEventListener('click', (event) => {
 function shouldIgnoreBookMenuDismiss(event) {
   const bookMenu = document.getElementById('book-context-menu');
   if (!bookMenu || !event || !event.target) return false;
-  return bookMenu.contains(event.target);
+  return bookMenu.contains(event.target) || event.composedPath?.().includes(bookMenu);
 }
+
+// Track the opening gesture, not how long the user continues holding it.
+// Cancel its compatibility click before detail/card click handlers can run.
+function finishMenuOpeningTouch(event) {
+  if (activeBookMenuTouch && Array.from(event.changedTouches || []).some(
+    touch => touch.identifier === activeBookMenuTouch.identifier)) activeBookMenuTouch = null;
+  if (!menuOpeningTouch || !Array.from(event.changedTouches || []).some(
+    touch => touch.identifier === menuOpeningTouch.identifier)) return;
+  menuOpeningTouch = null;
+  clearLongPressTimer();
+  menuOpenedByTouchUntil = Date.now() + 900;
+  suppressBookCardClickUntil = Date.now() + 900;
+  if (event.cancelable) event.preventDefault();
+  event.stopImmediatePropagation();
+}
+document.addEventListener('touchend', finishMenuOpeningTouch, { capture: true, passive: false });
+document.addEventListener('touchcancel', finishMenuOpeningTouch, { capture: true, passive: false });
 
 function dismissBookMenuOutside(event, suppressMs = 350) {
   // 롱터치로 메뉴를 연 직후의 동일 터치 종료/지연 클릭 이벤트는 무시합니다.
@@ -1161,6 +1217,7 @@ window.handleLongPressTouchStart = function(event, callback) {
         event.preventDefault();
       }
       callback(touch.clientX, touch.clientY);
+      if (isBookContextMenuOpen()) menuOpeningTouch = { identifier: touch.identifier };
     }
     longPressTimer = null;
   }, 650); // 650ms 길게 누름 감지
@@ -1200,7 +1257,9 @@ if (bookMenuEl) {
     // "커버 정렬"은 여기서 끝나는 액션이 아니라 다른 서브메뉴(volume-cover-align-context-menu)를
     // 새로 여는 액션이라, 이 억제 타이머를 걸면 700ms 안에 이어지는 다음 카드의 메뉴 클릭이
     // dismissPointerGuardUntil에 막혀 씹혀버린다(서브메뉴가 안 뜨는 증상) - 제외한다.
-    if (item && item.getAttribute('data-action') !== 'cover-align') {
+    // These actions transfer interaction into a new UI. A global 700ms
+    // pointer guard would swallow its first close/rerun tap.
+    if (item && !['cover-align', 'diagnose'].includes(item.getAttribute('data-action'))) {
       // 메뉴 항목 클릭 시 suppress를 충분히 길게 설정 (iOS 지연 이벤트 방어)
       setTimeout(() => {
         hideBookContextMenu({ suppressMs: 700, clearTarget: false });
@@ -1269,6 +1328,22 @@ if (!window.__bookContextActionBound) {
     }
 
     const action = target.getAttribute('data-action');
+    if (action === 'refresh-embedded') {
+      const book={...currentTargetBook},type=state.currentLibraryType,scope=getBookScanScope(book);
+      closeBookContextMenu();
+      return import('./embedded_metadata_refresh.js').then(m=>m.openEmbeddedMetadataRefresh(type,[Number(book.id)],scope,async()=>{
+        window.invalidateDashboardData?.(type);
+        if (state.currentLibraryId==='home') await loadDashboardData({force:true});
+        else await loadBooksList(false);
+        const detail=document.getElementById('book-detail-view');
+        if (detail && detail.style.display!=='none' && book.seriesName) await openBookDetail(null,book.seriesName,book.libraryId,book.id);
+      }));
+    }
+    if (action === 'diagnose') {
+      const book = { ...currentTargetBook }, dbType = state.currentLibraryType;
+      closeBookContextMenu();
+      return import('./book_diagnosis.js').then(m => m.openBookDiagnosis(dbType, book.id, book.title || ''));
+    }
     if (action === 'scan') return window.triggerScanSingleBookAction?.();
     if (action === 'force-scan-selected') return window.triggerForceBookScanAction?.();
     if (action === 'force-scan-series') return window.triggerForceSeriesScanAction?.();

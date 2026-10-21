@@ -16,10 +16,94 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#090d16">
     <title>BookOasis - 도서 보관함</title>
+    <link rel="stylesheet" href="{{ static_asset_url('css/advanced_search.css') }}">
     <!-- Resolve even cached parent-module imports to the deployed scan code.
          Both aliases must share one URL so polling/event state is a singleton. -->
     <script type="importmap">
     {{ {'imports': {
+        '/static/js/state.js': static_asset_url('js/state.js'),
+        '/static/js/reader_loader.js': static_asset_url('js/reader_loader.js'),
+        '/static/js/viewer.js': static_asset_url('js/viewer.js'),
+        '/static/js/viewer.js?rev=20260927-tts-session-v8': static_asset_url('js/viewer.js'),
+        '/static/js/viewer/display_mode.js': static_asset_url('js/viewer/display_mode.js'),
+        '/static/js/viewer/display_mode.js?rev=20260922-reader-session-v45': static_asset_url('js/viewer/display_mode.js'),
+        '/static/js/viewer/tap_direction.js': static_asset_url('js/viewer/tap_direction.js'),
+        '/static/js/viewer/seekbar_direction.js': static_asset_url('js/viewer/seekbar_direction.js'),
+        '/static/js/viewer/epub_image_layout.js': static_asset_url('js/viewer/epub_image_layout.js'),
+        '/static/js/viewer/txt_render.js': static_asset_url('js/viewer/txt_render.js'),
+        '/static/js/viewer/txt_settings_apply.js': static_asset_url('js/viewer/txt_settings_apply.js'),
+        '/static/js/viewer/txt_page_utils.js': static_asset_url('js/viewer/txt_page_utils.js'),
+        '/static/js/viewer/txt_page_utils.js?rev=20260922-reader-session-v45': static_asset_url('js/viewer/txt_page_utils.js'),
+        '/static/js/viewer/epub_loader.js': static_asset_url('js/viewer/epub_loader.js'),
+        '/static/js/viewer/seekbar_controller.js': static_asset_url('js/viewer/seekbar_controller.js'),
+        '/static/js/viewer/seekbar_controller.js?rev=20260927-tts-session-v8': static_asset_url('js/viewer/seekbar_controller.js'),
+        '/static/js/utils/lazy_module.js': static_asset_url('js/utils/lazy_module.js'),
+        '/static/js/utils/script_loader.js': static_asset_url('js/utils/script_loader.js'),
+        '/static/js/app_boot_guard.js': static_asset_url('js/app_boot_guard.js'),
+        '/static/js/viewer/open_session.js': static_asset_url('js/viewer/open_session.js'),
+        '/static/js/viewer/tts_sync.js': static_asset_url('js/viewer/tts_sync.js'),
+        '/static/js/viewer/tts_sync.js?rev=20260927-tts-session-v8': static_asset_url('js/viewer/tts_sync.js'),
+        '/static/js/viewer_progress.js': static_asset_url('js/viewer_progress.js'),
+        '/static/js/viewer_progress.js?rev=20260927-tts-session-v8': static_asset_url('js/viewer_progress.js'),
+        '/static/js/viewer_txt.js': static_asset_url('js/viewer_txt.js'),
+        '/static/js/viewer_txt.js?rev=20260927-tts-session-v8': static_asset_url('js/viewer_txt.js'),
+        '/static/js/detail/book_actions.js': static_asset_url('js/detail/book_actions.js'),
+        '/static/js/modal.js': static_asset_url('js/modal.js'),
+        '/static/js/search_filters.js': static_asset_url('js/search_filters.js'),
+        '/static/js/advanced_search.js': static_asset_url('js/advanced_search.js'),
+        '/static/js/dashboard.js': static_asset_url('js/dashboard.js'),
+        '/static/js/dashboard_welcome.js': static_asset_url('js/dashboard_welcome.js'),
+        '/static/js/home_welcome_banner.js': static_asset_url('js/home_welcome_banner.js'),
+        '/static/js/reading_activity.js': static_asset_url('js/reading_activity.js'),
+        '/static/js/user_profile.js': static_asset_url('js/user_profile.js'),
+        '/static/js/settings/core_detail_options.js': static_asset_url('js/settings/core_detail_options.js'),
+        '/static/js/profile_library.js': static_asset_url('js/profile_library.js'),
+        '/static/js/profile_messages.js': static_asset_url('js/profile_messages.js'),
+        '/static/js/profile_bio.js': static_asset_url('js/profile_bio.js'),
+        '/static/js/profile_guestbook.js': static_asset_url('js/profile_guestbook.js'),
+        '/static/js/profile_tooltip.js': static_asset_url('js/profile_tooltip.js'),
+        '/static/js/user_profile.js?rev=20260922-profile-image-v2': static_asset_url('js/user_profile.js'),
+        '/static/js/book_card_genres.js': static_asset_url('js/book_card_genres.js'),
+        '/static/js/shelf_drag.js': static_asset_url('js/shelf_drag.js'),
+        '/static/js/dashboard.js?v=20260926-home-layout-type-cache-v1': static_asset_url('js/dashboard.js'),
+        '/static/js/book_list.js': static_asset_url('js/book_list.js'),
+        '/static/js/library_sort_menu.js': static_asset_url('js/library_sort_menu.js'),
+        '/static/js/library_search_preview.js': static_asset_url('js/library_search_preview.js'),
+        '/static/js/library_search_preview.js?rev=20260921-search-preview-v1': static_asset_url('js/library_search_preview.js'),
+        '/static/js/viewer/reader_settings.js': static_asset_url('js/viewer/reader_settings.js'),
+        '/static/js/viewer/lifecycle_controller.js': static_asset_url('js/viewer/lifecycle_controller.js'),
+        '/static/js/viewer/lifecycle_controller.js?rev=20260927-tts-session-v8': static_asset_url('js/viewer/lifecycle_controller.js'),
+        '/static/js/viewer_next_episode.js': static_asset_url('js/viewer_next_episode.js'),
+        '/static/js/book_selection.js': static_asset_url('js/book_selection.js'),
+        '/static/js/index_scrollbar.js': static_asset_url('js/index_scrollbar.js'),
+        '/static/js/genre_tag_filter.js': static_asset_url('js/genre_tag_filter.js'),
+        '/static/js/viewer/fullscreen_controller.js': static_asset_url('js/viewer/fullscreen_controller.js'),
+        '/static/js/viewer/platform_profile.js': static_asset_url('js/viewer/platform_profile.js'),
+        '/static/js/book_list.js?rev=20260920-mobile-request-cancel-v4': static_asset_url('js/book_list.js'),
+        '/static/js/api.js?rev=20260920-scan-response-v1': static_asset_url('js/api.js'),
+        '/static/js/book_list.js?rev=20260921-global-search-v1': static_asset_url('js/book_list.js'),
+        '/static/js/book_list.js?rev=20260929-cover-url-cache-fix-v1': static_asset_url('js/book_list.js'),
+        '/static/js/genre_tag_filter.js?rev=20260926-filter-chip-click-stays-open-v1': static_asset_url('js/genre_tag_filter.js'),
+        '/static/js/account_menu.js': static_asset_url('js/account_menu.js'),
+        '/static/js/audio_player.js': static_asset_url('js/audio_player.js'),
+        '/static/js/audio_player_modules/chapter_drawer.js': static_asset_url('js/audio_player_modules/chapter_drawer.js'),
+        '/static/js/audio_player_modules/lyrics_panel.js': static_asset_url('js/audio_player_modules/lyrics_panel.js'),
+        '/static/js/audio_player_modules/mini_player_ui.js': static_asset_url('js/audio_player_modules/mini_player_ui.js'),
+        '/static/js/audio_player_modules/track_cover.js': static_asset_url('js/audio_player_modules/track_cover.js'),
+        '/static/js/category/crud_controller.js': static_asset_url('js/category/crud_controller.js'),
+        '/static/js/category/index.js': static_asset_url('js/category/index.js'),
+        '/static/js/detail/header_view.js': static_asset_url('js/detail/header_view.js'),
+        '/static/js/detail/index.js': static_asset_url('js/detail/index.js'),
+        '/static/js/detail/interactions.js': static_asset_url('js/detail/interactions.js'),
+        '/static/js/detail/volume_audiobook_view.js': static_asset_url('js/detail/volume_audiobook_view.js'),
+        '/static/js/kosync_settings.js': static_asset_url('js/kosync_settings.js'),
+        '/static/js/tab_media_library.js': static_asset_url('js/tab_media_library.js'),
+        '/static/js/utils/cover_ratio.js': static_asset_url('js/utils/cover_ratio.js'),
+        '/static/js/series_cover_ratio.js': static_asset_url('js/series_cover_ratio.js'),
+        '/static/js/category/crud_controller.js?rev=20260922-library-kinds-v5': static_asset_url('js/category/crud_controller.js'),
+        '/static/js/category/index.js?rev=20260922-library-kinds-v5': static_asset_url('js/category/index.js'),
+        '/static/js/detail/interactions.js?rev=20260927-tts-listen-v1': static_asset_url('js/detail/interactions.js'),
+        '/static/js/account_menu.js?rev=20260921-theme-mobile-v2': static_asset_url('js/account_menu.js'),
         '/static/js/scan_activity_status.js': static_asset_url('js/scan_activity_status.js'),
         '/static/js/scan_activity_status.js?rev=20260928-metadata-activity-v2': static_asset_url('js/scan_activity_status.js'),
         '/static/js/ui.js': static_asset_url('js/ui.js'),
@@ -29,9 +113,13 @@
         '/static/js/api.js': static_asset_url('js/api.js'),
         '/static/js/settings/queue.js': static_asset_url('js/settings/queue.js'),
         '/static/js/book_context_menu.js': static_asset_url('js/book_context_menu.js'),
-        '/static/js/book_context_menu.js?rev=20260927-tts-session-v8': static_asset_url('js/book_context_menu.js')
+        '/static/js/embedded_metadata_refresh.js': static_asset_url('js/embedded_metadata_refresh.js'),
+        '/static/js/book_context_menu.js?rev=20260927-tts-session-v8': static_asset_url('js/book_context_menu.js'),
+        '/static/js/viewer/input_controller.js?rev=20260927-tts-session-v8': static_asset_url('js/viewer/input_controller.js'),
+        '/static/js/viewer/renderer.js?rev=20260928-comic-state-v2': static_asset_url('js/viewer/renderer.js')
     }} | tojson }}
     </script>
+    <script type="module" src="{{ static_asset_url('js/advanced_search.js') }}"></script>
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="{{ static_asset_url('images/icon-192.png', sig='boe-favicon-b28e4d1') }}">
     <!-- PWA 매니페스트 + 홈 화면 아이콘 (여백 없이 꽉 채운 전용 아이콘 — logo.png는 여백이
@@ -100,6 +188,9 @@
             color: var(--app-text-primary);
             margin: 0;
             height: 100vh;          /* flex 자식의 높이 기준점 필수 */
+            /* Mobile vh includes the space behind browser toolbars. The
+               clipped app shell must follow the currently visible viewport. */
+            height: 100dvh;
             overflow: hidden;
             overscroll-behavior: none;
             display: flex;

@@ -143,7 +143,7 @@ def merge_series_metadata_rows(rows):
 
     result = dict(normalized_rows[0])
     fallback_fields = (
-        'author', 'translator', 'isbn', 'publisher', 'score', 'summary', 'genre', 'tags',
+        'author', 'translator', 'publisher', 'score', 'summary', 'genre', 'tags',
         'publication_status', 'cover_artist', 'teams', 'locations',
         'characters', 'series_alias', 'localized_series',
     )
@@ -154,6 +154,13 @@ def merge_series_metadata_rows(rows):
             (row.get(field) for row in normalized_rows if row.get(field) not in (None, '')),
             result.get(field),
         )
+
+    # An ISBN identifies an edition, not the whole series. Do not borrow a
+    # later volume's ISBN when volume 1 exists but its ISBN is unknown.
+    from utils.isbn import normalize_isbn
+    ordered = _ordered_volume_rows(normalized_rows)
+    isbn_row = next((row for number, _, row in ordered if number == 1), ordered[0][2])
+    result['isbn'] = normalize_isbn(isbn_row.get('isbn'))
 
     def row_links(row):
         links = []

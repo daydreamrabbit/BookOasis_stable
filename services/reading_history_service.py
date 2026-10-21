@@ -191,7 +191,7 @@ class ReadingHistoryService:
     def get_recently_added(db_type, user_id=None, role=None, content_rating_max=None):
         # 1. Redis 캐시 확인 (구형 캐시에 series_alias 없으면 DB 재조회)
         rating_key = content_rating_max if db_type in ('general', 'adult') and content_rating_max is not None else 'unrestricted'
-        cache_key = f"cache:recent_added:v5:{db_type}:{user_id}:{role}:{rating_key}"
+        cache_key = f"cache:recent_added:v6:{db_type}:{user_id}:{role}:{rating_key}"
         cached_data = redis_get(cache_key)
         if cached_data:
             try:
@@ -230,6 +230,7 @@ class ReadingHistoryService:
                 'total_pages' : r['total_pages'] or 0,
                 'is_favorite' : r['is_favorite'] or 0,
                 'created_at'  : r['created_at'],
+                'genre'       : r.get('genre', '') or '',
                 'metadata_locked': r.get('metadata_locked', 0),
             }
             for r in rows

@@ -70,6 +70,7 @@
 {% endmacro %}
 
 <div id="library-dashboard-view" style="display: none; flex-direction: column; gap: 0.9rem;">
+    {% include "components/dashboard_welcome.html" %}
     <!-- -1. 플러그인 로드 상태 알림 패널 (관리자 전용, 기본 숨김 – JS가 role 확인 후 데이터 채워서 노출) -->
     <div id="plugin-health-panel" class="plugin-health-panel" style="display: none;">
         <div class="plugin-health-panel-summary">

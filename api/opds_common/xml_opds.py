@@ -10,15 +10,27 @@ from api.opds_common.xml import (
 )
 
 
+PSE_NAMESPACE = 'http://vaemendis.net/opds-pse/ns'
+
+
+def wants_pse_stream(request) -> bool:
+    """OPDS-PSE(페이지 스트리밍)를 내보낼 앱인가. 지금은 KOReader만.
+    2.8.5에서 모든 앱에 PSE 선언/링크를 내보낸 뒤 Moon+ Reader에서 읽기 버튼이 사라졌다는 신고(2.8.4는 정상)가 있어,
+    다른 앱에는 2.8.4와 같은 피드를 준다."""
+    return 'koreader' in (request.headers.get('User-Agent') or '').lower()
+
+
 def build_opds_standard_xml(request, title: str, entries: list, start_path: str, search_path: str, next_link: str = None) -> str:
     """Moon+ Reader 등 표준 OPDS 앱 전용 XML (Acquisition 다운로드 중심)"""
     base_url = get_external_base_url(request)
+    with_pse = wants_pse_stream(request)
     current_url = build_external_request_url(request)
     now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     lines = [
         '<?xml version="1.0" encoding="utf-8"?>',
-        '<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">',
+        '<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog"'
+        + (f' xmlns:pse="{PSE_NAMESPACE}">' if with_pse else '>'),
         f'  <id>{escape_xml(current_url)}</id>',
         f'  <title>{escape_xml(title)}</title>',
         f'  <updated>{now}</updated>',
@@ -75,6 +87,12 @@ def build_opds_standard_xml(request, title: str, entries: list, start_path: str,
                 f'    <link rel="http://opds-spec.org/acquisition" '
                 f'href="{escape_xml(href)}" type="{escape_xml(entry["mime"])}"/>'
             )
+            # OPDS-PSE 페이지 스트리밍 (KOReader: 내려받지 않고 페이지 단위로 보기)
+            if with_pse and entry.get('pse_href') and entry.get('pse_count'):
+                lines.append(
+                    f'    <link rel="http://vaemendis.net/opds-pse/stream" type="image/jpeg" '
+                    f'href="{escape_xml(base_url + entry["pse_href"])}" pse:count="{int(entry["pse_count"])}"/>'
+                )
             cover_url = None
             cover_mime = entry.get('cover_mime')
             if entry.get('cover_url'):

@@ -28,7 +28,11 @@ export const state = {
   isLoading: false,
   LIMIT: 60,
   searchQuery: '',
-  currentSortDirection: localStorage.getItem('library_sort_direction') || 'asc', // 로컬 캐시 연동 (기본값: 오름차순)
+  advancedSearch: null,
+  filterMode: 'and',
+  readFilter: ['exclude_read', 'only_read'].includes(localStorage.getItem('library_read_filter'))
+    ? localStorage.getItem('library_read_filter') : '',
+  currentSortDirection: localStorage.getItem('library_sort_direction') === 'score_desc' ? 'rating_desc' : (localStorage.getItem('library_sort_direction') || 'asc'), // 이전 평점 정렬도 플러그인 별점으로 전환
   groupMode: localStorage.getItem('library_group_mode') || 'default', // 'default'(시리즈) | 'author'(작가별 모음)
   authorKeyFilter: '', // 작가별 카드 클릭 드릴다운용 정규화 작가 키(기본 그리드로 전환 시에만 사용)
   

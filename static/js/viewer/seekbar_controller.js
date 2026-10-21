@@ -1,5 +1,6 @@
 // seekbar_controller.js - unified seekbar routing for comic/txt/epub/pdf
 import { state } from '../state.js';
+import { syncSeekbarDirection, seekbarVisualRatio } from './seekbar_direction.js';
 
 let viewerSeekbarInited = false;
 let seekbarPointerId = null;
@@ -61,7 +62,7 @@ function syncTooltip(slider) {
   const thumbHalf = 9;
   const width = Math.max(thumbHalf * 2, slider.offsetWidth || 0);
   tooltip.textContent = slider.dataset.seekMode === 'scroll-progress' ? `${Math.round(value)}%` : `${Math.round(value)}`;
-  tooltip.style.left = `${thumbHalf + Math.max(0, Math.min(1, ratio)) * (width - thumbHalf * 2)}px`;
+  tooltip.style.left = `${thumbHalf + seekbarVisualRatio(ratio, syncSeekbarDirection()) * (width - thumbHalf * 2)}px`;
   tooltip.classList.add('visible');
 }
 
@@ -71,7 +72,7 @@ function updateSliderFromPointer(slider, clientX) {
   const max = Number(slider.max || min + 1);
   const thumbHalf = 9;
   const usableWidth = Math.max(1, rect.width - thumbHalf * 2);
-  const ratio = Math.max(0, Math.min(1, (clientX - rect.left - thumbHalf) / usableWidth));
+  const ratio = seekbarVisualRatio((clientX - rect.left - thumbHalf) / usableWidth, syncSeekbarDirection());
   const next = Math.round(min + ratio * (max - min));
   if (Number(slider.value) === next) return false;
   slider.value = String(next);
@@ -143,6 +144,7 @@ export async function returnToPreviousViewerPosition() {
 export function initViewerSeekBar() {
   const slider = document.getElementById('viewer-page-slider');
   if (!slider) return;
+  syncSeekbarDirection();
 
   if (viewerSeekbarInited) return;
   viewerSeekbarInited = true;
@@ -192,6 +194,33 @@ export function initViewerSeekBar() {
   });
 
   document.addEventListener('viewer-position-sync', () => syncTooltip(slider));
+  document.addEventListener('viewer-reading-direction-changed', () => syncTooltip(slider));
+  // Restoring a reader or older layout callers can update the visible mode
+  // without emitting our event. Follow those DOM changes as well.
+  const modal = document.getElementById('media-viewer-modal');
+  if (modal && typeof MutationObserver === 'function') {
+    new MutationObserver(() => syncTooltip(slider)).observe(modal, {
+      attributes: true,
+      attributeFilter: ['data-display-mode', 'data-reading-direction', 'data-viewer-format'],
+    });
+  }
+  window.addEventListener('resize', () => syncTooltip(slider));
+
+  const syncButtonLabels = () => {
+    for (const [id, key, fallback] of [
+      ['seekbar-btn-first', 'viewer.from_beginning', '처음부터'],
+      ['seekbar-btn-last', 'viewer.return_reading_position', '이전 읽던 위치로 돌아가기'],
+    ]) {
+      const button = document.getElementById(id);
+      if (button) {
+        button.removeAttribute('title');
+        button.removeAttribute('data-i18n-title');
+        button.setAttribute('aria-label', window.i18n?.t(key) || fallback);
+      }
+    }
+  };
+  syncButtonLabels();
+  window.addEventListener('bookoasis_language_changed', syncButtonLabels);
 
   slider.addEventListener('input', async (e) => {
     await previewSlider(e.target);

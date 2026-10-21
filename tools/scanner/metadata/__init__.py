@@ -66,7 +66,7 @@ def normalize_metadata_token(token):
     """Normalize malformed genre/tag token (strip junk quote/bracket/comma marks)."""
     if token is None:
         return ''
-    return re.sub(r'\s{2,}', ' ', str(token).strip(" \t\r\n'\"[](),")).strip()
+    return re.sub(r'\s{2,}', ' ', str(token).strip(" \t\r\n'\"[],")).strip()
 
 
 def normalize_metadata_list_field(value):

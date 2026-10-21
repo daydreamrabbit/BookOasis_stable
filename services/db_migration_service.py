@@ -341,6 +341,7 @@ _SCHEMA_SQL = """
         total_tracks INTEGER DEFAULT 1,
         file_type TEXT DEFAULT 'multi',
         is_favorite INTEGER DEFAULT 0,
+        metadata_locked INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         is_deleted INTEGER DEFAULT 0,
@@ -357,7 +358,9 @@ _SCHEMA_SQL = """
         file_mtime REAL DEFAULT 0.0,
         file_size INTEGER DEFAULT 0,
         duration REAL DEFAULT 0.0,
-        format TEXT DEFAULT 'mp3'
+        format TEXT DEFAULT 'mp3',
+        title TEXT,
+        artist TEXT
     );
 
     CREATE TABLE IF NOT EXISTS audiobook_progress (
@@ -383,6 +386,49 @@ _SCHEMA_SQL = """
         is_completed INTEGER DEFAULT 0,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(audiobook_id, track_id, user_id)
+    );
+
+    -- 음악 카테고리 앨범의 외부 정보 조회 결과 (lookup_music_album 플러그인 폴백). 스캔이 덮어쓰지 않도록 따로 두고,
+    -- 화면에는 audiobooks의 빈 칸에만 겹쳐 보여 준다. status: found | not_found | skipped
+    CREATE TABLE IF NOT EXISTS audiobook_music_lookups (
+        audiobook_id INTEGER PRIMARY KEY,
+        status TEXT NOT NULL,
+        source TEXT,
+        artist TEXT,
+        year TEXT,
+        genres TEXT,
+        summary TEXT,
+        cover_url TEXT,
+        source_url TEXT,
+        looked_up_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- KOReader 진행 동기화(kosync 호환 API, general DB에서만 사용). KOReader는 비밀번호의 MD5만 보내므로
+    -- BookOasis 로그인 비밀번호와 따로 '동기화 비밀번호'를 둔다(key_hash = 그 MD5의 해시).
+    CREATE TABLE IF NOT EXISTS kosync_credentials (
+        user_id INTEGER PRIMARY KEY,
+        key_hash TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- KOReader 문서 id(파일 일부로 만든 partial MD5) -> 도서. OPDS로 내려받을 때 같은 방식으로 계산해 둔다.
+    CREATE TABLE IF NOT EXISTS kosync_documents (
+        document TEXT PRIMARY KEY,
+        db_type TEXT NOT NULL,
+        book_id INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- KOReader가 올린 마지막 위치 (사용자 x 문서). KOReader 기기끼리는 이 값을 그대로 주고받는다.
+    CREATE TABLE IF NOT EXISTS kosync_progress (
+        user_id INTEGER NOT NULL,
+        document TEXT NOT NULL,
+        progress TEXT,
+        percentage REAL,
+        device TEXT,
+        device_id TEXT,
+        timestamp INTEGER NOT NULL,
+        PRIMARY KEY (user_id, document)
     );
 
     CREATE TABLE IF NOT EXISTS videos (
@@ -587,6 +633,36 @@ _SCHEMA_SQL = """
         meta_mtime REAL
     );
 
+    CREATE TABLE IF NOT EXISTS problem_occurrences (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'notice',
+        source TEXT NOT NULL DEFAULT 'system',
+        db_type TEXT NOT NULL DEFAULT 'general',
+        library_id INTEGER DEFAULT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_path TEXT,
+        series_key TEXT,
+        group_key TEXT NOT NULL,
+        title TEXT,
+        detail TEXT,
+        message TEXT,
+        context TEXT,
+        occurrence_count INTEGER NOT NULL DEFAULT 1,
+        first_seen_ms INTEGER NOT NULL,
+        last_seen_ms INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        resolved_ms INTEGER DEFAULT NULL,
+        UNIQUE(code, db_type, target_type, target_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS problem_groups (
+        group_key TEXT PRIMARY KEY,
+        muted_ms INTEGER DEFAULT NULL,
+        muted_count INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS scan_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_type TEXT NOT NULL,
@@ -626,6 +702,7 @@ _SCHEMA_SQL = """
         has_video_access INTEGER DEFAULT 1,
         has_download_access INTEGER DEFAULT 1,
         content_rating_max INTEGER DEFAULT 18,
+        last_seen_at DATETIME DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -682,6 +759,10 @@ _SCHEMA_SQL = """
     """
 
 _INDEXES_SQL = """
+    CREATE INDEX IF NOT EXISTS idx_problem_occurrences_status_group ON problem_occurrences(status, group_key);
+    CREATE INDEX IF NOT EXISTS idx_problem_occurrences_last_seen ON problem_occurrences(last_seen_ms);
+    CREATE INDEX IF NOT EXISTS idx_problem_occurrences_target ON problem_occurrences(db_type, target_type, target_id);
+    CREATE INDEX IF NOT EXISTS idx_problem_occurrences_library ON problem_occurrences(db_type, library_id);
     CREATE INDEX IF NOT EXISTS idx_mcp_pending_changes_status ON mcp_pending_changes(status);
     CREATE INDEX IF NOT EXISTS idx_audiobook_tracks_audiobook_id ON audiobook_tracks(audiobook_id);
     CREATE INDEX IF NOT EXISTS idx_audiobook_track_progress_lookup ON audiobook_track_progress(audiobook_id, user_id, track_id);
@@ -1007,37 +1088,47 @@ BUILTIN_LIBRARY_KINDS = (
 )
 
 
+# 오디오북 세션의 'music' 속성은 그 카테고리를 음악 모드(폴더=앨범, 곡 태그 표시)로 스캔/재생하게 한다.
+BUILTIN_LIBRARY_KINDS_BY_SESSION = {
+    'general': BUILTIN_LIBRARY_KINDS,
+    'adult': BUILTIN_LIBRARY_KINDS,
+    'audiobook': (('music', '음악'),),
+}
+
+
 def _seed_library_kinds(conn, cursor, db_type):
-    """도서 세션(general/adult)에 기본 속성 종류를 심는다. 코드 기준으로 멱등이며, 관리자가 바꾼 이름은 덮어쓰지
-    않는다. 오디오북/영상 세션은 빈 목록으로 시작한다."""
-    if db_type not in ('general', 'adult'):
+    """세션별 기본 속성 종류를 심는다(도서: 만화/소설/도서/잡지, 오디오북: 음악). 코드 기준으로 멱등이며,
+    관리자가 바꾼 이름은 덮어쓰지 않는다. 영상 세션은 빈 목록으로 시작한다."""
+    builtin_kinds = BUILTIN_LIBRARY_KINDS_BY_SESSION.get(db_type)
+    if not builtin_kinds:
         return
     try:
-        # 잘못 기본값으로 추가됐던 webtoon 코드는 올바른 공통 코드 manhwa로 통합한다.
-        # 라이브러리 연결을 먼저 옮긴 뒤 잘못된 유형 행을 제거해 선택지와 플러그인 판정을 일치시킨다.
-        cursor.execute(
-            "UPDATE libraries SET content_kind = ? WHERE content_kind = ?",
-            ('manhwa', 'webtoon')
-        )
-        cursor.execute("DELETE FROM library_kinds WHERE code = ?", ('webtoon',))
-        # 직전 버전이 기존 manhwa를 충돌 회피용 이름으로 바꾼 경우 원래 표시명을 복구한다.
-        cursor.execute(
-            "UPDATE library_kinds SET name = ? WHERE code = ? AND name = ?",
-            ('웹툰', 'manhwa', '웹툰 (manhwa)')
-        )
+        if db_type in ('general', 'adult'):
+            # 잘못 기본값으로 추가됐던 webtoon 코드는 올바른 공통 코드 manhwa로 통합한다.
+            # 라이브러리 연결을 먼저 옮긴 뒤 잘못된 유형 행을 제거해 선택지와 플러그인 판정을 일치시킨다.
+            cursor.execute(
+                "UPDATE libraries SET content_kind = ? WHERE content_kind = ?",
+                ('manhwa', 'webtoon')
+            )
+            cursor.execute("DELETE FROM library_kinds WHERE code = ?", ('webtoon',))
+            # 직전 버전이 기존 manhwa를 충돌 회피용 이름으로 바꾼 경우 원래 표시명을 복구한다.
+            cursor.execute(
+                "UPDATE library_kinds SET name = ? WHERE code = ? AND name = ?",
+                ('웹툰', 'manhwa', '웹툰 (manhwa)')
+            )
 
-        # 예전 버전에서 기본값이던 잡지는 더 이상 기본 유형이 아니다. 사용 중이지 않으면
-        # 목록에서 제거하고, 사용 중이면 데이터 손실을 막기 위해 삭제 가능한 사용자 유형으로 남긴다.
-        cursor.execute(
-            "DELETE FROM library_kinds WHERE code = ? AND is_builtin = 1 "
-            "AND NOT EXISTS (SELECT 1 FROM libraries WHERE content_kind = ?)",
-            ('magazine', 'magazine')
-        )
-        cursor.execute(
-            "UPDATE library_kinds SET is_builtin = 0 WHERE code = ? AND is_builtin = 1",
-            ('magazine',)
-        )
-        for sort_order, (code, name) in enumerate(BUILTIN_LIBRARY_KINDS, start=1):
+            # 예전 버전에서 기본값이던 잡지는 더 이상 기본 유형이 아니다. 사용 중이지 않으면
+            # 목록에서 제거하고, 사용 중이면 데이터 손실을 막기 위해 삭제 가능한 사용자 유형으로 남긴다.
+            cursor.execute(
+                "DELETE FROM library_kinds WHERE code = ? AND is_builtin = 1 "
+                "AND NOT EXISTS (SELECT 1 FROM libraries WHERE content_kind = ?)",
+                ('magazine', 'magazine')
+            )
+            cursor.execute(
+                "UPDATE library_kinds SET is_builtin = 0 WHERE code = ? AND is_builtin = 1",
+                ('magazine',)
+            )
+        for sort_order, (code, name) in enumerate(builtin_kinds, start=1):
             cursor.execute("SELECT code FROM library_kinds WHERE code = ?", (code,))
             if cursor.fetchone():
                 # 과거에 사용자가 같은 코드를 추가했다면 이름은 보존하고 기본 유형으로 승격한다.
@@ -1278,6 +1369,7 @@ def _ensure_mariadb_columns():
         ('media_audiobook', 'audiobooks', 'folder_name', 'VARCHAR(500)'),
         ('media_audiobook', 'audiobooks', 'file_type', 'VARCHAR(50)'),
         ('media_audiobook', 'audiobooks', 'deleted_at', 'DATETIME DEFAULT NULL'),
+        ('media_audiobook', 'audiobooks', 'metadata_locked', 'INT DEFAULT 0'),
         ('media_audiobook', 'audiobook_tracks', 'track_code', 'VARCHAR(100)'),
         ('media_audiobook', 'audiobook_tracks', 'filename', 'VARCHAR(500)'),
         ('media_audiobook', 'audiobook_tracks', 'file_mtime', 'DOUBLE DEFAULT 0.0'),
@@ -1317,6 +1409,7 @@ def _ensure_mariadb_columns():
         ('media_adult', 'users', 'has_download_access', 'INT DEFAULT 1'),
         ('media_audiobook', 'users', 'has_download_access', 'INT DEFAULT 1'),
         ('media_general', 'users', 'content_rating_max', 'INT DEFAULT 18'),
+        ('media_general', 'users', 'last_seen_at', 'DATETIME DEFAULT NULL'),
         ('media_adult', 'users', 'content_rating_max', 'INT DEFAULT 18'),
         ('media_audiobook', 'users', 'content_rating_max', 'INT DEFAULT 18'),
         ('media_general', 'books', 'books_lv', 'VARCHAR(20)'),
@@ -1439,18 +1532,20 @@ def run_full_migration():
         if conn is None:
             continue
 
-        _migrate_schema_and_dedupe_progress(conn, cursor, db_type, _SCHEMA_SQL)
-        _create_indexes_and_cleanup_fts(conn, cursor, _INDEXES_SQL)
-        _seed_settings_and_admin(conn, cursor, db_type)
-        _seed_category_permissions(conn, cursor)
-        _seed_library_kinds(conn, cursor, db_type)
-        _backfill_audiobook_last_listened_at(conn, cursor, db_type)
-        _backfill_library_group_default_color(conn, cursor)
-        if db_type == 'video' and not database.is_mariadb_mode():
-            _backfill_html_entities_video_titles_sqlite(conn)
-        _rebuild_series_summary_if_needed(conn, db_type)
+        try:
+            _migrate_schema_and_dedupe_progress(conn, cursor, db_type, _SCHEMA_SQL)
+            _create_indexes_and_cleanup_fts(conn, cursor, _INDEXES_SQL)
+            _seed_settings_and_admin(conn, cursor, db_type)
+            _seed_category_permissions(conn, cursor)
+            _seed_library_kinds(conn, cursor, db_type)
+            _backfill_audiobook_last_listened_at(conn, cursor, db_type)
+            _backfill_library_group_default_color(conn, cursor)
+            if db_type == 'video' and not database.is_mariadb_mode():
+                _backfill_html_entities_video_titles_sqlite(conn)
+            _rebuild_series_summary_if_needed(conn, db_type)
 
-        conn.close()
+        finally:
+            conn.close()
 
     if database.is_mariadb_mode():
         # MariaDB는 executescript 기반 범용 diff(_migrate_schema_and_dedupe_progress/

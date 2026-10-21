@@ -1,5 +1,7 @@
 // index.js – 상세 뷰 라이프사이클 관리 (오케스트레이터)
 import { state } from '../state.js';
+import { withPluginGlobals } from '../utils/script_loader.js';
+import { isDifferentDetail } from './history_navigation.js';
 import * as api from '../api.js';
 import { switchActiveView } from '../view_manager.js';
 import { renderDetailHeader, renderVolumesList, renderRecommendList } from '../detail_render.js';
@@ -174,14 +176,14 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
         try {
           const mainEl = document.getElementById('detail-page-main-content');
           const scriptFn = new Function('pluginId', 'container', 'context', pluginDetailBundle.js);
-          scriptFn(detailViewPluginId, mainEl, {
+          await withPluginGlobals(pluginDetailBundle.js, () => requestSerial === detailRequestSerial && mainEl.isConnected && scriptFn(detailViewPluginId, mainEl, {
             meta,
             books,
             initialDetailData,
             seriesName: safeSeriesName,
             libraryId: actualLibraryId,
             type: state.currentLibraryType || 'general',
-          });
+          }));
         } catch (err) {
           console.error(`[Detail] 플러그인 상세뷰 스크립트 실행 오류 (${detailViewPluginId}):`, err);
         }
@@ -337,7 +339,7 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
 
       // 메타데이터가 공란이거나 기본 설명일 때 자동 트리거 분기
       // (영상 강좌는 show.yaml 스캔 메타 전용이라 도서용 메타 추천 검색 대상이 아님)
-      const isMetaEmpty = (state.currentLibraryType !== 'video') && (!meta.summary || meta.summary === '등록된 설명이 없습니다.');
+      const isMetaEmpty = (state.currentLibraryType !== 'video') && !meta.is_music && (!meta.summary || meta.summary === '등록된 설명이 없습니다.');
       if (isMetaEmpty) {
         triggerRecommendSearch();
       } else {
@@ -387,9 +389,12 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
         returnState,
       };
 
+      const relatedNavigation = isDifferentDetail(previousHistoryState, detailHistoryState);
+      detailHistoryState.hasPreviousDetail = relatedNavigation
+        || !!previousHistoryState?.hasPreviousDetail;
       if (history.state?.view === 'viewer') {
         // A delayed detail refresh must not append a route above an open reader.
-      } else if (!window.location.hash.startsWith('#detail')) {
+      } else if (relatedNavigation || !window.location.hash.startsWith('#detail')) {
         history.pushState(detailHistoryState, '', detailHash);
       } else {
         history.replaceState(detailHistoryState, '', detailHash);
@@ -452,6 +457,21 @@ function renderInteractiveRatingStars(root, libType, ratingContext, widgetData) 
       starsHtml += `<i class="detail-score-star ${starClass(state)}" data-rating="${i}"></i>`;
     }
     root.innerHTML = `<span class="detail-score-interactive"${disabled ? ' data-disabled="1"' : ''}>${starsHtml}</span>${avgText}`;
+    if (myRating > 0) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'detail-rating-cancel';
+      cancel.textContent = '평점 취소';
+      cancel.disabled = disabled;
+      cancel.addEventListener('click', event => {
+        event.preventDefault(); event.stopPropagation();
+        if (pendingTimer) clearTimeout(pendingTimer);
+        pendingTimer = null;
+        previewRating = null;
+        commit(0);
+      });
+      root.append(cancel);
+    }
   };
 
   const paintPreview = (rating) => {
@@ -602,7 +622,7 @@ function renderDetailSidebarWidgetItem(item, fallbackLibraryId) {
 // 상세 뷰 → 그리드 뷰/대시보드 복귀
 export function goBackToList(triggerBack = true) {
   ++detailRequestSerial;
-  if (triggerBack && history.state?.view === 'detail' && history.state.returnState) {
+  if (triggerBack && history.state?.view === 'detail' && (history.state.returnState || history.state.hasPreviousDetail)) {
     history.back();
     return;
   }
@@ -628,6 +648,9 @@ export function goBackToList(triggerBack = true) {
 
   if (state.currentLibraryId === 'home') {
     switchActiveView('dashboard');
+    // Initial home requests may have completed while detail was active and
+    // deliberately skipped rendering. Returning must resume that work too.
+    window.loadDashboardData?.();
   } else {
     switchActiveView('grid');
   }

@@ -192,6 +192,38 @@ class VideoRepository:
         return [r['folder_path'] for r in rows if r and r['folder_path']]
 
     @staticmethod
+    def get_episode_signatures(library_id=None):
+        """Relative episode paths/sizes without reading video contents."""
+        with database.connection('video') as conn:
+            cursor = conn.cursor()
+            sql = ("SELECT v.folder_path, e.file_path, COALESCE(e.file_size,0) AS file_size "
+                   "FROM video_episodes e JOIN videos v ON v.id=e.video_id")
+            cursor.execute(sql + " WHERE v.library_id=?" if library_id is not None else sql,
+                           (library_id,) if library_id is not None else ())
+            rows = cursor.fetchall()
+        signatures = {}
+        for row in rows:
+            folder = os.path.normpath(str(row['folder_path']))
+            rel = os.path.relpath(os.path.normpath(str(row['file_path'])), folder)
+            signatures.setdefault(folder, set()).add((rel, int(row['file_size'] or 0)))
+        return signatures
+
+    @staticmethod
+    def touch_updated_at(row_id):
+        """표지 원본(같은 경로)이 바뀐 것을 스캐너가 알아챘을 때 updated_at만 올려 화면 표지 주소(?t=)를 바꾼다."""
+        conn = database.get_connection('video')
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE videos SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (int(row_id),))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    @staticmethod
     def get_by_folder_path(folder_path):
         """폴더 경로 기반 강좌 상세 메타 조회"""
         with database.connection('video') as conn:

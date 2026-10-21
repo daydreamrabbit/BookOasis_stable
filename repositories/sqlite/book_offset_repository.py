@@ -12,6 +12,14 @@ _offset_cache = LRUCache(capacity=5000)
 
 class BookOffsetRepository:
     @staticmethod
+    def invalidate_book_offsets(db_type, book_id):
+        prefix = f'{db_type}:{book_id}:'
+        with _offset_cache.lock:
+            for key in list(_offset_cache.cache):
+                if key.startswith(prefix):
+                    del _offset_cache.cache[key]
+
+    @staticmethod
     def get_book_offset(db_type, book_id, page_idx):
         """특정 도서 및 페이지 인덱스에 해당하는 ZIP 압축 파일 헤더 오프셋 데이터 조회 (LRU 캐시 적용)"""
         cache_key = f"{db_type}:{book_id}:{page_idx}"
@@ -19,19 +27,19 @@ class BookOffsetRepository:
         if cached is not None:
             return cached if cached != 'NOT_FOUND' else None
 
-        conn = database.get_connection(db_type)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT filename, local_header_offset, compress_size, file_size, compress_type, data_offset
-            FROM book_offsets
-            WHERE book_id = ? AND page_idx = ?
-            """,
-            (book_id, page_idx),
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT filename, local_header_offset, compress_size, file_size, compress_type, data_offset
+                FROM book_offsets
+                WHERE book_id = ? AND page_idx = ?
+                """,
+                (book_id, page_idx),
+            )
+            row = cursor.fetchone()
+            conn.close()
 
-        res = dict(row) if row else 'NOT_FOUND'
-        _offset_cache.put(cache_key, res)
-        return dict(row) if row else None
+            res = dict(row) if row else 'NOT_FOUND'
+            _offset_cache.put(cache_key, res)
+            return dict(row) if row else None

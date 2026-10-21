@@ -7,6 +7,9 @@ import io
 import os
 from pathlib import Path
 import uuid
+import json
+import re
+from urllib.parse import urlsplit
 
 from PIL import Image, ImageOps, ImageSequence, UnidentifiedImageError
 
@@ -144,12 +147,50 @@ def normalize_avatar_key(value):
     return value if value in PROFILE_AVATARS else DEFAULT_PROFILE_AVATAR
 
 
+def normalize_activity_color(value):
+    if not isinstance(value, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', value):
+        raise ValueError('독서 활동 색상은 #RRGGBB 형식이어야 합니다.')
+    return value.lower()
+
+
+def normalize_profile_appearance(value=None):
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError('프로필 꾸미기 설정이 올바르지 않습니다.')
+    bio = value.get('bio', '')
+    banner = value.get('banner_url', '')
+    accent = value.get('accent', '#4f8ef0')
+    if not isinstance(bio, str) or len(bio) > 20000:
+        raise ValueError('소개는 20,000자 이하로 입력해 주세요.')
+    if len(bio.encode('utf-8')) > 60000:
+        raise ValueError('소개 내용은 UTF-8 기준 60KB 이하로 입력해 주세요.')
+    if not isinstance(accent, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', accent):
+        raise ValueError('강조색 형식이 올바르지 않습니다.')
+    if not isinstance(banner, str) or len(banner) > 480 or re.search(r'[\s\\]', banner):
+        raise ValueError('배너 이미지 주소를 확인해 주세요.')
+    if banner:
+        url = urlsplit(banner)
+        local = banner.startswith('/') and not banner.startswith('//')
+        if (not local and not (url.scheme == 'https' and url.hostname)) or url.username or url.password:
+            raise ValueError('배너는 https:// 또는 /로 시작하는 이미지 주소를 사용해 주세요.')
+    return {'bio': bio, 'banner_url': banner, 'accent': accent.lower()}
+
+
 class UserProfileService:
     @staticmethod
     def get_preferences(user_id, username):
         raw_avatar = SettingsService.get_user_value(user_id, 'PROFILE_AVATAR', DEFAULT_PROFILE_AVATAR)
         has_custom_avatar = get_custom_avatar_path(user_id).is_file()
         avatar = 'custom' if str(raw_avatar).strip().lower() == 'custom' and has_custom_avatar else normalize_avatar_key(raw_avatar)
+        try:
+            appearance = normalize_profile_appearance(json.loads(SettingsService.get_user_value(user_id, 'PROFILE_APPEARANCE', '{}')))
+        except (TypeError, ValueError):
+            appearance = normalize_profile_appearance()
+        try:
+            activity_color = normalize_activity_color(SettingsService.get_user_value(user_id, 'READING_ACTIVITY_COLOR', '#39d353'))
+        except ValueError:
+            activity_color = '#39d353'
         return {
             'display_name': normalize_display_name(
                 SettingsService.get_user_value(user_id, 'PROFILE_DISPLAY_NAME', username),
@@ -157,21 +198,35 @@ class UserProfileService:
             ),
             'avatar': avatar,
             'avatar_url': custom_avatar_url(user_id) if avatar == 'custom' else '',
+            'appearance': appearance,
+            'activity_color': activity_color,
         }
 
     @staticmethod
-    def save_preferences(user_id, username, display_name, avatar):
+    def save_preferences(user_id, username, display_name, avatar, appearance=None):
         display_name = normalize_display_name(display_name, username)
         requested_avatar = str(avatar or '').strip().lower()
         avatar = 'custom' if requested_avatar == 'custom' and get_custom_avatar_path(user_id).is_file() else normalize_avatar_key(requested_avatar)
-        # 저장 실패를 성공으로 숨기지 않도록 Repository 예외를 API까지 전달한다.
-        SettingsRepository.set_user_value(user_id, 'PROFILE_DISPLAY_NAME', display_name)
-        SettingsRepository.set_user_value(user_id, 'PROFILE_AVATAR', avatar)
-        return {
-            'display_name': display_name,
-            'avatar': avatar,
-            'avatar_url': custom_avatar_url(user_id) if avatar == 'custom' else '',
-        }
+        values = [('PROFILE_DISPLAY_NAME', display_name), ('PROFILE_AVATAR', avatar)]
+        if appearance is not None:
+            normalized = normalize_profile_appearance(appearance)
+            values.append(('PROFILE_APPEARANCE', json.dumps(normalized, ensure_ascii=False)))
+        # Save identity and customization together; never report a partially saved profile.
+        with database.connection('general') as conn:
+            cursor = conn.cursor()
+            if database.is_mariadb_mode():
+                sql = '''INSERT INTO user_settings(user_id,`key`,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP)
+                    ON DUPLICATE KEY UPDATE value=VALUES(value),updated_at=CURRENT_TIMESTAMP'''
+            else:
+                sql = '''INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP'''
+            try:
+                cursor.executemany(sql, [(user_id, key, value) for key, value in values])
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return UserProfileService.get_preferences(user_id, username)
 
     @staticmethod
     def get_statistics(user_id, include_adult=False, year=None):
@@ -196,6 +251,7 @@ class UserProfileService:
         recent.sort(key=lambda item: item.get('last_read_at') or '', reverse=True)
         return {
             'year': year,
+            'today': _dt.date.today().isoformat(),
             'completed_books': totals['completed_books'],
             'started_books': totals['started_books'],
             'pages_read': totals['pages_read'],

@@ -62,6 +62,8 @@ PUBLIC_UI_SETTING_KEYS = (
 # 관리자 전역 설정(DB_POOL_SIZE, LAZY_SCAN_CRON, TIMEZONE, RCLONE_RC_URL, WEBHOOK_TOKEN 등
 # 보안/스캔/시스템 값)은 절대 포함하지 않는다 - 이 목록은 UI/열람 취향에 한정된다.
 USER_OVERRIDABLE_SETTING_KEYS = (
+    'READING_ACTIVITY_COLOR',
+    'HOME_WELCOME_CONFIG',
     'DASHBOARD_THEME',
     'SHOW_DASHBOARD_INSIGHTS',
     'VIEWER_FONT_SIZE',
@@ -127,9 +129,31 @@ def get_public_ui_settings():
                     public_settings[k] = effective
             elif k in all_settings:
                 public_settings[k] = all_settings[k]
-        return jsonify({'success': True, 'settings': public_settings})
+        return jsonify({'success': True, 'settings': public_settings,
+                        'active_detail_view_providers': _active_detail_view_providers(all_settings)})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+def _active_detail_view_providers(settings):
+    """UI visibility follows usable providers, not stale saved plugin IDs."""
+    from services.metadata_factory import MetadataFactory
+    from utils.plugin_session_helper import resolve_plugin_sessions
+    result = {}
+    loaded = {}
+    for kind in ('general', 'adult', 'audiobook', 'video'):
+        provider_id = settings.get(f'DETAIL_VIEW_PROVIDER_{kind.upper()}', 'core') or 'core'
+        result[kind] = 'core'
+        if provider_id == 'core' or settings.get(f'PLUGIN_ENABLED_{provider_id}') == '0':
+            continue
+        try:
+            if provider_id not in loaded:
+                loaded[provider_id] = MetadataFactory.get_provider_by_id(provider_id)
+            manifest = getattr(loaded[provider_id], 'detail_view', None)
+            if isinstance(manifest, dict) and kind in resolve_plugin_sessions(manifest):
+                result[kind] = provider_id
+        except Exception:
+            pass  # Disabled/unavailable plugins fall back to the core controls.
+    return result
 
 @settings_bp.route('/api/media/settings', methods=['POST'])
 @admin_required
@@ -211,6 +235,25 @@ def update_user_setting():
     if len(value) > max_value_len:
         return jsonify({'success': False, 'error': f'설정 값 길이는 최대 {max_value_len}자까지 허용됩니다. ({key})'}), 400
     try:
+        if key == 'READING_ACTIVITY_COLOR':
+            from services.user_profile_service import normalize_activity_color
+            from repositories.settings_repository import SettingsRepository
+            try:
+                value = normalize_activity_color(value)
+            except ValueError as error:
+                return jsonify({'success': False, 'error': str(error)}), 400
+            SettingsRepository.set_user_value(user_id, key, value)
+            return jsonify({'success': True})
+        if key == 'HOME_WELCOME_CONFIG':
+            from services.home_welcome_service import validate_welcome_config
+            try:
+                value = validate_welcome_config(value)
+            except (ValueError, TypeError) as error:
+                return jsonify({'success': False, 'error': str(error)}), 400
+            # This UI must not report success when persistence actually failed.
+            from repositories.settings_repository import SettingsRepository
+            SettingsRepository.set_user_value(user_id, key, value)
+            return jsonify({'success': True})
         SettingsService.set_user_value(user_id, key, value)
         return jsonify({'success': True, 'message': _t('api.msg_setting_saved', key=key)})
     except Exception as e:

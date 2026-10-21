@@ -1,6 +1,7 @@
 // viewer_txt.js – 텍스트 리더(TXT) 및 EPUB 뷰어 통합 로직
 import { createTxtPaginationEngine } from './viewer/txt_pagination_engine.js';
 import { state } from './state.js';
+import { getEpubImageLayout, rememberEpubImageSize, resolveEpubImageSpread, getEpubImages, getEpubImageSheets, epubImageSheetSignature } from './viewer/epub_image_layout.js';
 import { viewerStorage } from './viewer/storage.js';
 
 // Route all storage access through a wrapper for safer future refactors.
@@ -21,7 +22,8 @@ let txtPendingRestoreTimer = null;
 let txtRestoreToastAt = 0;
 let txtRenderGeneration = 0;
 let txtSessionGeneration = 0;
-const epubChapterFetchInFlight = new Set();
+let epubImagePairAnchor = null;
+const epubChapterFetchInFlight = new Map();
 const epubChapterRetryState = new Map();
 
 // Phase-1 runtime state object for incremental modularization.
@@ -83,10 +85,10 @@ import { showViewerLoading, hideViewerLoading, showViewerError, showToast, showV
 import { saveProgress as queueProgress } from './viewer_progress.js?rev=20260927-tts-session-v8';
 import { captureTextResume, restoreTextResume, readTextResume } from './viewer/text_resume.js';
 import { initPageStep, initReadingDirection, getComicReadingDirection, getSpreadShiftOffset, setSpreadShiftOffset } from './viewer/reader_settings.js';
-import { getTxtPageAdvanceWidth, getTxtViewportPageInfo, getTxtPhysicalPageInfo, getTxtPageScrollLeft, setTxtPageScrollLeft, snapTxtPageScrollLeft, isTxtScrollLeftAtMaxPage, getTxtPageMaxScroll, applyTxtTwoPageTrailingSpacer, applyTxtImageMaxHeight } from './viewer/txt_page_utils.js?rev=20260922-reader-session-v45';
+import { getTxtPageAdvanceWidth, getTxtViewportPageInfo, getTxtPhysicalPageInfo, getTxtScrollForPhysicalPage, getTxtPageScrollLeft, setTxtPageScrollLeft, snapTxtPageScrollLeft, isTxtScrollLeftAtMaxPage, getTxtPageMaxScroll, applyTxtTwoPageTrailingSpacer, applyTxtImageMaxHeight } from './viewer/txt_page_utils.js?rev=20260922-reader-session-v45';
 import { chunkText, formatTxtToHtml, stripHtml } from './viewer/txt_text_utils.js';
 import { renderTxtChunkView, applyTxtParagraphStyles, isEpubImageOnlyHtml } from './viewer/txt_render.js';
-import { getTxtAnchorInfoByMode, restoreTxtAnchorInfoByMode } from './viewer/txt_anchor_utils.js';
+import { getTxtAnchorInfoByMode, restoreTxtAnchorInfoByMode, captureTxtPageAnchor, locateTxtPageAnchor } from './viewer/txt_anchor_utils.js';
 import { findAnchorOffset, chunkStarts } from './viewer/text_position_utils.js?rev=20260927-tts-session-v8';
 import { setReadPositionProvider, reportReadNow, fetchSyncState, listenTargetForTxt, listenTargetForEpub } from './viewer/tts_sync.js?rev=20260927-tts-session-v8';
 import { applyTxtSettingsCore, applyFontFamilyToElement as applyTxtFontFamily } from './viewer/txt_settings_apply.js';
@@ -127,6 +129,80 @@ let txtPaginationTimer = null;
 let txtPaginationGeneration = 0;
 let pendingTxtFlowPosition = null;
 let textResumeReady = false;
+
+let txtStableAnchor = null;
+let txtHeldAnchor = null;
+let txtResizePending = false;
+let txtRelayoutInProgress = false;
+let txtRelayoutForResize = null;
+
+function resetTxtLayoutAnchor() {
+  txtStableAnchor = null;
+  txtHeldAnchor = null;
+  txtResizePending = false;
+  txtRelayoutInProgress = false;
+  txtRelayoutForResize = null;
+  clearTimeout(resizeTimeout);
+}
+
+function txtLayoutKey() {
+  const wrapper = document.getElementById('txt-scroll-wrapper');
+  return [window.innerWidth, window.innerHeight, wrapper?.clientWidth, wrapper?.clientHeight,
+    localStorage.getItem('comic_page_step'), document.getElementById('media-viewer-modal')?.dataset.displayMode].join(':');
+}
+
+function isCurrentTxtLayoutAnchor(snapshot) {
+  return snapshot && snapshot.session === txtSessionGeneration && snapshot.bookId === state.activeBookId
+    && snapshot.chapter === currentChunkIdx
+    && snapshot.mode === (localStorage.getItem('viewer_scroll_mode') || 'page');
+}
+
+function rememberStableTxtPageAnchor() {
+  if (!textResumeReady || document.hidden || txtResizePending || txtRelayoutInProgress) return;
+  const wrapper = document.getElementById('txt-scroll-wrapper');
+  const content = document.getElementById('txt-content-area');
+  if (!wrapper || !content) return;
+  const mode = localStorage.getItem('viewer_scroll_mode') || 'page';
+  const position = mode === 'scroll' ? wrapper.scrollTop : getTxtPageScrollLeft(wrapper);
+  // Browser reflow can precede the debounced resize event. Never replace the
+  // old-layout character with a character from that intermediate layout.
+  if (isCurrentTxtLayoutAnchor(txtStableAnchor)) {
+    if (txtStableAnchor.layout !== txtLayoutKey()) return;
+    if (txtStableAnchor.anchor && Math.abs(txtStableAnchor.position - position) < 1) return;
+  }
+  txtHeldAnchor = null;
+  txtStableAnchor = { anchor: captureTxtPageAnchor({ scrollWrapper: wrapper, contentArea: content, mode }),
+    session: txtSessionGeneration, bookId: state.activeBookId, chapter: currentChunkIdx,
+    mode, layout: txtLayoutKey(), position,
+    advance: getTxtPageAdvanceWidth(wrapper),
+    atEnd: getTxtPageMaxScroll(wrapper) > 0 && Math.abs(position - getTxtPageMaxScroll(wrapper)) < 1,
+    ratio: wrapper.scrollHeight > wrapper.clientHeight ? wrapper.scrollTop / (wrapper.scrollHeight - wrapper.clientHeight) : 0 };
+}
+
+function onTxtViewerVisibilityChange() {
+  if (!textResumeReady || !['txt', 'epub'].includes(state.currentViewerFormat)) return;
+  if (document.hidden) {
+    // Preserve the last settled layout; app-switcher geometry may already differ.
+    txtHeldAnchor = isCurrentTxtLayoutAnchor(txtStableAnchor) ? txtStableAnchor : null;
+    return;
+  }
+  const session = txtSessionGeneration;
+  const bookId = state.activeBookId;
+  const held = txtHeldAnchor;
+  clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(() => {
+    if (document.hidden || session !== txtSessionGeneration || bookId !== state.activeBookId) return;
+    if (held !== txtHeldAnchor || (held && !isCurrentTxtLayoutAnchor(held))) {
+      txtHeldAnchor = null;
+      // Navigation won the race. A deferred hidden resize still needs to apply
+      // the new geometry, but must use the new location rather than the hold.
+      if (txtResizePending) txtRelayoutForResize?.();
+      return;
+    }
+    txtRelayoutForResize?.();
+  }, 250);
+}
+document.addEventListener('visibilitychange', onTxtViewerVisibilityChange);
 
 function saveProgress(bookId, pageIdx, totalPages, extraData = null) {
   if (!textResumeReady || txtPageSnapInProgress) return;
@@ -338,7 +414,7 @@ function paginationMetrics() {
 
 async function measureEpubChapter(html, metrics, chapterAnnotations = []) {
   if (!html || html === 'LOADING_PENDING') return { pages: 1, annotationPages: [] };
-  if (isEpubImageOnlyHtml(html)) return { pages: 1, annotationPages: [] };
+  if (isEpubImageOnlyHtml(html)) return { pages: getEpubImages(html).length, annotationPages: [] };
   const probe = document.createElement('div');
   probe.className = 'txt-content epub-pagination-probe';
   probe.style.cssText = `position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none;box-sizing:border-box;width:${metrics.containerWidth}px;font-size:${metrics.fontSize};font-family:${metrics.fontFamily};line-height:${metrics.lineHeight};letter-spacing:${metrics.letterSpacing};white-space:normal;word-break:break-word;`;
@@ -599,6 +675,17 @@ function requestEpubChapterContent(chapterIdx, options = {}) {
   return requestEpubChapterContentExt(txtChunks, chapterIdx, options);
 }
 
+function requestEpubChapterForRender(chapterIdx, key) {
+  if (!epubChapterFetchInFlight.has(key)) {
+    const pending = requestEpubChapterContent(chapterIdx, { force: true, updateDom: false })
+      .finally(() => epubChapterFetchInFlight.delete(key));
+    epubChapterFetchInFlight.set(key, pending);
+  }
+  // Each render subscribes to the shared request, so resizing during a fetch
+  // cannot leave only an obsolete render waiting for the chapter.
+  return epubChapterFetchInFlight.get(key);
+}
+
 function getVisibleEpubPlaceholderIndexes(maxCount = 10) {
   return getVisibleEpubPlaceholderIndexesExt(txtChunks, maxCount);
 }
@@ -666,11 +753,13 @@ function setupTxtViewerRuntimeListeners() {
 
     const processScroll = () => {
       rAfPending = false;
+      if (document.hidden || txtResizePending || txtRelayoutInProgress || listenerSession !== txtSessionGeneration) return;
       const mode = localStorage.getItem('viewer_scroll_mode') || 'page';
       if (mode === 'page') {
         if (txtPageSnapInProgress) return;
         clearTimeout(txtPageSnapTimeout);
         txtPageSnapTimeout = setTimeout(() => {
+          if (document.hidden || txtResizePending || listenerSession !== txtSessionGeneration) return;
           txtPageSnapInProgress = true;
           snapTxtPageScrollLeft(scrollWrapper);
           txtPageSnapInProgress = false;
@@ -758,6 +847,7 @@ function setupTxtViewerRuntimeListeners() {
       // Debounce heavy operations (logActiveViewportText, saveDetailPosition, fine-grained progress)
       clearTimeout(scrollDebounceTimeout);
       scrollDebounceTimeout = setTimeout(() => {
+        if (document.hidden || txtResizePending || listenerSession !== txtSessionGeneration) return;
         logActiveViewportText();
         saveDetailPosition();
         if (isEpubMode) {
@@ -796,10 +886,16 @@ function setupTxtViewerRuntimeListeners() {
   }
 
   let lastWindowWidth = window.innerWidth;
+  const listenerSession = txtSessionGeneration;
   const handleResize = () => {
+    if (listenerSession !== txtSessionGeneration) return;
+    if (document.hidden) { txtResizePending = true; return; }
     const wrapper = document.getElementById('txt-scroll-wrapper');
-    if (!wrapper) return;
+    if (!textResumeReady) { txtResizePending = false; return; }
+    if (!wrapper || !wrapper.clientWidth || !wrapper.clientHeight) return;
     const mode = localStorage.getItem('viewer_scroll_mode') || 'page';
+    const snapshot = [txtHeldAnchor, txtStableAnchor].find(isCurrentTxtLayoutAnchor);
+    const anchor = snapshot?.anchor;
 
     const currentWidth = window.innerWidth;
     const widthChanged = Math.abs(currentWidth - lastWindowWidth) > 5;
@@ -807,42 +903,64 @@ function setupTxtViewerRuntimeListeners() {
     if (state.currentViewerFormat === 'epub') scheduleEpubPagination(260);
     if (state.currentViewerFormat === 'txt') scheduleTxtPagination(260);
 
-    if (mode === 'page') {
-      const prevStepWidth = getTxtPageAdvanceWidth(wrapper);
-      // 챕터 마지막의 짧은 페이지(스프레드)에 있을 때는 stepWidth 배수 기반 인덱스
-      // 계산이 부정확할 수 있으므로(snapTxtPageScrollLeft와 동일한 문제), 그 경우
-      // 인덱스 재구성 대신 "마지막 페이지였다"는 사실 자체를 보존한다.
-      const wasAtLastPage = isTxtScrollLeftAtMaxPage(wrapper);
-      const currentColumnIdx = Math.round(getTxtPageScrollLeft(wrapper) / prevStepWidth);
-      // Resize relayout should preserve current visual page, not stale saved localStorage position.
-      applyTxtSettings({ previousMode: mode, skipSavedPositionRestore: true });
-      const contentArea = document.getElementById('txt-content-area');
-      applyTxtImageMaxHeight(wrapper, contentArea);
-      applyTxtTwoPageTrailingSpacer(wrapper, contentArea);
-      const newStepWidth = getTxtPageAdvanceWidth(wrapper);
-      setTxtPageScrollLeft(wrapper, wasAtLastPage ? getTxtPageMaxScroll(wrapper) : currentColumnIdx * newStepWidth);
-      snapTxtPageScrollLeft(wrapper);
-      logActiveViewportText();
-    } else {
-      // In scroll mode, mobile address bar toggles change height only. Skip DOM re-render if width hasn't changed.
-      if (!widthChanged) return;
+    txtRelayoutInProgress = true;
+    const resumeReady = textResumeReady;
+    // Rendering settings updates labels synchronously; do not persist its
+    // temporary position before the original character has been restored.
+    textResumeReady = false;
+    try {
+      if (mode === 'page') {
+        const prevStepWidth = snapshot?.advance || getTxtPageAdvanceWidth(wrapper);
+        // 챕터 마지막의 짧은 페이지(스프레드)에 있을 때는 stepWidth 배수 기반 인덱스
+        // 계산이 부정확할 수 있으므로(snapTxtPageScrollLeft와 동일한 문제), 그 경우
+        // 인덱스 재구성 대신 "마지막 페이지였다"는 사실 자체를 보존한다.
+        const wasAtLastPage = snapshot?.atEnd ?? isTxtScrollLeftAtMaxPage(wrapper);
+        const currentColumnIdx = Math.round((snapshot?.position ?? getTxtPageScrollLeft(wrapper)) / prevStepWidth);
+        applyTxtSettings({ previousMode: mode, skipSavedPositionRestore: true, resumePending: true });
+        const contentArea = document.getElementById('txt-content-area');
+        applyTxtImageMaxHeight(wrapper, contentArea);
+        applyTxtTwoPageTrailingSpacer(wrapper, contentArea);
+        const newStepWidth = getTxtPageAdvanceWidth(wrapper);
+        const anchored = locateTxtPageAnchor({ scrollWrapper: wrapper, contentArea, anchor, advanceWidth: newStepWidth });
+        setTxtPageScrollLeft(wrapper, anchored ?? (wasAtLastPage ? getTxtPageMaxScroll(wrapper) : currentColumnIdx * newStepWidth));
+        snapTxtPageScrollLeft(wrapper);
+        logActiveViewportText();
+      } else {
+        // Mobile address-bar height changes should not rebuild scrolling content.
+        if (!widthChanged && !txtHeldAnchor) return;
 
-      const beforeHeight = wrapper.scrollHeight - wrapper.clientHeight;
-      const ratio = beforeHeight > 0 ? wrapper.scrollTop / beforeHeight : 0;
-      // Scroll mode resize also preserves ratio instead of restoring stale saved position.
-      applyTxtSettings({ previousMode: mode, skipSavedPositionRestore: true });
-      const afterHeight = wrapper.scrollHeight - wrapper.clientHeight;
-      if (afterHeight > 0) {
-        wrapper.scrollTop = afterHeight * ratio;
+        const beforeHeight = wrapper.scrollHeight - wrapper.clientHeight;
+        const ratio = snapshot?.ratio ?? (beforeHeight > 0 ? wrapper.scrollTop / beforeHeight : 0);
+        applyTxtSettings({ previousMode: mode, skipSavedPositionRestore: true, resumePending: true });
+        const afterHeight = wrapper.scrollHeight - wrapper.clientHeight;
+        const anchored = locateTxtPageAnchor({ scrollWrapper: wrapper,
+          contentArea: document.getElementById('txt-content-area'), anchor, mode });
+        if (anchored !== null) wrapper.scrollTop = anchored;
+        else if (afterHeight > 0) wrapper.scrollTop = afterHeight * ratio;
+        logActiveViewportText();
       }
-      logActiveViewportText();
+    } finally {
+      textResumeReady = resumeReady;
+      txtRelayoutInProgress = false;
+      txtResizePending = false;
+      txtHeldAnchor = null;
+      // Keep the same character across repeated rotations, even if it now lies
+      // in the middle of a spread. A real page/scroll move replaces it.
+      if (snapshot) txtStableAnchor = { ...snapshot, layout: txtLayoutKey(),
+        position: mode === 'scroll' ? wrapper.scrollTop : getTxtPageScrollLeft(wrapper),
+        advance: getTxtPageAdvanceWidth(wrapper),
+        atEnd: getTxtPageMaxScroll(wrapper) > 0 && Math.abs(getTxtPageScrollLeft(wrapper) - getTxtPageMaxScroll(wrapper)) < 1 };
+      updateTxtSeekBar();
+      saveDetailPosition();
     }
   };
+  txtRelayoutForResize = handleResize;
 
   if (activeResizeHandler) {
     window.removeEventListener('resize', activeResizeHandler);
   }
   activeResizeHandler = () => {
+    txtResizePending = true;
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(handleResize, 100);
   };
@@ -855,6 +973,8 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
   const contentArea = document.getElementById('txt-content-area');
   if (!pane || !contentArea) return;
   const sessionId = ++txtSessionGeneration;
+  epubImagePairAnchor = null;
+  resetTxtLayoutAnchor();
   textResumeReady = false;
   const isCurrentSession = () => sessionId === txtSessionGeneration && state.activeBookId === bookId;
   contentArea.dataset.viewerBookId = String(bookId);
@@ -962,6 +1082,10 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
             if (!isCurrentSession()) return;
             if (!cData || typeof cData.content !== 'string') {
               throw new Error(cData?.error || 'EPUB 챕터 내용이 비어 있습니다.');
+            }
+            if ((localStorage.getItem('comic_page_step') || '1') === '2') {
+              await preloadEpubChapterImages(cData.content);
+              if (!isCurrentSession()) return;
             }
             hideViewerLoading();
             txtChunks[startIdx] = cData.content || '<p>내용이 없습니다.</p>';
@@ -1120,6 +1244,10 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
 }
 
 function cancelPendingTxtRestore() {
+  if (!txtRelayoutInProgress) {
+    txtStableAnchor = null;
+    txtHeldAnchor = null;
+  }
   clearTimeout(txtPageSnapTimeout);
   if (txtPendingRestoreTimer) {
     clearTimeout(txtPendingRestoreTimer);
@@ -1136,6 +1264,16 @@ function showTxtRestoreLoadingToast(msg = null) {
   }
 }
 
+function getCurrentEpubImageSpread(index = currentChunkIdx) {
+  const shift = getSpreadShiftOffset();
+  return resolveEpubImageSpread(txtChunks, index, {
+    // EPUB spine boundaries are not physical blank leaves. Pair the opening
+    // portraits instead of inheriting the comic cover-alone convention.
+    coverAlone: false,
+    pairAnchor: epubImagePairAnchor?.shift === shift ? epubImagePairAnchor.index : null,
+  });
+}
+
 function renderCurrentChunk(initMode = false, onSettled) {
   const contentArea = document.getElementById('txt-content-area');
   const scrollWrapper = document.getElementById('txt-scroll-wrapper');
@@ -1146,6 +1284,12 @@ function renderCurrentChunk(initMode = false, onSettled) {
     if (scrollWrapper) scrollWrapper.style.visibility = '';
   }
   const renderGeneration = ++txtRenderGeneration;
+  const renderSession = txtSessionGeneration;
+  const renderBookId = state.activeBookId;
+  const renderChunks = txtChunks;
+  const isCurrentSession = () => renderSession === txtSessionGeneration
+    && renderBookId === state.activeBookId && renderChunks === txtChunks;
+  const isCurrentRender = () => isCurrentSession() && renderGeneration === txtRenderGeneration;
 
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   const isEpub = (state.currentViewerFormat === 'epub');
@@ -1161,39 +1305,25 @@ function renderCurrentChunk(initMode = false, onSettled) {
     return;
   }
 
-  // 이미지형 EPUB의 2장 보기에서는 슬라이더/진행률 복원으로 펼침면의 두 번째
-  // 항목을 직접 가리켜도 그 항목만 단독 렌더링하지 않고 올바른 펼침면 시작점으로
-  // 되돌린다. 표지 단독이면 0, (1,2), (3,4)… 순서가 된다.
+  // Pair only portrait images. A wide illustration starts its own spread and
+  // resets the pairing run, including direct seek and backwards navigation.
   if (isEpub
       && scrollMode === 'page'
       && (localStorage.getItem('comic_page_step') || '1') === '2') {
-    const coverAlone = getSpreadShiftOffset() === 1;
-    const spreadStartIdx = currentChunkIdx <= 0
-      ? 0
-      : (coverAlone
-        ? 1 + Math.floor((currentChunkIdx - 1) / 2) * 2
-        : Math.floor(currentChunkIdx / 2) * 2);
     const currentHtml = txtChunks[currentChunkIdx];
-    if (spreadStartIdx < currentChunkIdx && isEpubImageOnlyHtml(currentHtml)) {
-      const startHtml = txtChunks[spreadStartIdx];
-      if (startHtml === null || startHtml === 'LOADING_PENDING') {
-        if (!epubChapterFetchInFlight.has(spreadStartIdx)) {
-          epubChapterFetchInFlight.add(spreadStartIdx);
-          requestEpubChapterContent(spreadStartIdx, { force: true, updateDom: false })
-            .then(data => {
-              if (typeof data === 'string') txtChunks[spreadStartIdx] = data;
-              if (isEpubImageOnlyHtml(txtChunks[spreadStartIdx])) {
-                currentChunkIdx = spreadStartIdx;
-              }
-              renderCurrentChunk(initMode, onSettled);
-            })
-            .finally(() => epubChapterFetchInFlight.delete(spreadStartIdx));
-        }
+    const previousIdx = currentChunkIdx - 1;
+    if (['portrait', 'unknown'].includes(getEpubImageLayout(currentHtml))) {
+      if (previousIdx >= 0 && (txtChunks[previousIdx] === null || txtChunks[previousIdx] === 'LOADING_PENDING')) {
+        const fetchKey = `${renderSession}:${previousIdx}`;
+        requestEpubChapterForRender(previousIdx, fetchKey).then(data => {
+          if (!isCurrentSession()) return;
+          if (typeof data === 'string') txtChunks[previousIdx] = data;
+          if (!isCurrentRender()) return;
+          renderCurrentChunk(initMode, onSettled);
+        });
         return;
       }
-      if (isEpubImageOnlyHtml(startHtml)) {
-        currentChunkIdx = spreadStartIdx;
-      }
+      currentChunkIdx = getCurrentEpubImageSpread().start;
     }
   }
 
@@ -1202,20 +1332,19 @@ function renderCurrentChunk(initMode = false, onSettled) {
   const wantsImagePair = isEpub
     && scrollMode === 'page'
     && (localStorage.getItem('comic_page_step') || '1') === '2'
-    && !(getSpreadShiftOffset() === 1 && currentChunkIdx === 0)
-    && isEpubImageOnlyHtml(txtChunks[currentChunkIdx]);
+    && isEpubImageOnlyHtml(txtChunks[currentChunkIdx])
+    && ['portrait', 'unknown'].includes(getEpubImageLayout(txtChunks[currentChunkIdx]));
   const pairNextIdx = currentChunkIdx + 1;
+  const pairFetchKey = `${renderSession}:${pairNextIdx}`;
   if (wantsImagePair
       && pairNextIdx < txtChunks.length
-      && (txtChunks[pairNextIdx] === null || txtChunks[pairNextIdx] === 'LOADING_PENDING')
-      && !epubChapterFetchInFlight.has(pairNextIdx)) {
-    epubChapterFetchInFlight.add(pairNextIdx);
-    requestEpubChapterContent(pairNextIdx, { force: true, updateDom: false })
+      && (txtChunks[pairNextIdx] === null || txtChunks[pairNextIdx] === 'LOADING_PENDING')) {
+    requestEpubChapterForRender(pairNextIdx, pairFetchKey)
       .then(data => {
+        if (!isCurrentSession()) return;
         if (typeof data === 'string') txtChunks[pairNextIdx] = data;
         if (renderGeneration === txtRenderGeneration && currentChunkIdx === pairNextIdx - 1) renderCurrentChunk(initMode, onSettled);
-      })
-      .finally(() => epubChapterFetchInFlight.delete(pairNextIdx));
+      });
   }
 
   if (isEpub && (txtChunks[currentChunkIdx] === null || txtChunks[currentChunkIdx] === 'LOADING_PENDING')) {
@@ -1226,24 +1355,29 @@ function renderCurrentChunk(initMode = false, onSettled) {
     showViewerLoading(i18n.t("viewer.loading_txt_title"), i18n.t("viewer.loading_txt_sub"));
 
     const awaitChapter = (retriesLeft, isFirstAttempt) => {
+      if (!isCurrentRender()) return;
       requestEpubChapterContent(requestedIdx, { force: isFirstAttempt, updateDom: false })
         .then(data => {
+          if (!isCurrentSession()) return;
           if (data && typeof data === 'string') {
             txtChunks[requestedIdx] = data;
-          } else if (retriesLeft > 0) {
+          } else if (retriesLeft > 0 && isCurrentRender()) {
             // null 응답은 같은 챕터를 이미 다른 호출이 fetch 중이라는 뜻(in-flight 중복 방지).
             // 빈 내용으로 성급하게 덮어쓰지 말고, 그 fetch가 채워줄 때까지 짧게 재확인한다.
             setTimeout(() => awaitChapter(retriesLeft - 1, false), 200);
             return;
           } else {
+            if (!isCurrentRender()) return;
             txtChunks[requestedIdx] = '<p>내용이 없습니다.</p>';
           }
+          if (!isCurrentRender()) return;
           hideViewerLoading();
           if (renderGeneration === txtRenderGeneration && currentChunkIdx === requestedIdx) {
             renderCurrentChunk(initMode, onSettled);
           }
         })
         .catch(err => {
+          if (!isCurrentRender()) return;
           hideViewerLoading();
           showViewerError(i18n.t('viewer.error_txt_load'));
           if (renderGeneration === txtRenderGeneration) onSettled?.();
@@ -1269,7 +1403,8 @@ function renderCurrentChunk(initMode = false, onSettled) {
     formatTxtToHtml,
     emptyText: i18n.t('viewer.txt_empty'),
     pageStep: parseInt(localStorage.getItem('comic_page_step') || '1', 10),
-    coverAlone: getSpreadShiftOffset() === 1
+    coverAlone: false,
+    imageSpread: isEpub ? getCurrentEpubImageSpread() : null,
   });
   if (!rendered) return;
 
@@ -1284,7 +1419,8 @@ function renderCurrentChunk(initMode = false, onSettled) {
   if (pendingImages.length) {
     let settled = false;
     let remaining = pendingImages.length;
-    const recomputeWhenReady = () => {
+    const recomputeWhenReady = (event) => {
+      if (event?.target) rememberEpubImageSize(event.target);
       if (settled || renderGeneration !== txtRenderGeneration) return;
       remaining -= 1;
       if (remaining <= 0) {
@@ -1292,6 +1428,7 @@ function renderCurrentChunk(initMode = false, onSettled) {
         applyTxtTwoPageTrailingSpacer(scrollWrapper, contentArea);
         updateTxtSeekBar();
         if (typeof onSettled === 'function') onSettled();
+        document.dispatchEvent(new CustomEvent('epub-image-dimensions-ready'));
       }
     };
     pendingImages.forEach(img => {
@@ -1306,6 +1443,7 @@ function renderCurrentChunk(initMode = false, onSettled) {
         applyTxtTwoPageTrailingSpacer(scrollWrapper, contentArea);
         updateTxtSeekBar();
         if (typeof onSettled === 'function') onSettled();
+        document.dispatchEvent(new CustomEvent('epub-image-dimensions-ready'));
       }
     }, 3000);
   } else if (typeof onSettled === 'function') {
@@ -1323,6 +1461,37 @@ function renderCurrentChunk(initMode = false, onSettled) {
   syncActiveEpubToc();
   saveProgress(state.activeBookId, currentChunkIdx, txtChunks.length);
 }
+
+document.addEventListener('epub-image-dimensions-ready', () => {
+  if (state.currentViewerFormat !== 'epub' || (localStorage.getItem('viewer_scroll_mode') || 'page') !== 'page') return;
+  const session = txtSessionGeneration;
+  queueMicrotask(() => {
+    if (session !== txtSessionGeneration || state.currentViewerFormat !== 'epub' || txtPageSnapInProgress) return;
+    const area = document.getElementById('txt-content-area');
+    if (!area?.querySelector('.epub-image-only-chunk') || !isEpubImageOnlyHtml(txtChunks[currentChunkIdx])) return;
+    const step = localStorage.getItem('comic_page_step') === '2' ? 2 : 1;
+    if (area.classList.contains('epub-image-sequence')) {
+      const sheets = getEpubImageSheets(txtChunks[currentChunkIdx], step);
+      if (epubImageSheetSignature(sheets) !== area.dataset.imageSheetSignature) {
+        const wrapper = document.getElementById('txt-scroll-wrapper');
+        const first = getTxtPhysicalPageInfo(wrapper).first;
+        renderCurrentChunk(false, () => {
+          setTxtPageScrollLeft(wrapper, getTxtScrollForPhysicalPage(wrapper, first));
+          updateTxtSeekBar();
+        });
+      }
+      return;
+    }
+    if (step !== 2) {
+      const wide = getEpubImageLayout(txtChunks[currentChunkIdx]) === 'wide';
+      if (wide !== area.classList.contains('epub-single-landscape')) renderCurrentChunk(false);
+      return;
+    }
+    const layout = getCurrentEpubImageSpread();
+    if (layout.start !== currentChunkIdx || String(layout.span) !== area.dataset.renderedChunkSpan
+        || (layout.span === 1) !== area.classList.contains('epub-image-wide')) renderCurrentChunk(false);
+  });
+});
 
 function applyDynamicParagraphStyles() {
   const contentArea = document.getElementById('txt-content-area');
@@ -1489,7 +1658,8 @@ export function restoreTxtAnchorInfo(anchorInfo) {
 }
 
 export function saveDetailPosition() {
-  if (!textResumeReady) return;
+  if (!textResumeReady || txtRelayoutInProgress) return;
+  rememberStableTxtPageAnchor();
   const scrollWrapper = document.getElementById('txt-scroll-wrapper');
   if (scrollWrapper && state.activeBookId) {
     const pos = {
@@ -1606,13 +1776,7 @@ export function prevTxtPage() {
           || (localStorage.getItem('comic_page_step') || '1') !== '2') {
         return Math.max(0, index - 1);
       }
-      const pairStart = index - 2;
-      if (pairStart >= 0
-          && isEpubImageOnlyHtml(txtChunks[pairStart])
-          && isEpubImageOnlyHtml(txtChunks[pairStart + 1])) {
-        return pairStart;
-      }
-      return Math.max(0, index - 1);
+      return getCurrentEpubImageSpread(Math.max(0, index - 1)).start;
     },
     renderCurrentChunk,
     saveDetailPosition,
@@ -1682,6 +1846,7 @@ export function moveTxtPageByOne(direction) {
   const imageSpread = state.currentViewerFormat === 'epub'
     && scrollMode === 'page'
     && twoPage
+    && getEpubImageLayout(txtChunks[currentChunkIdx]) !== 'sequence'
     && isEpubImageOnlyHtml(txtChunks[currentChunkIdx]);
   if (!imageSpread) return direction === 'prev' ? prevTxtPage() : nextTxtPage();
 
@@ -1692,6 +1857,7 @@ export function moveTxtPageByOne(direction) {
     return;
   }
   setSpreadShiftOffset(target % 2 === 1 ? 1 : 0);
+  epubImagePairAnchor = { index: target, shift: getSpreadShiftOffset() };
   currentChunkIdx = target;
   renderCurrentChunk(false);
   saveDetailPosition();
@@ -1771,6 +1937,7 @@ export function updateTxtSeekBar() {
     if (pageInfo) pageInfo.textContent = `${percent}% · 구간 ${currentChunkIdx + 1}/${txtChunks.length}`;
     slider.style.setProperty('--seek-progress', `${percent}%`);
     slider.dispatchEvent(new CustomEvent('viewer-position-sync', { bubbles: true }));
+    rememberStableTxtPageAnchor();
     return;
   }
 
@@ -1846,6 +2013,7 @@ export function updateTxtSeekBar() {
   const ratio = (Number(slider.value) - 1) / Math.max(1, Number(slider.max) - 1);
   slider.style.setProperty('--seek-progress', `${Math.max(0, Math.min(100, ratio * 100))}%`);
   slider.dispatchEvent(new CustomEvent('viewer-position-sync', { bubbles: true }));
+  rememberStableTxtPageAnchor();
 }
 
 export function txtSliderInput(slider, val) {
@@ -1876,8 +2044,7 @@ export function txtSliderChange(slider, val) {
       currentChunkIdx = chapterIdx;
       renderCurrentChunk(false, () => {
         const wrapper = document.getElementById('txt-scroll-wrapper');
-        const step = localStorage.getItem('comic_page_step') === '2' ? 2 : 1;
-        if (wrapper) setTxtPageScrollLeft(wrapper, Math.floor((localPage - 1) / step) * getTxtPageAdvanceWidth(wrapper));
+        if (wrapper) setTxtPageScrollLeft(wrapper, getTxtScrollForPhysicalPage(wrapper, localPage));
         updateTxtSeekBar();
         saveDetailPosition();
       });
@@ -1911,12 +2078,14 @@ export const TxtViewer = {
   async init(bookId, initialPageIdx = 0) {
     return initTxtViewer(bookId, initialPageIdx);
   },
-  prepareForClose() {
+  prepareForClose(options = {}) {
     persistTxtProgressSnapshot();
-    if (textResumeReady) reportReadNow();
+    if (textResumeReady) return reportReadNow(options);
   },
   destroy() {
     txtSessionGeneration += 1;
+    epubImagePairAnchor = null;
+    resetTxtLayoutAnchor();
     txtRuntimeState.reset();
     clearTimeout(txtPageSnapTimeout);
     txtPageSnapInProgress = false;

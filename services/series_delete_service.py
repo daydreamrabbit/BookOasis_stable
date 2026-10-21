@@ -35,6 +35,9 @@ class SeriesDeleteService:
             raise RuntimeError('다른 데이터베이스 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요.')
         try:
             result = SeriesDeleteRepository.delete_series_batch(db_type, normalized)
+            from services.problem_service import ProblemService
+            for library_id in {item['result']['library_id'] for item in result['results'] if item['success']}:
+                ProblemService.on_books_deleted(db_type, library_id=library_id)
             deleted, warnings = cls._delete_generated_media(result.pop('unreferenced_media', []))
         finally:
             redis_release_lock(lock_key, token)
@@ -115,6 +118,9 @@ class SeriesDeleteService:
 
         if not result:
             return None
+
+        from services.problem_service import ProblemService
+        ProblemService.on_books_deleted(db_type, library_id=result['library_id'])
 
         deleted_media, warnings = cls._delete_generated_media(result.get('unreferenced_media'))
         SeriesService.invalidate_all_books_cache(db_type=db_type)

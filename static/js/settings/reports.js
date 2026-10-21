@@ -175,7 +175,7 @@ export async function loadReportList() {
   if (!libraryId) return;
   
   try {
-    const res = await api.fetchScanReports(libraryId);
+    const res = await api.fetchScanReports(libraryId, state.currentLibraryType || 'general');
     if (res.success && res.reports) {
       if (res.reports.length === 0) {
         fileSelect.innerHTML = '<option value="">-- 리포트 없음 --</option>';

@@ -35,12 +35,17 @@ def detect_and_handle_book_movement(cursor, db_books, found_file_paths, db_meta_
         del_basename_map = {}
         for dp in deleted_paths:
             basename = os.path.basename(dp)
-            del_basename_map[basename] = (dp, norm_db_books[dp])
+            del_basename_map.setdefault(basename, []).append((dp, norm_db_books[dp]))
+        new_basename_counts = {}
+        for np in new_paths:
+            basename = os.path.basename(np)
+            new_basename_counts[basename] = new_basename_counts.get(basename, 0) + 1
 
         for np in list(new_paths):
             basename = os.path.basename(np)
-            if basename in del_basename_map:
-                old_path, book_id = del_basename_map[basename]
+            candidates = del_basename_map.get(basename, [])
+            if len(candidates) == 1 and new_basename_counts[basename] == 1:
+                old_path, book_id = candidates[0]
                 # DB 저장 시에도 정규화된(슬래시 형태의) 경로를 사용하여 OS 이식성 보장
                 cursor.execute(f"UPDATE books SET file_path = {ph} WHERE id = {ph}", (np, book_id))
                 print(f"[Scanner-Move] 🚚 Book movement detection complete: '{old_path}' -> '{np}' (Existing ID {book_id} and reading history maintained)")
@@ -58,7 +63,64 @@ def detect_and_handle_book_movement(cursor, db_books, found_file_paths, db_meta_
                 new_paths.remove(np)
                 del_basename_map.pop(basename)
 
+    if deleted_paths and new_paths:
+        _match_renamed_files(cursor, ph, norm_db_books, deleted_paths, new_paths, db_books, db_meta_full, db_offsets_cached)
+
     return deleted_paths | deleted_imgdir_paths
+
+
+def _match_renamed_files(cursor, ph, norm_db_books, deleted_paths, new_paths, db_books, db_meta_full, db_offsets_cached):
+    """파일 이름이 바뀐 경우(basename이 달라 위에서 못 찾음): 사라진 도서와 새 파일의 크기+수정시각(초)이
+    서로 하나씩만 맞으면 같은 파일로 보고 경로를 고친다(id·읽기 기록 유지). 이름 변경은 로컬·GDrive 모두
+    수정시각을 유지한다. 제목이 예전 파일 이름에서 온 것이면(잠기지 않았을 때) 새 파일 이름으로 바꾼다."""
+    ids = [norm_db_books[p] for p in deleted_paths]
+    rows = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        cursor.execute(f"SELECT id, title, file_size, file_mtime, COALESCE(metadata_locked, 0) AS metadata_locked FROM books WHERE id IN ({', '.join([ph] * len(chunk))})", chunk)
+        for r in cursor.fetchall():
+            rows[r['id'] if isinstance(r, dict) or hasattr(r, 'keys') else r[0]] = dict(r) if hasattr(r, 'keys') else {
+                'id': r[0], 'title': r[1], 'file_size': r[2], 'file_mtime': r[3], 'metadata_locked': r[4]}
+
+    def key(size, mtime):
+        return (int(size or 0), int(float(mtime or 0)))
+
+    gone = {}
+    for dp in deleted_paths:
+        row = rows.get(norm_db_books[dp])
+        if row:
+            gone.setdefault(key(row['file_size'], row['file_mtime']), []).append(dp)
+    fresh = {}
+    for np in new_paths:
+        try:
+            st = os.stat(np)
+        except OSError:
+            continue
+        fresh.setdefault(key(st.st_size, st.st_mtime), []).append(np)
+
+    for k, olds in gone.items():
+        news = fresh.get(k) or []
+        if k[0] <= 0 or k[1] <= 0 or len(olds) != 1 or len(news) != 1:
+            continue  # 없거나 애매하면 기존처럼 휴지통 + 새 도서
+        old_path, np = olds[0], news[0]
+        book_id = norm_db_books[old_path]
+        row = rows[book_id]
+        old_stem = os.path.splitext(os.path.basename(old_path))[0]
+        if not row['metadata_locked'] and (row['title'] or '') == old_stem:
+            cursor.execute(f"UPDATE books SET file_path = {ph}, title = {ph} WHERE id = {ph}",
+                           (np, os.path.splitext(os.path.basename(np))[0], book_id))
+        else:
+            cursor.execute(f"UPDATE books SET file_path = {ph} WHERE id = {ph}", (np, book_id))
+        print(f"[Scanner-Move] 🚚 Book rename detected by size+mtime: '{old_path}' -> '{np}' (Existing ID {book_id} and reading history maintained)")
+        db_books[np] = book_id
+        if old_path in db_meta_full:
+            db_meta_full.add(np)
+            db_meta_full.remove(old_path)
+        if old_path in db_offsets_cached:
+            db_offsets_cached.add(np)
+            db_offsets_cached.remove(old_path)
+        deleted_paths.remove(old_path)
+        new_paths.remove(np)
 
 def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_file_paths, allow_missing=True):
     """Transaction-safely soft delete books no longer found, and restore previously soft deleted books if found again"""
@@ -94,7 +156,9 @@ def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_fi
             book_id = norm_db_books[norm_dp]
             cursor.execute(f"""
                 UPDATE books 
-                SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP 
+                SET deleted_at = CASE WHEN COALESCE(is_deleted, 0) = 1 AND deleted_at IS NOT NULL
+                                      THEN deleted_at ELSE CURRENT_TIMESTAMP END,
+                    is_deleted = 1
                 WHERE id = {ph} AND file_path = {ph}
             """, (book_id, dp))
             print(f"[Scanner] File disappearance detected, set to trash: {dp}")
@@ -103,11 +167,24 @@ def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_fi
     try:
         cutoff = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
         cursor.execute(f"""
-            SELECT id, cover_image FROM books
+            SELECT id, cover_image, file_path FROM books
             WHERE COALESCE(is_deleted, 0) = 1
               AND deleted_at <= {ph}
         """, (cutoff,))
         old_deleted_rows = cursor.fetchall()
+        # A partial/category scan only owns its original identity + path pairs.
+        old_deleted_rows = [r for r in old_deleted_rows
+                            if norm_db_books.get(_normalize_path(r['file_path'])) == r['id']]
+        reappeared = []
+        for row in old_deleted_rows:
+            path = row['file_path']
+            if path and not path.startswith(('gdrive:', 'gdrive://')) and os.path.exists(path):
+                cursor.execute(f'''UPDATE books SET is_deleted = 0, deleted_at = NULL
+                                   WHERE id = {ph} AND file_path = {ph} AND is_deleted = 1''',
+                               (row['id'], path))
+                reappeared.append(row['id'])
+        reappeared = set(reappeared)
+        old_deleted_rows = [r for r in old_deleted_rows if r['id'] not in reappeared]
         if old_deleted_rows:
             old_ids = [r['id'] for r in old_deleted_rows]
             placeholders = ','.join([ph] * len(old_ids))

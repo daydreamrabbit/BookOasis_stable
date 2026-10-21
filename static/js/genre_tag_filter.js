@@ -43,7 +43,25 @@ export async function initFloatingFilter() {
     const tabTags = document.getElementById('tab-tags');
     const searchInput = document.getElementById('filter-search-input');
 
-    if (!modal) return;
+    if (!modal || modal.dataset.filterInitialized === '1') return;
+    modal.dataset.filterInitialized = '1';
+    document.querySelectorAll('.filter-read-option').forEach(button => {
+        button.addEventListener('click', () => setReadFilter(button.dataset.readFilter || ''));
+    });
+    syncReadFilterUI();
+    updateActiveFilterBar();
+    if (!document.getElementById('genre-tag-filter-mode')) {
+        const label = document.createElement('label');
+        label.textContent = '선택값 연결 ';
+        const mode = document.createElement('select');
+        mode.id = 'genre-tag-filter-mode';
+        mode.setAttribute('aria-label', '장르·태그 AND/OR');
+        for (const [value, text] of [['and', '모두 포함 AND'], ['or', '하나 이상 OR']]) {
+            const option = document.createElement('option'); option.value=value; option.textContent=text; mode.append(option);
+        }
+        mode.value = state.filterMode || 'and';
+        label.append(mode); searchInput?.parentElement?.append(label);
+    }
 
     // 드래그 앤 드롭 바인딩
     header.addEventListener('mousedown', dragStart);
@@ -158,6 +176,8 @@ function getCurrentLibraryIdForFilterOptions() {
 }
 
 export function refreshFilterCategory() {
+    syncReadFilterUI();
+    updateActiveFilterBar();
     genresData = [];
     tagsData = [];
     const modal = document.getElementById('floating-filter-modal');
@@ -171,46 +191,51 @@ function getScopedLibraryIdForTagFilter() {
         return 'all';
     }
 
-    return getCurrentLibraryIdForFilterOptions();
+    const categoryId = getCurrentLibraryIdForFilterOptions();
+    // Home/plugin/profile/collection views cannot render filtered book lists.
+    // Preserve real library, favorites and history scopes; otherwise search all.
+    return /^(?:[1-9]\d*|all|favorite|history)$/.test(String(categoryId))
+        ? categoryId
+        : 'all';
 }
 
-async function prepareTargetCategoryForQuickFilter() {
+export function setMetadataFilterState({ genres = [], tags = [] } = {}) {
+    selectedGenres = new Set(genres.map(normalizeMetadataToken).filter(Boolean));
+    selectedTags = new Set(tags.map(normalizeMetadataToken).filter(Boolean));
+    state.filterGenres = Array.from(selectedGenres);
+    state.filterTags = Array.from(selectedTags);
+}
+
+async function prepareTargetCategoryForQuickFilter(metadataFilters = null) {
     const targetCategoryId = getScopedLibraryIdForTagFilter();
     const shouldSwitchCategory = String(state.currentLibraryId) !== String(targetCategoryId);
     if (shouldSwitchCategory && typeof window.selectCategory === 'function') {
         // The quick-filter history entry is created by leaveDetailForQuickFilter.
         // Do not add a second category entry or Back would stop there instead of
         // returning to the detail page.
-        window.selectCategory(targetCategoryId, true);
-        await ensureBooksReady();
-        return;
+        await window.selectCategory(targetCategoryId, true, metadataFilters ? { metadataFilters } : {});
+        if (!metadataFilters) await ensureBooksReady();
+        return true;
     }
 
     // 이미 그리드 카테고리라면 로딩이 완료될 때까지 대기
-    await ensureBooksReady();
+    if (!metadataFilters) await ensureBooksReady();
+    return false;
 }
 
 async function applySingleFilter(type, value, options = {}) {
     const normalizedValue = normalizeMetadataToken(value);
     if (!normalizedValue) return;
 
-    await prepareTargetCategoryForQuickFilter();
-
     // 상세 화면의 빠른 태그/장르 검색은 하나의 검색 조건으로 동작한다.
     // 일반 필터 모달의 다중 선택 동작은 그대로 유지한다.
-    if (options.replace) {
-        selectedGenres.clear();
-        selectedTags.clear();
-    }
-    if (type === 'genre') {
-        selectedGenres.add(normalizedValue);
-        state.filterGenres = Array.from(selectedGenres);
-    } else {
-        selectedTags.add(normalizedValue);
-        state.filterTags = Array.from(selectedTags);
-    }
-
-    await ensureFilterDataLoaded();
+    const filters = {
+        genres: options.replace ? [] : Array.from(selectedGenres),
+        tags: options.replace ? [] : Array.from(selectedTags),
+    };
+    filters[type === 'genre' ? 'genres' : 'tags'].push(normalizedValue);
+    const categoryLoaded = await prepareTargetCategoryForQuickFilter(filters);
+    setMetadataFilterState(filters);
 
     // 현재 탭을 맞춰 두면 사용자가 필터 모달을 열 때 선택 상태를 직관적으로 확인 가능
     currentTab = type === 'genre' ? 'genres' : 'tags';
@@ -218,11 +243,14 @@ async function applySingleFilter(type, value, options = {}) {
     renderChips();
     renderSelectedChips();
 
-    if (typeof window.filterBooks === 'function') {
+    if (!categoryLoaded && typeof window.filterBooks === 'function') {
         window.filterBooks();
     }
     
     updateActiveFilterBar();
+    // Facet options are presentation data, not a prerequisite for results.
+    // Do not delay the filtered list behind two additional network requests.
+    await ensureFilterDataLoaded();
 }
 
 export async function selectGenreFilter(genreName) {
@@ -249,7 +277,9 @@ export async function quickFilterByTag(tagName) {
 async function leaveDetailForQuickFilter() {
     const current = history.state;
     if (current?.view === 'detail') {
-        const libraryId = current.sourceLibraryId || current.libraryId || state.currentLibraryId || 'all';
+        // The result route must describe the target list, not the Home/plugin
+        // screen from which this detail was opened. Keep that detail entry for Back.
+        const libraryId = getScopedLibraryIdForTagFilter();
         const type = current.type || state.currentLibraryType || 'general';
         const params = new URLSearchParams({ library: String(libraryId), type: String(type) });
         try {
@@ -272,6 +302,7 @@ export function toggleFilterModal() {
     
     if (modal.style.display === 'none') {
         modal.style.display = 'flex';
+        syncReadFilterUI();
         positionFilterModal();
         // 카테고리/스코프 변경 시 stale 데이터가 남지 않도록 모달 오픈마다 재조회
         loadGenresAndTagsData();
@@ -453,14 +484,15 @@ function createSelectedChipElement(type, value) {
 
 // 필터 적용
 export async function applyFilters() {
+    state.filterMode = document.getElementById('genre-tag-filter-mode')?.value || 'and';
+    if (state.advancedSearch) state.advancedSearch = {...state.advancedSearch, genre:Array.from(selectedGenres), tags:Array.from(selectedTags), genre_mode:state.filterMode, tags_mode:state.filterMode};
     // 선택된 필터 값을 state 객체에 보관하여 도서 검색과 결합할 수 있도록 전달
-    state.filterGenres = Array.from(selectedGenres);
-    state.filterTags = Array.from(selectedTags);
-
-    await prepareTargetCategoryForQuickFilter();
+    const filters = { genres: Array.from(selectedGenres), tags: Array.from(selectedTags) };
+    const categoryLoaded = await prepareTargetCategoryForQuickFilter(filters);
+    setMetadataFilterState(filters);
 
     // 필터링 적용을 위해 기존의 도서 검색/렌더링 호출
-    if (typeof window.filterBooks === 'function') {
+    if (!categoryLoaded && typeof window.filterBooks === 'function') {
         window.filterBooks();
     }
     
@@ -473,6 +505,8 @@ export async function applyFilters() {
 
 // 필터 전체 초기화
 export function resetAllFilters() {
+    storeReadFilter('');
+    syncReadFilterUI();
     clearFilterState();
     
     document.getElementById('filter-search-input').value = '';
@@ -566,7 +600,8 @@ export function updateActiveFilterBar() {
     const badgeContainer = document.getElementById('active-filter-badges');
     if (!bar || !badgeContainer) return;
 
-    const totalFilters = selectedGenres.size + selectedTags.size;
+    const readFilter = state.currentLibraryType === 'video' ? '' : (state.readFilter || '');
+    const totalFilters = selectedGenres.size + selectedTags.size + (readFilter ? 1 : 0);
     if (totalFilters === 0) {
         bar.style.display = 'none';
         badgeContainer.innerHTML = '';
@@ -574,6 +609,7 @@ export function updateActiveFilterBar() {
     }
 
     let html = '';
+    if (readFilter) html += `<span class="active-filter-item"><i class="fa-solid fa-book-open"></i> ${readFilter === 'only_read' ? '읽은 도서만' : '읽은 도서 제외'}<span class="filter-remove-btn" data-role="active-filter-remove" data-filter-type="read"><i class="fa-solid fa-xmark"></i></span></span>`;
     selectedGenres.forEach(genre => {
         html += `<span class="active-filter-item">
             <i class="fa-solid fa-list-ul"></i> ${escapeHtml(genre)}
@@ -592,6 +628,7 @@ export function updateActiveFilterBar() {
 }
 
 export function removeActiveFilterItem(type, value) {
+    if (type === 'read') return setReadFilter('');
     if (type === 'genre') {
         selectedGenres.delete(value);
     } else if (type === 'tag') {
@@ -602,3 +639,36 @@ export function removeActiveFilterItem(type, value) {
     applyFilters();
 }
 window.removeActiveFilterItem = removeActiveFilterItem;
+
+function storeReadFilter(value) {
+    state.readFilter = ['exclude_read', 'only_read'].includes(value) ? value : '';
+    try {
+        if (state.readFilter) localStorage.setItem('library_read_filter', state.readFilter);
+        else localStorage.removeItem('library_read_filter');
+    } catch {}
+}
+
+function syncReadFilterUI() {
+    const section = document.getElementById('filter-read-state');
+    if (section) section.hidden = state.currentLibraryType === 'video';
+    document.querySelectorAll('.filter-read-option').forEach(button => {
+        const active = (button.dataset.readFilter || '') === (state.readFilter || '');
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+    });
+}
+
+export async function setReadFilter(value) {
+    storeReadFilter(value);
+    syncReadFilterUI();
+    updateActiveFilterBar();
+    // Keep the quick genre/tag filter's scope and draft selections untouched.
+    const detail = document.getElementById('book-detail-view');
+    if (detail && detail.style.display !== 'none' && state.detailSeriesName) leaveDetailForQuickFilter();
+    if (['home', 'history'].includes(String(state.currentLibraryId))) {
+        await window.selectCategory?.('all', false);
+    }
+    window.filterBooks?.();
+}
+window.setReadFilter = setReadFilter;
+window.updateActiveFilterBar = updateActiveFilterBar;

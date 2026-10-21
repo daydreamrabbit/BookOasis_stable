@@ -6,6 +6,7 @@ import { getBookCoverSrc } from './cover_fallback.js';
 let previewTimer = null;
 let previewController = null;
 let previewSerial = 0;
+let previewKey = null;
 
 function panel() {
   return document.getElementById('library-search-preview');
@@ -18,6 +19,8 @@ function escapeText(value) {
 }
 
 export function closeLibrarySearchPreview() {
+  previewSerial += 1;
+  previewKey = null;
   if (previewTimer) clearTimeout(previewTimer);
   previewTimer = null;
   previewController?.abort();
@@ -69,7 +72,7 @@ async function loadPreview(query, serial) {
   const controller = new AbortController();
   previewController = controller;
   const target = panel();
-  if (target) {
+  if (target && (target.hidden || !target.innerHTML)) {
     target.innerHTML = '<div class="library-search-preview-status"><i class="fa-solid fa-circle-notch fa-spin"></i> 검색 중...</div>';
     target.hidden = false;
   }
@@ -109,6 +112,9 @@ export function handleLibrarySearchDraft(value) {
       : '<i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span class="sr-only">검색</span>';
     action.title = isCommitted ? '검색 초기화' : '검색';
   }
+  const key = JSON.stringify([state.currentLibraryType, query]);
+  if (query && key === previewKey) return;
+  previewKey = key;
   previewSerial += 1;
   const serial = previewSerial;
   if (previewTimer) clearTimeout(previewTimer);

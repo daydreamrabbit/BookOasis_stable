@@ -1,0 +1,48 @@
+<section class="home-welcome" aria-labelledby="home-welcome-title" aria-roledescription="슬라이드 배너" tabindex="0">
+    <div class="home-welcome-background" aria-hidden="true"></div>
+    <div class="home-welcome-copy">
+        <span class="home-eyebrow"><i class="fa-solid fa-book-open" aria-hidden="true"></i> <span id="home-welcome-eyebrow">MY READING SPACE</span></span>
+        <h1 id="home-welcome-title">책이 있는 곳에<br>언제나, 좋은 하루가.</h1>
+        <p id="home-welcome-subtitle">BookOasis와 함께하는 나만의 독서 공간</p>
+    </div>
+    <aside class="home-welcome-today" aria-label="오늘의 독서">
+        <strong>오늘의 독서</strong>
+        <div class="home-today-ring" role="progressbar" aria-label="오늘의 독서 목표" aria-valuemin="0" aria-valuemax="60" aria-valuenow="0">
+            <svg viewBox="0 0 104 104" aria-hidden="true"><circle cx="52" cy="52" r="44" class="home-today-ring-track"/><circle cx="52" cy="52" r="44" id="home-today-ring-progress"/></svg>
+            <div class="home-today-ring-value"><span class="home-today-time"><b id="home-today-minutes">—</b>분</span><small>/ <span id="home-today-goal">60</span>분</small></div>
+        </div>
+        <div class="home-today-message"><blockquote id="home-today-quote">“조금씩이라도 계속 읽는 것이 중요합니다.”</blockquote><small id="home-today-summary" aria-live="polite">독서 기록을 불러오는 중…</small></div>
+        <svg class="home-today-book" width="32" height="28" viewBox="0 0 32 28" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 25V5C11 1 6 1 2 3v20c4-2 9-2 14 2ZM16 5c5-4 10-4 14-2v20c-4-2-9-2-14 2"/></svg>
+    </aside>
+    <button type="button" class="home-welcome-edit" data-welcome-action="edit" aria-label="환영 배너 편집" title="문구·배경 이미지 편집"><i class="fa-solid fa-pen" aria-hidden="true"></i></button>
+    <div class="home-welcome-navigation" hidden>
+        <button type="button" data-welcome-action="previous" aria-label="이전 배경"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+        <div class="home-welcome-dots" aria-label="배경 이미지 선택"></div>
+        <button type="button" data-welcome-action="next" aria-label="다음 배경"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+    </div>
+</section>
+<dialog class="home-welcome-editor" aria-labelledby="home-welcome-editor-title">
+    <form id="home-welcome-editor-form">
+        <h2 id="home-welcome-editor-title">환영 배너 편집</h2>
+        <p>내 계정에 저장되어 다른 기기에서도 적용됩니다.</p>
+        <label>상단 문구<input name="eyebrow" maxlength="80"></label>
+        <label>환영 문구<textarea name="title" rows="3" maxlength="200"></textarea></label>
+        <label>설명<input name="subtitle" maxlength="200"></label>
+        <label>하루 독서 목표 (분)<input name="goal_minutes" type="number" min="1" max="1440" value="60" required></label>
+        <label>오늘의 독서 문구<textarea name="quote" rows="2" maxlength="160"></textarea></label>
+        <label>배경 이미지 주소 (한 줄에 하나, 최대 6개)<textarea name="images" rows="5" maxlength="3000" placeholder="/static/images/home-reading-desk-v1.webp"></textarea></label>
+        <p>https:// 이미지 주소 또는 /로 시작하는 서버 내 이미지 경로를 입력하세요. 비워 두면 기본 배경을 사용합니다.</p>
+        <p id="home-welcome-editor-error" role="alert"></p>
+        <div class="home-welcome-editor-actions">
+            <button type="button" data-welcome-action="reset">기본값</button>
+            <button type="button" data-welcome-action="cancel">취소</button>
+            <button type="submit">저장</button>
+        </div>
+    </form>
+</dialog>
+<nav class="home-shortcuts" aria-label="독서 바로가기">
+    <button type="button" class="home-shortcut" data-home-shortcut="search"><span class="home-shortcut-icon"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i></span><span><strong>책 검색</strong><small>새로운 이야기를 찾아보세요</small></span><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+    <button type="button" class="home-shortcut" data-home-shortcut="favorite"><span class="home-shortcut-icon"><i class="fa-solid fa-star" aria-hidden="true"></i></span><span><strong>즐겨찾기</strong><small>다시 만나고 싶은 책</small></span><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+    <button type="button" class="home-shortcut" data-home-shortcut="history"><span class="home-shortcut-icon"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i></span><span><strong>최근 읽은 도서</strong><small>마지막으로 펼친 이야기</small></span><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+    <button type="button" class="home-shortcut" data-home-shortcut="profile"><span class="home-shortcut-icon"><i class="fa-solid fa-chart-simple" aria-hidden="true"></i></span><span><strong>독서 통계</strong><small>차곡차곡 쌓이는 독서 기록</small></span><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+</nav>

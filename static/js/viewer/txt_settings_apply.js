@@ -124,6 +124,7 @@ export function applyTxtSettingsCore(ctx) {
       scrollWrapper.style.paddingTop = '0';
       const pageStep = localStorage.getItem('comic_page_step') || '1';
       const removeCenterGap = (localStorage.getItem('remove_2page_center_gap') === '1');
+      contentArea.classList.toggle('epub-no-center-gap', removeCenterGap);
       const pageGap = pageStep === '2' ? (removeCenterGap ? 0 : 40) : 0;
 
       scrollWrapper.style.paddingLeft = '0';
@@ -143,6 +144,10 @@ export function applyTxtSettingsCore(ctx) {
         }
       }
 
+      // Measure text columns at their normal width. Rendering may subsequently
+      // widen an image-only sheet without changing the text reading width.
+      contentArea.classList.remove('epub-single-landscape');
+      scrollWrapper.style.setProperty('--epub-illustration-max-width', `${Math.min(safeTargetWidth, 1600)}px`);
       const wrapperWidth = Math.max(1, Math.floor(scrollWrapper.clientWidth));
       const singleColWidth = pageStep === '2'
         ? Math.max(1, Math.floor((wrapperWidth - pageGap) / 2))
@@ -153,6 +158,7 @@ export function applyTxtSettingsCore(ctx) {
       // 픽셀 기반 columnWidth를 사용해 실제 페이지 컬럼 폭을 고정한다.
       contentArea.style.columnCount = 'auto';
       contentArea.style.columnGap = `${pageGap}px`;
+      contentArea.style.setProperty('--epub-image-gap', `${pageGap}px`);
       contentArea.style.columnWidth = `${singleColWidth}px`;
       contentArea.style.columnFill = 'auto';
       contentArea.style.height = '100%';

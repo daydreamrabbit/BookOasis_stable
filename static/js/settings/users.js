@@ -4,6 +4,30 @@ import { state } from '../state.js';
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 256;
 const MIN_PASSWORD_LENGTH = 4;
+const userText = (key, fallback, values = {}) => window.i18n?.t(key, values, fallback) || fallback;
+
+export function formatLastAccess(value, now = Date.now(), timeZone = state.systemSettings?.TIMEZONE || 'Asia/Seoul') {
+  if (!value) return null;
+  let raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw)) raw = raw.replace(' ', 'T') + 'Z';
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) return null;
+  let formatter;
+  const locale = window.i18n?.currentLang || 'ko';
+  try {
+    formatter = new Intl.DateTimeFormat(locale, { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  } catch (_) {
+    timeZone = 'Asia/Seoul';
+    formatter = new Intl.DateTimeFormat('ko-KR', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  }
+  const seconds = Math.max(0, Math.floor((now - date.getTime()) / 1000));
+  const minutes = Math.floor(seconds / 60), hours = Math.floor(seconds / 3600), days = Math.floor(seconds / 86400);
+  const relative = seconds < 60 ? userText('settings.user_last_access_now', '방금 전')
+    : seconds < 3600 ? userText('settings.user_last_access_minutes', `${minutes}분 전`, {count: minutes})
+    : seconds < 86400 ? userText('settings.user_last_access_hours', `${hours}시간 전`, {count: hours})
+    : userText('settings.user_last_access_days', `${days}일 전`, {count: days});
+  return { relative, absolute: formatter.format(date), iso: date.toISOString(), timeZone };
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -83,7 +107,7 @@ export async function loadUsersList() {
   const tbody = document.getElementById('settings-users-list');
   if (!tbody) return;
 
-  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:2rem; color: var(--app-text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> 사용자 목록 로드 중...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:2rem; color: var(--app-text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> 사용자 목록 로드 중...</td></tr>';
 
   try {
     const res = await fetch(`/api/admin/users?type=${state.currentLibraryType}`);
@@ -91,7 +115,7 @@ export async function loadUsersList() {
 
     if (data.success) {
       if (data.users.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:2rem; color: var(--app-text-muted);">${window.i18n ? window.i18n.t('settings.user_no_users') : '등록된 사용자가 없습니다.'}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:2rem; color: var(--app-text-muted);">${window.i18n ? window.i18n.t('settings.user_no_users') : '등록된 사용자가 없습니다.'}</td></tr>`;
         return;
       }
 
@@ -114,9 +138,10 @@ export async function loadUsersList() {
         return `
           <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
             <td style="padding:0.8rem 1rem;">${user.id}</td>
-            <td style="padding:0.8rem 1rem; font-weight:700; color: var(--app-text-primary);">${user.username}</td>
-            <td style="padding:0.8rem 1rem;"><span class="badge" style="background:color-mix(in srgb, var(--app-accent) 10%, transparent); color:var(--app-accent-hover); border:1px solid color-mix(in srgb, var(--app-accent) 20%, transparent); padding:0.2rem 0.5rem; border-radius:4px; font-size:0.75rem;">${user.role}</span></td>
+            <td style="padding:0.8rem 1rem; font-weight:700; color: var(--app-text-primary);">${escapeHtml(user.username)}</td>
+            <td style="padding:0.8rem 1rem;"><span class="badge" style="background:color-mix(in srgb, var(--app-accent) 10%, transparent); color:var(--app-accent-hover); border:1px solid color-mix(in srgb, var(--app-accent) 20%, transparent); padding:0.2rem 0.5rem; border-radius:4px; font-size:0.75rem;">${escapeHtml(user.role)}</span></td>
             <td style="padding:0.8rem 1rem; text-align:center;">${isDefault}</td>
+            <td class="user-last-access" style="padding:0.8rem 1rem; white-space:nowrap;">${renderLastAccess(user.last_seen_at)}</td>
             <td style="padding:0.8rem 1rem; text-align:right;">
               <div style="display:inline-flex; align-items:center; justify-content:flex-end; gap:0.5rem; width:100%;">
                 ${resetPwdBtn}${deleteBtn}
@@ -126,12 +151,18 @@ export async function loadUsersList() {
         `;
       }).join('');
     } else {
-      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:2rem; color:#ef4444;">${window.i18n ? window.i18n.t('settings.user_fetch_failed') : '조회 실패: '} ${data.error}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:2rem; color:#ef4444;">${window.i18n ? window.i18n.t('settings.user_fetch_failed') : '조회 실패: '} ${escapeHtml(data.error)}</td></tr>`;
     }
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:2rem; color:#ef4444;">${window.i18n ? window.i18n.t('settings.users_server_error') : '서버 요청 중 오류가 발생했습니다.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:2rem; color:#ef4444;">${window.i18n ? window.i18n.t('settings.users_server_error') : '서버 요청 중 오류가 발생했습니다.'}</td></tr>`;
     console.error(err);
   }
+}
+
+function renderLastAccess(value) {
+  const seen = formatLastAccess(value);
+  if (!seen) return `<span style="color:var(--app-text-muted);">${escapeHtml(userText('settings.user_last_access_unknown', '기록 없음'))}</span>`;
+  return `<time datetime="${seen.iso}" title="${escapeHtml(seen.absolute + ' (' + seen.timeZone + ')')}"><span>${seen.relative}</span><small style="display:block; margin-top:4px; color:var(--app-text-muted); font-size:0.75rem;">${escapeHtml(seen.absolute)}</small></time>`;
 }
 
 export function openAddUserModal() {

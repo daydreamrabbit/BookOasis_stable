@@ -359,7 +359,7 @@ class ReadingProgressRepository:
         with database.connection(db_type) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
+                SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.genre, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
                        CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, b.metadata_locked
                 FROM (
                     SELECT recent_books.*,
@@ -370,7 +370,7 @@ class ReadingProgressRepository:
                                ORDER BY recent_books.created_at DESC, recent_books.id DESC
                            ) AS series_rank
                     FROM (
-                        SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias,
+                        SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.genre,
                                b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
                                COALESCE(b.metadata_locked, 0) AS metadata_locked
                         FROM books b
@@ -425,7 +425,7 @@ class ReadingProgressRepository:
         with database.connection(db_type) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
+                SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.genre, b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
                        CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite, b.metadata_locked
                 FROM (
                     SELECT recent_books.*,
@@ -436,7 +436,7 @@ class ReadingProgressRepository:
                                ORDER BY recent_books.created_at DESC, recent_books.id DESC
                            ) AS series_rank
                     FROM (
-                        SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias,
+                        SELECT b.id, b.library_id, b.title, b.title_alias, b.series_name, b.series_alias, b.genre,
                                b.cover_image, b.cover_updated_at, b.file_format, b.total_pages, b.created_at,
                                COALESCE(b.metadata_locked, 0) AS metadata_locked
                         FROM books b
@@ -460,6 +460,7 @@ class ReadingProgressRepository:
         try:
             if db_type == 'audiobook':
                 cursor.execute("DELETE FROM audiobook_progress WHERE audiobook_id = %s AND user_id = %s", (book_id, user_id))
+                cursor.execute("DELETE FROM audiobook_track_progress WHERE audiobook_id = %s AND user_id = %s", (book_id, user_id))
             elif db_type == 'video':
                 cursor.execute("DELETE FROM video_progress WHERE video_id = %s AND user_id = %s", (book_id, user_id))
                 cursor.execute("DELETE FROM video_episode_progress WHERE video_id = %s AND user_id = %s", (book_id, user_id))
@@ -475,7 +476,7 @@ class ReadingProgressRepository:
             conn.close()
 
     @staticmethod
-    def delete_user_progress_by_series(db_type, series_name, library_id, user_id):
+    def delete_user_progress_by_series(db_type, series_name, library_id, user_id, representative_book_id=None):
         """특정 시리즈의 사용자 독서 진척도 및 일일 로그를 일괄 삭제"""
         conn = database.get_connection(db_type)
         cursor = conn.cursor()
@@ -490,6 +491,10 @@ class ReadingProgressRepository:
                     placeholders = ','.join('%s' for _ in book_ids)
                     cursor.execute(
                         f"DELETE FROM audiobook_progress WHERE user_id = %s AND audiobook_id IN ({placeholders})",
+                        (user_id, *book_ids)
+                    )
+                    cursor.execute(
+                        f"DELETE FROM audiobook_track_progress WHERE user_id = %s AND audiobook_id IN ({placeholders})",
                         (user_id, *book_ids)
                     )
             elif db_type == 'video':
@@ -510,11 +515,15 @@ class ReadingProgressRepository:
                         params
                     )
             else:
-                cursor.execute(
-                    "SELECT id FROM books WHERE series_name = %s AND library_id = %s AND COALESCE(is_deleted, 0) = 0",
-                    (series_name, library_id)
-                )
-                book_ids = [row['id'] for row in cursor.fetchall()]
+                if representative_book_id is not None:
+                    from repositories.series_progress_scope import book_ids as scoped_book_ids
+                    book_ids = scoped_book_ids(cursor, series_name, library_id, representative_book_id, mariadb=True)
+                else:
+                    cursor.execute(
+                        "SELECT id FROM books WHERE series_name = %s AND library_id = %s AND COALESCE(is_deleted, 0) = 0",
+                        (series_name, library_id)
+                    )
+                    book_ids = [row['id'] for row in cursor.fetchall()]
                 if book_ids:
                     placeholders = ','.join('%s' for _ in book_ids)
                     params = (user_id, *book_ids)

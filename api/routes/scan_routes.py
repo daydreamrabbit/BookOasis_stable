@@ -13,6 +13,19 @@ from services.batch_book_scan_targets import resolve_batch_book_scan_targets
 scan_bp = Blueprint('scan', __name__)
 LAZY_SCAN_DB_TYPES = {'general', 'adult', 'audiobook'}
 
+@scan_bp.route('/api/media/books/embedded-metadata-refresh', methods=['POST'])
+@admin_required
+def refresh_embedded_metadata_api():
+    from services import embedded_metadata_refresh as refresh
+    payload = request.get_json(silent=True)
+    try:
+        if not isinstance(payload, dict) or payload.get('action') not in ('preview', 'apply'):
+            raise ValueError('미리보기 또는 적용 동작을 지정해 주세요.')
+        result = refresh.apply(payload) if payload['action'] == 'apply' else refresh.preview(payload)
+        return jsonify(result)
+    except (ValueError, LookupError) as error:
+        return jsonify(success=False, error=str(error)), 400
+
 def get_db_path_for_scan(db_type):
     """db_type에 대응하는 스캔 대상 데이터베이스 경로/식별자 반환 (MariaDB 모드 대응)"""
     return database.get_db_path(db_type)
@@ -461,14 +474,11 @@ def trigger_library_path_scan(library_id):
         from tools.scanner.core import scan_library_path
         scan_library_path(db_path, library_id, target_path, force=force)
 
-        # 이 경로는 scanner_queue를 거치지 않는 동기 단건 스캔이라 큐 완료 시 캐시 소거가
-        # 실행되지 않으므로, 신규 등록 도서가 반영되지 않은 대시보드 캐시가 남지 않도록 직접 소거한다.
-        try:
-            from utils.redis_helper import redis_delete_pattern
-            redis_delete_pattern(f"cache:recent_added*:{db_type}:*")
-            redis_delete_pattern(f"cache:history*:{db_type}:*")
-        except Exception as cache_err:
-            print(f"[API-ScanPath WARNING] 레디스 캐시 소거 실패: {cache_err}")
+        # 이 경로는 scanner_queue를 거치지 않는 동기 단건 스캔이라 큐 완료 처리(최근 추가 캐시 소거,
+        # 시리즈 요약 테이블 재생성, 목록 캐시 무효화)가 실행되지 않는다 - 요약 테이블이 갱신되지 않으면
+        # 새 도서가 검색에는 나와도 그리드에는 다음 큐 스캔 전까지 보이지 않았다.
+        from services.scan_refresh_service import refresh_after_direct_scan
+        refresh_after_direct_scan(db_type)
 
         return jsonify({'success': True, 'message': '지정한 경로의 스캔 및 등록이 완료되었습니다.'})
     except FileNotFoundError as e:

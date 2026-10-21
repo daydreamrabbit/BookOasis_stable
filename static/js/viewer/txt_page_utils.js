@@ -33,6 +33,7 @@ export function getTxtPageGapPx(scrollWrapper) {
 
   // In page mode, multi-column styles are applied to contentArea (not wrapper).
   const contentArea = document.getElementById('txt-content-area');
+  if (contentArea?.classList.contains('epub-image-sequence')) return 0;
   const target = contentArea || scrollWrapper;
   const styles = window.getComputedStyle(target);
   const gap = parseFloat(styles.columnGap);
@@ -62,6 +63,13 @@ export function getTxtViewportPageInfo(scrollWrapper) {
 export function getTxtPhysicalPageInfo(scrollWrapper) {
   const contentArea = document.getElementById('txt-content-area');
   if (!scrollWrapper || !contentArea) return { first: 1, last: 1, total: 1 };
+  if (contentArea.classList.contains('epub-image-sequence')) {
+    const sheets = contentArea.querySelectorAll('.epub-image-sheet');
+    const index = Math.min(sheets.length - 1, getTxtViewportPageInfo(scrollWrapper).current - 1);
+    const sheet = sheets[Math.max(0, index)];
+    return { first: Number(sheet?.dataset.imageFirst) || 1, last: Number(sheet?.dataset.imageLast) || 1,
+      total: Number(contentArea.dataset.imageCount) || 1 };
+  }
   const step = localStorage.getItem('comic_page_step') === '2' ? 2 : 1;
   const styles = window.getComputedStyle(contentArea);
   const columnWidth = parseFloat(styles.columnWidth) || scrollWrapper.clientWidth || 1;
@@ -71,6 +79,17 @@ export function getTxtPhysicalPageInfo(scrollWrapper) {
   const spreadIndex = Math.max(0, Math.round(getTxtPageScrollLeft(scrollWrapper) / Math.max(1, getTxtPageAdvanceWidth(scrollWrapper))));
   const first = Math.min(total, spreadIndex * step + 1);
   return { first, last: Math.min(total, first + step - 1), total };
+}
+
+export function getTxtScrollForPhysicalPage(scrollWrapper, page) {
+  const area = document.getElementById('txt-content-area');
+  if (area?.classList.contains('epub-image-sequence')) {
+    const sheets = Array.from(area.querySelectorAll('.epub-image-sheet'));
+    const index = sheets.findIndex(sheet => Number(sheet.dataset.imageLast) >= page);
+    return Math.max(0, index) * getTxtPageAdvanceWidth(scrollWrapper);
+  }
+  const step = localStorage.getItem('comic_page_step') === '2' ? 2 : 1;
+  return Math.floor((page - 1) / step) * getTxtPageAdvanceWidth(scrollWrapper);
 }
 
 // 챕터의 마지막 페이지(컬럼 스프레드)는 폭이 꽉 차지 않는 경우가 많아,
@@ -133,6 +152,7 @@ export function applyTxtTwoPageTrailingSpacer(scrollWrapper, contentArea) {
   // 검사해 반환하면 이 인라인 폭이 스크롤 또는 1장 보기에 남아 본문이 잘린다.
   contentArea.style.marginRight = '0px';
   contentArea.style.width = '';
+  if (contentArea.classList.contains('epub-image-spread')) return;
 
   const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
   const pageStep = localStorage.getItem('comic_page_step') || '1';

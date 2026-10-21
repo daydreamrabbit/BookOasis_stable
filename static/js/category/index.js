@@ -1,11 +1,13 @@
 // index.js – 사이드바 카테고리 목록 로드 및 순서 드래그 앤 드롭 오케스트레이터
 import { state } from '../state.js';
+import { trashBadgeHtml } from './trash_badge.js';
 import * as api from '../api.js';
 import { selectCategory } from '../category_navigation.js?rev=20260920-library-content-kind-v2';
 import { updateCurrentCategoryIndicator } from '../category_indicator.js';
 import { bindSidebarContextMenu } from './context_menu.js?rev=20260922-library-kinds-v5';
 import { triggerAddLibrary, triggerAddLibraryGroup } from './crud_controller.js?rev=20260922-library-kinds-v5';
 import { runAfterMobileSidebarClose } from '../sidebar_manager.js';
+import { normalizeCoverAspectRatio, resolveCoverAspectRatio } from '../utils/cover_ratio.js';
 
 // 고정 포함 전체 15개 이상부터 "더 보기" 버튼 노출
 const SIDEBAR_MORE_THRESHOLD = 15;
@@ -25,9 +27,15 @@ export async function refreshLibraryCounts(type = state.currentLibraryType) {
   if (token !== countsRequestToken || sidebarToken !== sidebarLoadToken
       || type !== state.currentLibraryType) return false;
   const counts = new Map((data.libraries || []).map(lib => [String(lib.id), Number(lib.book_count || 0)]));
+  const trashCounts = new Map((data.libraries || []).filter(lib => lib.trash_count != null).map(lib => [String(lib.id), Number(lib.trash_count)]));
   document.querySelectorAll('[data-type="custom"][data-category-id]').forEach(item => {
     const count = counts.get(item.dataset.categoryId);
     if (count === undefined) return;
+    const trashCount = trashCounts.get(item.dataset.categoryId);
+    if (trashCount !== undefined) {
+      item.querySelector('.category-trash-badge')?.remove();
+      if (trashCount > 0) item.querySelector('.category-scan-spinner')?.insertAdjacentHTML('beforebegin', trashBadgeHtml(item.dataset.categoryId,trashCount,type,item.dataset.name));
+    }
     let badge = item.querySelector('.category-count-badge');
     if (count <= 0) { badge?.remove(); return; }
     if (!badge) {
@@ -159,7 +167,7 @@ function renderLibraryItem(lib, isPinned) {
   const hideCover = Number(lib.hide_cover || 0) ? 1 : 0;
   const hideTitle = Number(lib.hide_title || 0) ? 1 : 0;
   const useFolderCover = Number(lib.use_folder_cover || 0) ? 1 : 0;
-  const coverAspectRatio = lib.cover_aspect_ratio === '16:9' ? '16:9' : '4:3';
+  const coverAspectRatio = normalizeCoverAspectRatio(lib.cover_aspect_ratio);
   const groupId = lib.group_id == null ? '' : String(lib.group_id);
   const safeGdriveCopyRemote = escapeHtml(lib.gdrive_copy_remote || '');
   const safeGdriveViewMirrorPath = escapeHtml(lib.gdrive_view_local_mirror_path || '');
@@ -167,7 +175,8 @@ function renderLibraryItem(lib, isPinned) {
   const countBadgeHtml = bookCount > 0
     ? `<span class="category-count-badge" title="${bookCount.toLocaleString()}">${formatCompactCount(bookCount)}</span>`
     : '';
-  return `<li class="menu-item ${isActive}" data-type="custom" data-role="sidebar-category-dynamic" data-id="${lib.id}" data-category-id="${lib.id}" data-name="${safeName}" data-path="${safePath}" data-remote="${lib.is_remote || 0}" data-rclone-url="${safeRclone}" data-icon="${safeIcon}" data-color="${safeColor}" data-hide-cover="${hideCover}" data-hide-title="${hideTitle}" data-use-folder-cover="${useFolderCover}" data-content-kind="${contentKind}" data-cover-aspect-ratio="${coverAspectRatio}" data-group-id="${groupId}" data-gdrive-copy-remote="${safeGdriveCopyRemote}" data-gdrive-view-local-mirror-path="${safeGdriveViewMirrorPath}" ${draggableAttr} style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;"><span style="display: inline-flex; align-items: center; gap: 0.6rem; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"><i class="fa-solid ${safeIcon}" style="color: ${safeColor}; flex-shrink: 0;"></i><span class="sidebar-bare-label" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</span></span><div style="display: inline-flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">${countBadgeHtml}<i class="fa-solid fa-circle-notch fa-spin category-scan-spinner" style="display:none; color:var(--app-accent-hover); font-size:0.75rem;" title="스캔 진행 중"></i></div></li>`;
+  const trashHtml = trashBadgeHtml(lib.id,Number(lib.trash_count || 0),state.currentLibraryType,lib.name);
+  return `<li class="menu-item ${isActive}" data-type="custom" data-role="sidebar-category-dynamic" data-id="${lib.id}" data-category-id="${lib.id}" data-name="${safeName}" data-path="${safePath}" data-remote="${lib.is_remote || 0}" data-rclone-url="${safeRclone}" data-icon="${safeIcon}" data-color="${safeColor}" data-hide-cover="${hideCover}" data-hide-title="${hideTitle}" data-use-folder-cover="${useFolderCover}" data-content-kind="${contentKind}" data-cover-aspect-ratio="${coverAspectRatio}" data-group-id="${groupId}" data-gdrive-copy-remote="${safeGdriveCopyRemote}" data-gdrive-view-local-mirror-path="${safeGdriveViewMirrorPath}" ${draggableAttr} style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;"><span style="display: inline-flex; align-items: center; gap: 0.6rem; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"><i class="fa-solid ${safeIcon}" style="color: ${safeColor}; flex-shrink: 0;"></i><span class="sidebar-bare-label" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</span></span><div style="display: inline-flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">${countBadgeHtml}${trashHtml}<i class="fa-solid fa-circle-notch fa-spin category-scan-spinner" style="display:none; color:var(--app-accent-hover); font-size:0.75rem;" title="스캔 진행 중"></i></div></li>`;
 }
 
 function renderPluginItem(cp) {
@@ -176,6 +185,24 @@ function renderPluginItem(cp) {
   const safeTitle = escapeHtml(cp.title || cp.name);
   const safeIcon = escapeHtml(cp.icon || 'fa-puzzle-piece');
   return `<li class="menu-item ${isActive}" data-type="plugin" data-role="sidebar-category-dynamic" id="category-${catId}" data-id="${catId}" data-category-id="${catId}" data-plugin-id="${cp.id}"><i class="${safeIcon}" style="color: #38bdf8;"></i> ${safeTitle}</li>`;
+}
+
+// Keep the user's preference separate from temporary expansion for an active page.
+const HOME_SUB_COLLAPSED_STORAGE_KEY = 'sidebar_home_sub_collapsed';
+
+function isHomeSubCollapsedPreferred() {
+  try {
+    return localStorage.getItem(HOME_SUB_COLLAPSED_STORAGE_KEY) !== 'false';
+  } catch (_) {
+    return true;
+  }
+}
+
+function applyHomeSubCollapsed(sidebar, collapsed = isHomeSubCollapsedPreferred()) {
+  if (!sidebar) return;
+  const effective = collapsed && !sidebar.querySelector('.sidebar-home-sub.active');
+  sidebar.classList.toggle('home-sub-collapsed', effective);
+  sidebar.querySelector('[data-role="sidebar-home-sub-toggle"]')?.setAttribute('aria-expanded', effective ? 'false' : 'true');
 }
 
 function getGroupCollapsedStorageKey(groupId) {
@@ -192,6 +219,10 @@ export function expandGroupContainingCategory(categoryId) {
   if (!categoryId) return;
   const activeItem = document.querySelector(`#sidebar-categories [data-category-id="${categoryId}"]`);
   if (!activeItem) return;
+  if (activeItem.classList.contains('sidebar-home-sub')) {
+    applyHomeSubCollapsed(activeItem.closest('#sidebar-categories'), false);
+    return;
+  }
   const groupContainer = activeItem.closest('.sidebar-library-group');
   if (!groupContainer || !groupContainer.classList.contains('collapsed')) return;
   groupContainer.classList.remove('collapsed');
@@ -220,7 +251,9 @@ export function applySidebarShowMore(sidebar, currentLibraryId) {
     return;
   }
 
-  const items = Array.from(sidebar.querySelectorAll('li[data-role="sidebar-category-dynamic"]'));
+  // Home children have their own collapse control and must not consume the limit.
+  const items = Array.from(sidebar.querySelectorAll('li[data-role="sidebar-category-dynamic"]:not(.sidebar-home-sub)'));
+  sidebar.querySelectorAll('li.sidebar-home-sub').forEach(item => item.style.removeProperty('display'));
   const total = items.length;
 
   if (total < SIDEBAR_MORE_THRESHOLD) {
@@ -450,6 +483,20 @@ function initDynamicSidebarDelegation() {
       return;
     }
 
+    const homeSubToggle = rawTarget.closest('[data-role="sidebar-home-sub-toggle"]');
+    if (homeSubToggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      const sidebarEl = document.getElementById('sidebar-categories');
+      if (!sidebarEl) return;
+      const collapsed = !sidebarEl.classList.contains('home-sub-collapsed');
+      try { localStorage.setItem(HOME_SUB_COLLAPSED_STORAGE_KEY, String(collapsed)); } catch (_) {}
+      // An explicit click can collapse even the currently active child.
+      sidebarEl.classList.toggle('home-sub-collapsed', collapsed);
+      homeSubToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      return;
+    }
+
     const pinBtn = rawTarget.closest('[data-role="sidebar-pin-categories"]');
     if (pinBtn) {
       console.log('[Category-Delegation] 핀 고정 버튼 감지됨:', pinBtn);
@@ -471,6 +518,18 @@ function initDynamicSidebarDelegation() {
       return;
     }
 
+    const trashButton = rawTarget.closest('[data-role="category-trash"]');
+    if (trashButton) {
+      event.preventDefault(); event.stopPropagation(); closeSidebarGroupFlyout();
+      if (window.currentUser?.role !== 'admin') return;
+      const libraryName = trashButton.closest('[data-category-id]')?.dataset.name || '';
+      runAfterMobileSidebarClose(() => {
+        window.setTrashLibraryFilter?.(trashButton.dataset.dbType,trashButton.dataset.libraryId,libraryName);
+        sessionStorage.setItem('bookoasis:settings:activeTab','trash');
+        selectCategory('settings');
+      });
+      return;
+    }
     const dynamicItem = rawTarget.closest('[data-role="sidebar-category-dynamic"]');
     if (dynamicItem) {
       const catId = dynamicItem.getAttribute('data-category-id') || dynamicItem.getAttribute('data-id') || 'home';
@@ -544,6 +603,7 @@ export async function loadLibraries() {
       const tSmartRec = (window.i18n && typeof window.i18n.t === 'function') ? window.i18n.t('category.smart_recommend', '스마트 추천') : '스마트 추천';
       const tPlugins = (window.i18n && typeof window.i18n.t === 'function') ? window.i18n.t('category.plugins', '플러그인') : '플러그인';
       const tAll = (window.i18n && typeof window.i18n.t === 'function') ? window.i18n.t('category.all', '전체보기') : '전체보기';
+      const tHomeSubToggle = (window.i18n && typeof window.i18n.t === 'function') ? window.i18n.t('category.home_sub_toggle', '하위 메뉴 펼치기/접기') : '하위 메뉴 펼치기/접기';
 
       let html = `<li class="menu-item ${state.currentLibraryId === 'home' ? 'active' : ''}" data-type="system" data-role="sidebar-category-dynamic" id="category-home" data-id="home" data-category-id="home" style="display: flex; justify-content: space-between; align-items: center; box-sizing: border-box;">
         <span style="display: inline-flex; align-items: center; gap: 0.6rem;"><i class="fa-solid fa-house"></i> ${tHome}</span>
@@ -554,6 +614,7 @@ export async function loadLibraries() {
           ${addGroupBtnHtml}
           ${addBtnHtml}
           ${addGdriveCopyBtnHtml}
+          <button type="button" class="sidebar-home-sub-toggle" data-role="sidebar-home-sub-toggle" aria-expanded="true" title="${escapeHtml(tHomeSubToggle)}" aria-label="${escapeHtml(tHomeSubToggle)}"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button>
         </div>
       </li>`;
 
@@ -649,13 +710,15 @@ export async function loadLibraries() {
       if (requestToken !== sidebarLoadToken || requestType !== state.currentLibraryType) return;
 
       sidebar.innerHTML = html;
+      sidebar.querySelectorAll('li[data-type="system"][data-category-id]:not(#category-home)').forEach(item => item.classList.add('sidebar-home-sub'));
+      applyHomeSubCollapsed(sidebar);
       normalizeSidebarBareLabels(sidebar);
       applySavedMixedOrder(sidebar);
       const activeItem = Array.from(sidebar.querySelectorAll('.menu-item[data-category-id]'))
         .find((item) => String(item.getAttribute('data-category-id')) === String(state.currentLibraryId))
         || document.getElementById(`category-${state.currentLibraryId}`);
       state.currentLibraryHideCovers = !!(activeItem && activeItem.dataset && activeItem.dataset.type === 'custom' && activeItem.dataset.hideCover === '1');
-      state.currentLibraryAspectRatio = (activeItem && activeItem.dataset && activeItem.dataset.coverAspectRatio === '16:9') ? '16:9' : '4:3';
+      state.currentLibraryAspectRatio = resolveCoverAspectRatio(activeItem?.dataset, state.currentLibraryType);
       state.currentLibraryHideTitles = !!(activeItem && activeItem.dataset && activeItem.dataset.type === 'custom' && activeItem.dataset.hideTitle === '1');
       const detail = document.getElementById('book-detail-view');
       const showingDetail = detail && detail.getClientRects().length > 0 && state.detailLibraryId;

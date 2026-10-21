@@ -2,6 +2,47 @@
 import { state } from '../state.js';
 import * as api from '../api.js';
 
+export async function markSeriesUnread(event, seriesName, libraryId) {
+  event?.stopPropagation();
+  const button = event?.target?.closest?.('button');
+  if (button?.disabled) return;
+  const type = state.currentLibraryType;
+  if (type === 'video') return;
+  const audiobook = type === 'audiobook';
+  const ids = state.detailBookIds?.length ? state.detailBookIds : collectDetailBookIds();
+  const id = audiobook ? collectDetailAudiobookContext().audiobookId
+    : (state.detailRepresentativeBookId || ids[0]);
+  if (!id || (!audiobook && (!seriesName || !libraryId))) return;
+  if (!window.confirm(audiobook ? '이 작품의 청취 기록과 트랙 완료 표시를 모두 초기화할까요?' : '이 시리즈 전체를 미독 상태로 되돌릴까요?')) return;
+  const representative = state.detailRepresentativeBookId;
+  const currentView = document.getElementById('book-detail-view');
+  const currentRoot = currentView?.firstElementChild;
+  if (button) button.disabled = true;
+  try {
+    const result = await api.markBookAsUnread(type, id, audiobook ? { scope: 'book' }
+      : { scope: 'series', seriesName, libraryId });
+    if (!result?.success) throw new Error(result?.error || '미독 처리에 실패했습니다.');
+    for (const bookId of audiobook ? [] : new Set([id, ...ids])) {
+      try {
+        localStorage.removeItem(`viewer_last_pos_${bookId}`);
+      } catch {}
+    }
+    document.dispatchEvent(new CustomEvent('book-reading-reset', { detail: {
+      type, id, scope: audiobook ? 'book' : 'series', seriesName, libraryId
+    } }));
+    window.dispatchEvent(new CustomEvent('bookoasis:reading-reset', { detail: { type } }));
+    window.showToast?.(audiobook ? '청취 기록을 초기화했습니다.' : `${result.affected_count || 0}권을 미독 처리했습니다.`, 'success');
+    if (currentView?.firstElementChild === currentRoot && state.detailRepresentativeBookId === representative
+        && state.currentLibraryType === type && !currentView.querySelector('.ds')) {
+      await window.openBookDetail?.(null, seriesName, libraryId, representative, state.detailDisplayTitle);
+    }
+  } catch (error) {
+    window.showToast?.(error.message || '미독 처리에 실패했습니다.', 'error');
+  } finally {
+    if (button?.isConnected) button.disabled = false;
+  }
+}
+
 // 전역 작업 차단 로딩 오버레이 헬퍼 (대량 삭제/긴 비동기 작업용)
 export function showGlobalLoadingSpinner(message = '처리 중입니다. 잠시만 기다려 주세요...') {
   let overlay = document.getElementById('global-loading-overlay');

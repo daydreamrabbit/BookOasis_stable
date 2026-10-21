@@ -13,14 +13,15 @@
             </button>
         </div>
         
-        <div class="settings-table-wrapper" style="background: rgba(var(--app-panel-rgb), 0.25); border: 1px solid rgba(var(--app-panel-border-rgb), 0.05); border-radius: 8px; overflow: hidden; backdrop-filter: blur(10px);">
-            <table class="settings-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem;">
+        <div class="settings-table-wrapper" style="background: rgba(var(--app-panel-rgb), 0.25); border: 1px solid rgba(var(--app-panel-border-rgb), 0.05); border-radius: 8px; overflow-x: auto; backdrop-filter: blur(10px);">
+            <table class="settings-table" style="width: 100%; min-width: 880px; border-collapse: collapse; text-align: left; font-size: 0.88rem;">
                 <thead>
                     <tr style="background: rgba(var(--app-panel-rgb), 0.4); border-bottom: 1px solid rgba(var(--app-panel-border-rgb), 0.08); color: var(--app-text-muted);">
                         <th style="padding: 0.8rem 1rem; width: 60px;" data-i18n="settings.user_col_id">ID</th>
                         <th style="padding: 0.8rem 1rem;" data-i18n="settings.user_col_username">사용자 ID</th>
                         <th style="padding: 0.8rem 1rem; width: 120px;" data-i18n="settings.user_col_role">역할(Role)</th>
                         <th style="padding: 0.8rem 1rem; width: 160px; text-align: center;" data-i18n="settings.user_col_is_default_pwd">기본 비번 여부</th>
+                        <th style="padding: 0.8rem 1rem; width: 180px;" data-i18n="settings.user_col_last_access">마지막 접속</th>
                         <th style="padding: 0.8rem 1rem; width: 220px; text-align: right;" data-i18n="settings.user_col_manage">관리</th>
                     </tr>
                 </thead>

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from flask import Blueprint, request, jsonify, session
+import math
 
 from services.metadata_service import MetadataService
 from services.plugin_service import PluginService
@@ -475,11 +476,14 @@ def submit_rating_widget_api():
         return jsonify({'success': False, 'error': _t('api.err_no_adult_access')}), 403
 
     try:
-        rating = round(float(payload.get('rating')) * 2) / 2
+        rating = float(payload.get('rating'))
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': 'invalid rating'}), 400
-    if rating < 0.5 or rating > 5:
-        return jsonify({'success': False, 'error': 'rating must be between 0.5 and 5'}), 400
+    if not math.isfinite(rating) or rating < 0 or rating > 5:
+        return jsonify({'success': False, 'error': 'rating must be between 0 and 5'}), 400
+    rating = round(rating * 2) / 2
+    if 0 < float(payload.get('rating')) < 0.5:
+        return jsonify({'success': False, 'error': '별점은 0.5점 이상, 취소는 0점으로 요청해 주세요.'}), 400
 
     context = {
         'series_name': payload.get('series_name', ''),
@@ -494,7 +498,24 @@ def submit_rating_widget_api():
         if not provider:
             return jsonify({'success': False, 'error': 'no active rating widget'}), 404
 
-        result = provider.submit_rating(db_type, context, rating)
+        if rating == 0:
+            cancel = getattr(provider, 'cancel_rating', None)
+            if not callable(cancel):
+                return jsonify({'success': False, 'error': '이 별점 플러그인은 평점 취소를 지원하지 않습니다.'}), 400
+            result = cancel(db_type, context)
+        else:
+            result = provider.submit_rating(db_type, context, rating)
+        if result.get('success'):
+            try:
+                invalidate = getattr(provider, 'invalidate_sort_ratings', None)
+                if callable(invalidate):
+                    invalidate(db_type)
+                from services.series_service import SeriesService
+                SeriesService.invalidate_all_books_cache(db_type)
+            except Exception:
+                # The vote is already committed; do not report a failed save.
+                import logging
+                logging.getLogger(__name__).warning('별점 저장 후 목록 캐시 갱신 실패', exc_info=True)
         status_code = 200 if result.get('success') else 400
         return jsonify(result), status_code
     except Exception as e:

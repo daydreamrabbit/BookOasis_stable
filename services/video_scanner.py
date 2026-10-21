@@ -372,6 +372,8 @@ def scan_and_save_video_folder(folder_path, library_id=None):
 
         scan_result = VideoRepository.save_video_scan(normalized_folder_path, library_id, meta, episodes)
         video_id = scan_result['video_id']
+        from services.audiobook_scanner import _touch_if_poster_replaced
+        _touch_if_poster_replaced(VideoRepository, video_id, meta.get('poster'), 'video', library_id)
 
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         print(
@@ -411,8 +413,10 @@ def scan_video_library(library_path, library_id=None, force=False, cancel_event=
     library_started_at = time.perf_counter()
 
     from repositories.video_repository import VideoRepository
+    from services.audiobook_scanner import _audio_signature
     raw_paths = VideoRepository.get_folder_paths(library_id)
     existing_folder_paths = {os.path.normpath(str(p)) for p in raw_paths if p}
+    episode_signatures = VideoRepository.get_episode_signatures(library_id) if skip_existing else {}
 
     def cancellation_requested():
         if cancel_event is None:
@@ -442,7 +446,8 @@ def scan_video_library(library_path, library_id=None, force=False, cancel_event=
         has_video_files = any(f.lower().endswith(VIDEO_EXTENSIONS) for f in files)
 
         if has_video_files:
-            if skip_existing and os.path.normpath(root) in existing_folder_paths:
+            if (skip_existing and os.path.normpath(root) in existing_folder_paths
+                    and set(_audio_signature(root, VIDEO_EXTENSIONS)) == episode_signatures.get(os.path.normpath(root), set())):
                 skipped += 1
                 dirs.clear()
                 continue

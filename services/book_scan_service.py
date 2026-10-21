@@ -8,7 +8,6 @@ from tools.scanner import (
     merge_local_metadata,
     extract_cover_from_b64,
     get_series_cover_fallback,
-    collect_zip_offsets_data,
     parse_comicinfo_from_cbz,
 )
 from tools.scanner.metadata import merge_metadata_links, parse_embedded_metadata, merge_embedded_metadata
@@ -19,7 +18,7 @@ _DOCUMENT_SCAN_PER_BOOK_TIMEOUT_SECONDS = 180
 _DOCUMENT_SCAN_MAX_TIMEOUT_SECONDS = 3600
 
 _COMICINFO_SINGLE_BOOK_FIELDS = (
-    'title', 'author', 'translator', 'localized_series', 'cover_artist', 'teams', 'locations',
+    'title', 'author', 'translator', 'isbn', 'uci', 'localized_series', 'cover_artist', 'teams', 'locations',
     'characters', 'publisher', 'summary', 'release_date', 'genre', 'tags',
     'books_lv', 'link', 'document_series_name', 'document_volume_index',
     'document_number', 'document_volume_count',
@@ -177,9 +176,28 @@ class BookScanService:
         return successful_count == len(ids), message, outcomes
 
     @staticmethod
+    def scan_single_audiobook(audiobook_id):
+        """오디오북 한 권(폴더)을 즉시 재스캔한다. 일반 스캔은 음원 구성이 그대로인 폴더를 건너뛰므로
+        metadata.json·표지만 바뀐 책은 이 경로로 갱신한다."""
+        from repositories.audiobook_repository import AudiobookRepository
+        from services.audiobook_scanner import scan_and_save_audiobook_folder
+        audiobook = AudiobookRepository.get_audiobook_by_id(audiobook_id)
+        if not audiobook:
+            return False, "존재하지 않는 오디오북입니다.", None
+        folder_path = audiobook.get('folder_path') or ''
+        if not os.path.isdir(folder_path):
+            return False, f"서버에 오디오북 폴더가 존재하지 않습니다: {folder_path}", None
+        saved_id = scan_and_save_audiobook_folder(folder_path, audiobook.get('library_id'))
+        if not saved_id:
+            return False, "오디오북 스캔에 실패했습니다. 알림센터에서 원인을 확인하세요.", None
+        return True, f"'{audiobook.get('title') or os.path.basename(folder_path)}' 오디오북 스캔 완료", None
+
+    @staticmethod
     def scan_single_book(db_type, book_id):
         """지정 도서의 메타데이터를 동기화하고, 가능한 표지와 로컬 오프셋도 갱신합니다."""
         print(f"[BookScanService] 단일 도서 스캔 요청 시작: DB={db_type}, ID={book_id}")
+        if db_type == 'audiobook':
+            return BookScanService.scan_single_audiobook(book_id)
         # 방금 폴더에 넣은 cover.jpg 등을 이번 즉시 스캔이 바로 보도록 폴더 표지 조회 캐시를 비운다.
         from tools.scanner.folder_image import clear_folder_listing_cache
         clear_folder_listing_cache()
@@ -276,11 +294,8 @@ class BookScanService:
                 
             print(f"[BookScanService] 최종 매핑된 커버 이미지명: {cover_image}")
             
-            # 4. 오프셋 재수집 (ZIP/CBZ인 경우)
+            # 4. Page maps are persisted by the reader on first open.
             offsets_data = []
-            if file_format in ('zip', 'cbz') and not is_remote_file:
-                print(f"[BookScanService] ZIP/CBZ 포맷 오프셋 재생성 진행...")
-                offsets_data = collect_zip_offsets_data(file_path)
                 
             # 5. DB 업데이트 실행
             print(f"[BookScanService] DB 업데이트 트랜잭션 쿼리 빌드")

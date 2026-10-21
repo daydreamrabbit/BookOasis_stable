@@ -328,6 +328,7 @@ export function initWheelListener() {
       if (!viewerModal || viewerModal.style.display !== 'flex') return;
 
       const isComic = document.getElementById('comic-viewer-container').style.display !== 'none';
+      if (e.ctrlKey || e.target.closest?.('.viewer-side-panel, .ridi-view-settings, #comic-overlay-menu, .viewer-controls')) return;
       const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
       const isComicScroll = isComic && scrollMode === 'scroll';
       const comicImageWrapper = document.querySelector('.comic-image-wrapper');
@@ -338,8 +339,18 @@ export function initWheelListener() {
       // 1. 연속 스크롤/폭맞춤은 브라우저의 네이티브 휠 관성에 맡긴다. 여기서
       // scrollBy(auto)로 다시 실행하면 OS/브라우저의 부드러운 스크롤 곡선이 사라져
       // 한 칸씩 끊기는 느낌이 생긴다.
-      if (isComicScroll || isComicWidth || (isTxt && scrollMode === 'scroll')) {
+      if (isComicScroll || (isTxt && scrollMode === 'scroll')) {
         return;
+      }
+
+      // Width-fit pages scroll inside the image wrapper, not the sibling
+      // hotspot. Only turn a page once there is no more image in that direction.
+      if (isComicWidth) {
+        const remaining = comicImageWrapper.scrollHeight - comicImageWrapper.clientHeight;
+        const canScroll = e.deltaY > 0
+          ? comicImageWrapper.scrollTop < remaining - 1
+          : comicImageWrapper.scrollTop > 1;
+        if (remaining > 1 && canScroll) return;
       }
 
       // 3. Page-turn mode routes wheel events to prev/next actions.
@@ -701,6 +712,15 @@ export function initViewerClickToggle() {
       const tapConfig = getTapDirection();
       const tapDirection = tapConfig.vertical ? 'vertical' : 'horizontal';
 
+      const widthWrapper = target.closest('.comic-image-wrapper.fit-width');
+      if (['zip', 'cbz', 'imgdir'].includes(String(state.currentViewerFormat || '').toLowerCase())
+          && widthWrapper && widthWrapper.scrollHeight > widthWrapper.clientHeight + 1
+          && absY >= TAP_THRESHOLD && absY >= absX) {
+        // Native vertical panning must not also trigger an up/down page swipe.
+        lastTouchEndTime = Date.now();
+        return;
+      }
+
       // 모바일 네이티브 텍스트 선택은 롱프레스 후 드래그로 확정된다. 긴 텍스트
       // 제스처를 먼저 선택기에 넘겨야 touchend가 페이지 스와이프로 소비하지 않는다.
       if (startedInSelectableText && duration >= 350) return;
@@ -859,7 +879,9 @@ export function initViewerClickToggle() {
     const scrollMode = localStorage.getItem('viewer_scroll_mode') || 'page';
     const format = String(state.currentViewerFormat || '').toLowerCase();
     const isSelectableText = format === 'epub' || format === 'txt';
-    if (scrollMode === 'page' && isSelectableText) {
+    const isWidthComic = ['zip', 'cbz', 'imgdir'].includes(format)
+      && !!e.target.closest('.comic-image-wrapper.fit-width');
+    if (scrollMode === 'page' && (isSelectableText || isWidthComic)) {
       if (mouseMoved || mouseStartedOnSelectableText || isPointOnSelectableText(e.clientX, e.clientY)) return;
       const tapConfig = getTapDirection();
       const direction = tapConfig.vertical ? 'vertical' : 'horizontal';

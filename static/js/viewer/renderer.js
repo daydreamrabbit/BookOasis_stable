@@ -6,6 +6,7 @@ import * as Settings from './reader_settings.js';
 import * as FileLoader from './fileloader.js';
 import { getTxtViewportPageInfo } from './txt_page_utils.js';
 import { getSpreadPageSlots } from './spread_layout.js';
+import { seekbarVisualRatio } from './seekbar_direction.js';
 
 export let comicCurrentPage = 0;
 export let comicTotalPages = 0;
@@ -336,8 +337,8 @@ export function setComicTotalPages(v) { comicTotalPages = v; }
 export function setIsScrollingToTarget(v) { isScrollingToTarget = v; }
 export function getIsScrollingToTarget() { return isScrollingToTarget; }
 
-export function setComicFitMode(mode) {
-  Settings.setFitMode(mode);
+export function setComicFitMode(mode, options = {}) {
+  Settings.setFitMode(mode, options);
   applyComicFitMode();
   if (String(state.currentViewerFormat || '').toLowerCase() === 'pdf') {
     window.applyPdfFitMode?.();
@@ -783,6 +784,9 @@ export function loadComicPage() {
               pairContainer.appendChild(loadedImg);
             }
           });
+          // Every newly committed paged image/spread starts at its top, even
+          // when the reused wrapper retained the previous page's scroll offset.
+          wrapper.scrollTo({ top: 0, left: 0, behavior: 'instant' });
           pairContainer.style.visibility = 'visible';
           loadTrace.log('page images committed to DOM', {
             pageIndices,
@@ -792,13 +796,13 @@ export function loadComicPage() {
           loadTrace.log('page-mode loading overlay hidden');
 
 
-          if (comicCurrentPage === 0 && expectedLoads === 1) {
+          if (comicCurrentPage === 0 && expectedLoads === 1 && !Settings.hasStoredFitMode()) {
             const firstImage = imageElements.get(pageIndices[0]);
             const aspectRatio = firstImage.naturalWidth / firstImage.naturalHeight;
             if (aspectRatio < 0.7) {
-              setComicFitMode('width');
+              setComicFitMode('width', { persist: false });
             } else {
-              setComicFitMode('height');
+              setComicFitMode('height', { persist: false });
             }
           }
         }
@@ -886,7 +890,7 @@ export function showSeekbarTooltip(slider, page) {
   const ratio = (page - min) / (max - min || 1);
   const trackWidth = slider.offsetWidth;
   const thumbHalf = 9;
-  const leftPx = thumbHalf + ratio * (trackWidth - thumbHalf * 2);
+  const leftPx = thumbHalf + seekbarVisualRatio(ratio) * (trackWidth - thumbHalf * 2);
 
   tooltip.textContent = page;
   tooltip.style.left = `${leftPx}px`;

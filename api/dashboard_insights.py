@@ -8,6 +8,47 @@ from repositories.reading_progress_repository import ReadingProgressRepository
 
 dashboard_insights_bp = Blueprint('dashboard_insights_api', __name__)
 
+@dashboard_insights_bp.route('/api/dashboard/activity', methods=['GET'])
+def get_reading_activity_api():
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'success': False, 'error': '로그인이 필요합니다.'}), 401
+    db_type = request.args.get('library_type', 'general')
+    if db_type not in ('general', 'adult', 'audiobook', 'video'):
+        return jsonify({'success': False, 'error': '지원하지 않는 라이브러리입니다.'}), 400
+    if db_type == 'adult':
+        from api.auth import check_adult_permission
+        if not check_adult_permission('adult'):
+            return jsonify({'success': False, 'error': '접근 권한이 없습니다.'}), 403
+    try:
+        from services.home_welcome_service import get_reading_activity
+        year = request.args.get('year')
+        return jsonify({'success': True, 'activity': get_reading_activity(db_type, user_id, year)})
+    except ValueError as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+    except Exception as error:
+        print(f'[Activity] Reading history query failed: {error}')
+        return jsonify({'success': False, 'error': '활동 기록을 불러오지 못했습니다.'}), 500
+
+@dashboard_insights_bp.route('/api/dashboard/today', methods=['GET'])
+def get_today_reading_api():
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'success': False, 'error': '로그인이 필요합니다.'}), 401
+    db_type = request.args.get('library_type', 'general')
+    if db_type not in ('general', 'adult', 'audiobook', 'video'):
+        return jsonify({'success': False, 'error': '지원하지 않는 라이브러리입니다.'}), 400
+    if db_type == 'adult':
+        from api.auth import check_adult_permission
+        if not check_adult_permission('adult'):
+            return jsonify({'success': False, 'error': '접근 권한이 없습니다.'}), 403
+    try:
+        from services.home_welcome_service import get_today_reading
+        return jsonify({'success': True, 'today': get_today_reading(db_type, user_id)})
+    except Exception as error:
+        print(f'[Welcome] Today reading query failed: {error}')
+        return jsonify({'success': False, 'error': '독서 기록을 불러오지 못했습니다.'}), 500
+
 @dashboard_insights_bp.route('/api/dashboard/insights', methods=['GET'])
 def get_dashboard_insights():
     try:

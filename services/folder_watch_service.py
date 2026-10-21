@@ -133,7 +133,22 @@ def changed_folders(before, after):
     return result
 
 
-def advance_root(state, files, now, config, enqueue, task_status):
+def verified_empty_root(root, config, db_type, library_id):
+    """Only an independently reachable remote source can prove an empty root.
+
+    Local/FUSE emptiness alone is never evidence of removal. rclone_listing
+    checks the remote directory with --stat, and verify_mount checks the local
+    bind against that authoritative listing.
+    """
+    from services.folder_watch_sources import mounted_remote
+    if root.startswith(('http://', 'https://', 'gdrive:')):
+        return True  # probe already validates Drive directory accessibility
+    if config['mode'] == 'rclone' or (config['mode'] == 'auto' and mounted_remote(root)):
+        return verify_mount(root, config, {}, db_type, library_id) is True
+    return False
+
+
+def advance_root(state, files, now, config, enqueue, task_status, empty_verified=False):
     """Pure reconciliation seam: checkpoint only completed tasks, not queued ones."""
     if 'baseline' not in state:
         state.update(baseline=files, observed=files, since=now)
@@ -163,7 +178,7 @@ def advance_root(state, files, now, config, enqueue, task_status):
             return '변경 스캔 대기/진행 중'
     baseline = state['baseline']
     removed = set(baseline) - set(files)
-    if baseline and not files:
+    if baseline and not files and not empty_verified:
         raise ValueError('이전 목록이 모두 사라졌습니다. 연결/마운트를 확인하세요. 자동 반영을 보류합니다.')
     if len(removed) >= 10 and len(removed) >= len(baseline) / 2:
         raise ValueError('대량 누락 감지: 연결 장애 보호를 위해 자동 반영을 보류합니다.')
@@ -216,13 +231,15 @@ def tick(key, config, state, dirty=False):
         root_state = state.setdefault('roots', {}).setdefault(root, {})
         try:
             files = probe(root, config)
+            empty_verified = bool(root_state.get('baseline') and not files and
+                                  verified_empty_root(root, config, db_type, int(identifier)))
             def enqueue(active):
                 scanner_queue.enqueue('folder_watch', watch_key=key, token=active['token'], root=root,
                                       db_type=db_type, library_id=int(identifier), config_hash=digest(config))
             def phase(token):
                 row = ScannerQueueRepository.get_watch_task_result('folder_watch_' + token)
                 return row['status'] if row else None
-            root_state['status'] = advance_root(root_state, files, now, config, enqueue, phase)
+            root_state['status'] = advance_root(root_state, files, now, config, enqueue, phase, empty_verified=empty_verified)
             root_state['error'] = ''
             store.save_state(key, state)
             if root_state.get('active') and phase(root_state['active']['token']) is None:
@@ -286,6 +303,8 @@ def execute_task(task_id, watch_key, token, root, config_hash, **kwargs):
         verify_mount(root, config, active['files'], db_type, int(identifier))
         if probe(root, config) != active['files']:
             raise RuntimeError('삭제 반영 직전 목록 변경 감지. 삭제하지 않고 재확인합니다.')
+        if not active['files'] and not verified_empty_root(root, config, db_type, int(identifier)):
+            raise RuntimeError('빈 경로의 원격 연결을 재확인할 수 없습니다. 삭제 반영을 보류합니다.')
         ensure_active()
         with database.connection(db_type) as conn:
             cursor = conn.cursor()

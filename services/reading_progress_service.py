@@ -382,7 +382,8 @@ class ReadingProgressService:
     def mark_unread(db_type: str, book_id, user_id=1, series_name=None, library_id=None):
         if series_name and library_id is not None:
             book_ids = ReadingProgressRepository.delete_user_progress_by_series(
-                db_type, series_name, library_id, user_id
+                db_type, series_name, library_id, user_id,
+                representative_book_id=book_id if db_type in ('general', 'adult') else None
             )
         else:
             ReadingProgressRepository.delete_user_progress_by_book(db_type, book_id, user_id)
