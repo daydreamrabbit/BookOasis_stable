@@ -921,6 +921,11 @@
     "err_cover_not_found": "Cover not found.",
     "err_book_id_page_idx_required": "book_id and page_idx are required.",
     "msg_no_next_book": "No next book to preload.",
+    "user_not_found": "User not found.",
+    "delete_last_admin_error": "The last admin account cannot be deleted.",
+    "current_password_required": "Enter your current password.",
+    "invalid_current_password": "The current password is incorrect.",
+    "err_no_libraries": "There are no categories to scan.",
     "err_next_book_not_exist": "Next book file path does not exist."
   },
   "category": {

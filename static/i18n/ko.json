@@ -921,6 +921,11 @@
     "err_cover_not_found": "표지를 찾을 수 없습니다.",
     "err_book_id_page_idx_required": "book_id와 page_idx가 필요합니다.",
     "msg_no_next_book": "미리 읽어들일 다음 권이 없습니다.",
+    "user_not_found": "사용자를 찾을 수 없습니다.",
+    "delete_last_admin_error": "마지막 관리자 계정은 삭제할 수 없습니다.",
+    "current_password_required": "현재 비밀번호를 입력해주세요.",
+    "invalid_current_password": "현재 비밀번호가 일치하지 않습니다.",
+    "err_no_libraries": "스캔할 카테고리가 없습니다.",
     "err_next_book_not_exist": "다음 권의 파일 경로가 존재하지 않습니다."
   },
   "category": {
