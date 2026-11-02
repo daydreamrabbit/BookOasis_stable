@@ -3,6 +3,8 @@
 tts_routes.py - 브라우저 TTS("음성으로 듣기"): 플레이어 화면, 런타임/모델 자산, 듣기 위치 저장 /
 읽기↔듣기 위치 동기화 API. 합성 자체는 전부 클라이언트에서 한다.
 """
+import time
+
 from flask import Blueprint, request, jsonify, session, render_template, make_response, send_from_directory, Response
 
 from api.auth import login_required, check_adult_permission, check_book_rating_permission
@@ -45,7 +47,7 @@ def get_tts_position():
     if denied:
         return denied
     state = TTSProgressService.get_sync_state(db_type, book_id, session.get('user_id'))
-    return jsonify({'success': True, 'state': state})
+    return jsonify({'success': True, 'state': state, 'server_now_ms': int(time.time() * 1000)})
 
 
 @tts_bp.route('/api/media/tts/position', methods=['POST'])

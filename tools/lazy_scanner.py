@@ -14,6 +14,7 @@ if MEDIA_SERVER_DIR not in sys.path:
 # 개별적으로 호출해야 한다 - 자세한 이유는 utils/encoding_helper.py 참고 (Windows
 # CP949 콘솔에서 setup_lazy_scanner_logging()의 custom_print가 이모지/한글을 콘솔에
 # 직접 출력할 때 깨지거나 UnicodeEncodeError가 나는 문제 방지).
+from utils.safe_image import open_image
 from utils.encoding_helper import force_utf8_stdio
 force_utf8_stdio()
 
@@ -1597,7 +1598,7 @@ def run_lazy_cover_resize():
         last_seen = path
         try:
             needs_resize = False
-            with Image.open(path) as img:
+            with open_image(path) as img:
                 needs_resize = img.width > COVER_THUMB_MAX_W or img.height > COVER_THUMB_MAX_H
                 if needs_resize:
                     tmp_path = path + '.resize_tmp'

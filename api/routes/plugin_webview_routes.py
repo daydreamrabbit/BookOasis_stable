@@ -451,7 +451,8 @@ def download_to_library():
     try:
         from urllib.parse import urlsplit
         cd_name = _filename_from_content_disposition(upstream.headers.get('Content-Disposition'))
-        url_name = os.path.basename(urlsplit(url).path)
+        final_name = os.path.basename(urlsplit(getattr(upstream, 'url', None) or '').path)
+        url_name = final_name or os.path.basename(urlsplit(url).path)
         raw_name = cd_name or url_name or f"download_{int(time.time())}"
         filename = _sanitize_filename(raw_name)
         if not os.path.splitext(filename)[1] and cd_name is None and url_name and '.' in url_name:
@@ -482,10 +483,10 @@ def download_to_library():
     try:
         from database import get_db_path
         from tools.scanner.core import scan_library_path
-        scan_library_path(get_db_path(db_type), library_id, dest_path, force=True)
-        # 큐를 거치지 않는 즉시 스캔이라 목록(시리즈 요약 테이블/캐시) 반영을 직접 한다
-        from services.scan_refresh_service import refresh_after_direct_scan
-        refresh_after_direct_scan(db_type)
+        from services.scan_refresh_service import track_direct_scan
+        # dest_path is always a unique newly downloaded file; keep existing files incremental.
+        with track_direct_scan(db_type, library_id, dest_path):
+            scan_library_path(get_db_path(db_type), library_id, dest_path, force=False)
     except Exception as e:
         result['scan_error'] = str(e)
 

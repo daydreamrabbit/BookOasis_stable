@@ -1,12 +1,20 @@
 // viewer_pdf.js – PDF 뷰어 로직
 import { state } from './state.js';
 import { pdfTextRects } from './viewer/pdf_text_hit.js';
-import { ensurePdfJs } from './utils/script_loader.js';
+import { ensurePdfJs, pdfJsAssetBase } from './utils/script_loader.js';
 import { showViewerLoading, hideViewerLoading, showViewerError, showViewerBoundaryNotice } from './view_manager.js';
 import { saveProgress } from './viewer_progress.js?rev=20260927-tts-session-v8';
 import { getComicPageStep, getComicReadingDirection, getSpreadShiftOffset, resetSpreadShiftOffset } from './viewer_comic.js';
 import { initPageStep, setSpreadShiftOffset } from './viewer/reader_settings.js';
 import { getAdjacentSpreadPage, getSpreadAnchor, getSpreadPageSlots } from './viewer/spread_layout.js';
+
+function destroyPdfDocument(doc) {
+  const target = typeof doc?.destroy === 'function' ? doc : doc?.loadingTask;
+  if (typeof target?.destroy === 'function') {
+    try { Promise.resolve(target.destroy()).catch(error => console.warn('[Viewer-Pdf] Destroy failed:', error)); }
+    catch (error) { console.warn('[Viewer-Pdf] Destroy failed:', error); }
+  }
+}
 
 export let pdfDoc = null;
 export let pdfCurrentPage = 1;
@@ -70,20 +78,8 @@ export async function initPdfViewer(bookId, pagesRead, totalPages) {
   pdfCurrentPage = initialPage;
   pdfTotalPages = totalPages || 0;
   
-  // 뷰어 진입 시 totalPages가 0이면 백엔드 API를 통해 동적 계산 시도 (DB 동기화용)
-  if (pdfTotalPages === 0) {
-    try {
-      showViewerLoading('페이지 정보 동기화 중...');
-      const libType = state.currentLibraryType || 'general';
-      const res = await fetch(`/api/media/books/${bookId}/info?type=${libType}`);
-      const data = await res.json();
-      if (data.success && data.total_pages > 0) {
-        pdfTotalPages = data.total_pages;
-      }
-    } catch (e) {
-      console.warn('[Viewer-Pdf] 동적 페이지 로딩 실패:', e);
-    }
-  }
+  // 쪽수는 아래 PDF.js의 numPages와 기존 진행도 저장 경로로 동기화한다.
+  // /info를 기다리며 원격 PDF를 서버에서 먼저 여는 중복 요청은 하지 않는다.
 
   if (!isCurrent()) return;
   showViewerLoading(i18n.t("viewer.loading_pdf_title") || "PDF 준비 중", i18n.t("viewer.loading_pdf_sub") || "잠시만 기다려 주세요...");
@@ -93,11 +89,15 @@ export async function initPdfViewer(bookId, pagesRead, totalPages) {
     url: url,
     disableAutoFetch: true,  // 브라우저가 전체 파일을 백그라운드에서 전부 받는 행위 억제
     disableStream: false,    // 스트림 단위로 조각 수신 허용
-    cMapUrl: '/static/lib/pdfjs/cmaps/',
-    cMapPacked: true
+    isEvalSupported: false,
+    cMapUrl: `${pdfJsAssetBase()}cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `${pdfJsAssetBase()}standard_fonts/`,
+    wasmUrl: `${pdfJsAssetBase()}wasm/`,
+    iccUrl: `${pdfJsAssetBase()}iccs/`
   }).promise
     .then(doc => { 
-      if (!isCurrent()) { doc.destroy(); return; }
+      if (!isCurrent()) { destroyPdfDocument(doc); return; }
       pdfDoc = doc; 
       pdfTotalPages = doc.numPages; 
       hideViewerLoading();
@@ -384,7 +384,7 @@ function renderSinglePdfCanvas(pageNum, canvas, availWidth, availHeight) {
       }
     }
 
-    const renderCtx = { canvasContext: ctx, viewport };
+    const renderCtx = { canvas, viewport };
     const renderTask = page.render(renderCtx);
     currentRenderTasks.push(renderTask);
 
@@ -506,7 +506,7 @@ export function clearPdfViewer() {
   if (pdfDoc) {
     try {
       if (typeof pdfDoc.cleanup === 'function') pdfDoc.cleanup();
-      if (typeof pdfDoc.destroy === 'function') pdfDoc.destroy();
+      destroyPdfDocument(pdfDoc);
     } catch (e) {
       console.warn('[Viewer-Pdf] Failed to destroy pdfDoc:', e);
     }

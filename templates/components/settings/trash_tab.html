@@ -1,56 +1,52 @@
-<!-- 4.5 삭제 관리 (휴지통) 탭 -->
-<div id="settings-tab-trash" class="settings-tab-content" style="display: none; flex-direction: column; gap: 1rem;">
-    <button type="button" id="trash-library-filter" data-role="trash-clear-filter" hidden class="btn btn-secondary" style="display:none;align-self:flex-start;margin:0.5rem 0;max-width:100%;white-space:normal;"></button>
-    <div class="trash-header-container" style="display: flex; justify-content: space-between; align-items: center; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); padding: 0.75rem 1rem; border-radius: 8px;">
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-            <label style="font-size: 0.875rem; color: var(--app-text-muted); font-weight: 500;">DB 선택:</label>
-            <select id="trash-db-type" data-role="trash-db-type" style="background: var(--app-input-bg); border: 1px solid rgba(var(--app-panel-border-rgb), 0.1); color: var(--app-text-primary); padding: 0.35rem 1.5rem 0.35rem 0.75rem; border-radius: 6px; font-size: 0.875rem; outline: none; cursor: pointer;">
+<!-- 삭제 관리 (휴지통) -->
+<link rel="stylesheet" href="{{ static_asset_url('css/settings_trash.css') }}">
+<div id="settings-tab-trash" class="settings-tab-content" style="display: none;">
+    <button type="button" id="trash-library-filter" data-role="trash-clear-filter" hidden class="trash-button"></button>
+    <div class="trash-header-container">
+        <div class="trash-db-picker">
+            <label for="trash-db-type">DB 선택:</label>
+            <select id="trash-db-type" data-role="trash-db-type">
                 <option value="general">일반 도서 DB</option>
                 <option value="adult">성인 도서 DB</option>
                 <option value="audiobook">오디오북 DB</option>
                 <option value="video">영상강좌 DB</option>
             </select>
         </div>
-        <div class="trash-header-buttons" style="display: flex; gap: 0.5rem;">
-            <button class="btn btn-secondary" data-role="trash-restore-selected" style="display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.8rem; font-size: 0.825rem; border-radius: 6px;">
-                <i class="fa-solid fa-rotate-left"></i> 선택 복구
+        <div class="trash-header-buttons">
+            <button type="button" class="trash-button" data-role="trash-restore-selected">
+                <i class="fa-solid fa-rotate-left" aria-hidden="true"></i> 선택 복구
             </button>
-            <button class="btn btn-danger-outline" data-role="trash-delete-selected" style="display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.8rem; font-size: 0.825rem; border-radius: 6px;">
-                <i class="fa-solid fa-trash"></i> 선택 삭제
+            <button type="button" class="trash-button trash-button-danger-outline" data-role="trash-delete-selected">
+                <i class="fa-solid fa-trash" aria-hidden="true"></i> 선택 삭제
             </button>
-            <button class="btn btn-danger" data-role="trash-empty-all" style="display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.8rem; font-size: 0.825rem; border-radius: 6px; background: #ef4444; border: none;">
-                <i class="fa-solid fa-dumpster-fire"></i> 휴지통 비우기
+            <button type="button" class="trash-button trash-button-danger" data-role="trash-empty-all">
+                <i class="fa-solid fa-dumpster-fire" aria-hidden="true"></i> 휴지통 비우기
             </button>
         </div>
     </div>
-
-    <!-- 삭제 감지 목록 테이블 -->
-    <div class="settings-table-wrapper" style="flex: 1; border: 1px solid rgba(var(--app-panel-border-rgb), 0.06); border-radius: 8px; overflow-x: auto; background: rgba(var(--app-panel-rgb), 0.2); backdrop-filter: blur(10px);">
-        <div style="max-height: 450px; overflow-y: auto;">
-            <table class="settings-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.875rem; color: var(--app-text-muted);">
-                <thead>
-                    <tr style="background: rgba(255, 255, 255, 0.02); border-bottom: 1px solid rgba(255, 255, 255, 0.06); position: sticky; top: 0; z-index: 1;">
-                        <th style="padding: 0.75rem 1rem; width: 40px; text-align: center;">
-                            <input type="checkbox" id="trash-select-all" data-role="trash-select-all" style="cursor: pointer; width: 15px; height: 15px; accent-color: #3b82f6;">
-                        </th>
-                        <th style="padding: 0.75rem 1rem; font-weight: 600; color: var(--app-text-muted);">도서명</th>
-                        <th style="padding: 0.75rem 1rem; font-weight: 600; color: var(--app-text-muted);">원래 경로</th>
-                        <th style="padding: 0.75rem 1rem; font-weight: 600; color: var(--app-text-muted); width: 130px;">카테고리</th>
-                        <th style="padding: 0.75rem 1rem; font-weight: 600; color: var(--app-text-muted); width: 160px;">감지 시각</th>
-                        <th style="padding: 0.75rem 1rem; font-weight: 600; color: var(--app-text-muted); width: 120px; text-align: center;">제어</th>
-                    </tr>
-                </thead>
-                <tbody id="trash-list-body">
-                    <!-- Dynamic rendering via settings_trash.js -->
-                </tbody>
-            </table>
-            <div id="trash-empty-state" style="display: none; padding: 3rem 1rem; text-align: center; color: var(--app-text-muted);">
-                <i class="fa-solid fa-trash-arrow-up" style="font-size: 2.5rem; margin-bottom: 0.75rem; opacity: 0.5;"></i>
-                <p style="font-size: 0.95rem; margin: 0;">휴지통이 비어있습니다.</p>
-                <p style="font-size: 0.8rem; margin: 0.25rem 0 0 0; color: #475569;">스캔 도중 물리적으로 유실된 도서가 여기에 표시됩니다.</p>
-            </div>
+    <div class="settings-table-wrapper trash-table-scroll" tabindex="0" role="region" aria-label="삭제된 도서 목록">
+        <table class="settings-table trash-table">
+            <colgroup>
+                <col class="trash-col-select"><col class="trash-col-title"><col class="trash-col-path">
+                <col class="trash-col-library"><col class="trash-col-date"><col class="trash-col-actions">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th scope="col" class="trash-select-cell"><input type="checkbox" id="trash-select-all" data-role="trash-select-all" aria-label="전체 선택"></th>
+                    <th scope="col">도서명</th>
+                    <th scope="col">원래 경로</th>
+                    <th scope="col">카테고리</th>
+                    <th scope="col">감지 시각</th>
+                    <th scope="col" class="trash-actions-cell">제어</th>
+                </tr>
+            </thead>
+            <tbody id="trash-list-body"></tbody>
+        </table>
+        <div id="trash-empty-state" style="display: none;">
+            <i class="fa-solid fa-trash-arrow-up" aria-hidden="true"></i>
+            <p>휴지통이 비어있습니다.</p>
+            <p class="trash-empty-hint">스캔 도중 물리적으로 유실된 도서가 여기에 표시됩니다.</p>
         </div>
     </div>
 </div>
-
 <script src="{{ static_asset_url('js/settings_trash.js') }}"></script>

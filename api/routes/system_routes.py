@@ -415,6 +415,7 @@ def get_about_info():
     version_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'VERSION')
     
     dashboard_ver = '0.2.6'
+    dbms_ver = 'unknown'
     state_ver = 'pre-alpha'
     
     if os.path.exists(version_path):
@@ -427,6 +428,8 @@ def get_about_info():
                     line_clean = line.strip().replace('"', '')
                     if line_clean.startswith('dashboard:'):
                         dashboard_ver = line_clean.split(':', 1)[1].strip()
+                    elif line_clean.startswith('DBMS:'):
+                        dbms_ver = line_clean.split(':', 1)[1].split(',', 1)[0].strip()
                     elif line_clean.startswith('state:'):
                         state_ver = line_clean.split(':', 1)[1].strip()
         except Exception as e:
@@ -468,6 +471,7 @@ def get_about_info():
         'success': True,
         'version': {
             'dashboard': dashboard_ver,
+            'dbms': dbms_ver,
             'state': state_ver
         },
         'github_version': {
@@ -538,10 +542,9 @@ def trigger_scan_via_webhook():
 
             db_path = get_db_path_for_scan(db_type)
             from tools.scanner.core import scan_library_path
-            scan_library_path(db_path, lib_id_int, target_path, force=force_requeue)
-            # 큐를 거치지 않는 즉시 스캔이라 목록(시리즈 요약 테이블/캐시) 반영을 직접 한다
-            from services.scan_refresh_service import refresh_after_direct_scan
-            refresh_after_direct_scan(db_type)
+            from services.scan_refresh_service import track_direct_scan
+            with track_direct_scan(db_type, lib_id_int, target_path):
+                scan_library_path(db_path, lib_id_int, target_path, force=force_requeue)
 
             return jsonify({
                 'success': True,

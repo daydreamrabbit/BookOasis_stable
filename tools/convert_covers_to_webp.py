@@ -9,6 +9,9 @@ import os
 import sqlite3
 import hashlib
 from PIL import Image
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.safe_image import open_image
 
 MEDIA_SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_DIR = os.path.join(MEDIA_SERVER_DIR, 'db')
@@ -28,7 +31,7 @@ def get_db_paths():
 def convert_image_to_webp(src_path, dest_path, quality=80):
     """일반 이미지를 WebP로 인코딩하여 저장"""
     try:
-        with Image.open(src_path) as img:
+        with open_image(src_path) as img:
             # WebP 저장을 위해 RGBA 혹은 RGB 모드 유지
             img.save(dest_path, "WEBP", quality=quality)
         return True
@@ -126,6 +129,7 @@ def main():
     # Pillow 라이브러리 검증
     try:
         from PIL import Image
+        from utils.safe_image import open_image
     except ImportError:
         print("[-] Pillow 라이브러리가 설치되어 있지 않습니다. 'pip install pillow'를 먼저 실행해 주세요.")
         return

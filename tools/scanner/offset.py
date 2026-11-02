@@ -3,14 +3,14 @@ import os
 import zipfile
 from utils.sort_helper import natural_sort_key
 
-IMG_EXT = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
+from utils.archive_entry import IMG_EXT, is_page_image_name
 
 
 def _offsets_from_zipfile(zf):
     """열려 있는 zipfile.ZipFile(로컬 파일이든 메모리 버퍼든)에서 이미지 항목의
     오프셋 메타데이터를 (page_idx, filename, header_offset, compress_size, file_size, compress_type)
     튜플 리스트로 뽑아낸다. 로컬 스캔과 gdrive 원격(Range 기반) 스캔이 이 로직을 공유한다."""
-    img_infos = [info for info in zf.infolist() if info.filename.lower().endswith(IMG_EXT)]
+    img_infos = [info for info in zf.infolist() if is_page_image_name(info.filename)]
     img_infos.sort(key=lambda x: natural_sort_key(x.filename))
     return [
         (page_idx, info.filename, info.header_offset, info.compress_size, info.file_size, info.compress_type)

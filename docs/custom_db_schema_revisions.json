@@ -1,0 +1,60 @@
+{
+  "current_revision": "custom-20261025.1",
+  "revisions": [
+    {
+      "schema_revision": "custom-20261025.1",
+      "recorded_date": "2026-10-25",
+      "application_release": "3.0.3.a",
+      "kind": "existing-custom-schema-baseline",
+      "previous_display_label": "2.7.8",
+      "meaning": "현재 운영 중인 커스텀 DB 구조의 첫 기록 리비전. MariaDB 엔진 버전이나 공식 스키마 전체 반영 버전이 아니다.",
+      "version_policy": "DB 구조가 실제로 바뀔 때만 새 리비전을 기록한다. 앱 버전 변경만으로 DB 리비전을 올리지 않는다.",
+      "database_changes_in_this_release": [],
+      "schema_fingerprints": {
+        "columns": {
+          "count": 1675,
+          "sha256": "46526f51c5d616ef2bc66e947acc554b48d75692a95b1838f301281475da1388"
+        },
+        "indexes": {
+          "count": 676,
+          "sha256": "60134ab29492c70302517cf32328f9240ee1396cafbb85957a346dfaa3e838a3"
+        },
+        "constraints": {
+          "count": 285,
+          "sha256": "1841309b906910fba52b7168e4f94891072cae0d62b43a8bb31af637e8ca72b8"
+        }
+      },
+      "fingerprint_scope": "운영 MariaDB의 general/adult/audiobook/video 스키마. 사용자 데이터와 자격증명은 포함하지 않는다.",
+      "verified_custom_book_columns": [
+        "document_number",
+        "document_series_name",
+        "document_volume_count",
+        "document_volume_index",
+        "embedded_metadata_version",
+        "localized_series",
+        "metadata_title",
+        "translator"
+      ],
+      "history_references": [
+        {
+          "commit": "f910180aa9fb39de0820798278446bc7c53b00c6",
+          "date": "2026-10-21",
+          "subject": "Release 2.9.9.a: sync deployed custom core and selectively port scan fixes"
+        },
+        {
+          "commit": "e75685da017d90bbf11067247b5b740dc167d65d",
+          "date": "2026-10-01",
+          "subject": "Release BookOasis 2.8.2.b: scan queue, dashboard and metadata fixes"
+        },
+        {
+          "commit": "0b2dd00ef0ebd457a775a6d2cfaed4eab1e17493",
+          "date": "2026-09-28",
+          "subject": "Release customized BookOasis 2.7.9 with portable deployment"
+        }
+      ],
+      "history_note": "이력은 기존 커스텀 DB 관련 코드의 커밋 참조이며, 개별 컬럼의 도입 시점을 새로 추정한 것이 아니다.",
+      "runtime_image_at_baseline": "sha256:c62e03056021cf0123b69fccf6b070d0cc18a52f72d584fb2485861a88197afa",
+      "sqlite_note": "기존 SQLite 지원 코드도 유지한다. 이 지문은 현재 운영 중인 MariaDB의 구조를 기록한 것이다."
+    }
+  ]
+}

@@ -90,7 +90,7 @@ import { chunkText, formatTxtToHtml, stripHtml } from './viewer/txt_text_utils.j
 import { renderTxtChunkView, applyTxtParagraphStyles, isEpubImageOnlyHtml } from './viewer/txt_render.js';
 import { getTxtAnchorInfoByMode, restoreTxtAnchorInfoByMode, captureTxtPageAnchor, locateTxtPageAnchor } from './viewer/txt_anchor_utils.js';
 import { findAnchorOffset, chunkStarts } from './viewer/text_position_utils.js?rev=20260927-tts-session-v8';
-import { setReadPositionProvider, reportReadNow, fetchSyncState, listenTargetForTxt, listenTargetForEpub } from './viewer/tts_sync.js?rev=20260927-tts-session-v8';
+import { setReadPositionProvider, reportReadNow, fetchSyncState, listenTargetForTxt, listenTargetForEpub, readTargetForTxt, readTargetForEpub } from './viewer/tts_sync.js?rev=20260927-tts-session-v8';
 import { applyTxtSettingsCore, applyFontFamilyToElement as applyTxtFontFamily } from './viewer/txt_settings_apply.js';
 import {
   prevTxtPageAction,
@@ -135,6 +135,8 @@ let txtHeldAnchor = null;
 let txtResizePending = false;
 let txtRelayoutInProgress = false;
 let txtRelayoutForResize = null;
+let txtSyncRestoreTarget = null;
+let txtLastReadPosition = null;
 
 function resetTxtLayoutAnchor() {
   txtStableAnchor = null;
@@ -142,6 +144,8 @@ function resetTxtLayoutAnchor() {
   txtResizePending = false;
   txtRelayoutInProgress = false;
   txtRelayoutForResize = null;
+  txtSyncRestoreTarget = null;
+  txtLastReadPosition = null;
   clearTimeout(resizeTimeout);
 }
 
@@ -155,6 +159,34 @@ function isCurrentTxtLayoutAnchor(snapshot) {
   return snapshot && snapshot.session === txtSessionGeneration && snapshot.bookId === state.activeBookId
     && snapshot.chapter === currentChunkIdx
     && snapshot.mode === (localStorage.getItem('viewer_scroll_mode') || 'page');
+}
+
+function heldTxtLayoutSnapshot() {
+  const snapshot = [txtHeldAnchor, txtStableAnchor].find(isCurrentTxtLayoutAnchor);
+  if (!snapshot) return null;
+  return snapshot === txtHeldAnchor || document.hidden || txtResizePending || txtRelayoutInProgress
+    || snapshot.layout !== txtLayoutKey() ? snapshot : null;
+}
+
+function activeTxtSyncTarget() {
+  const hold = txtSyncRestoreTarget;
+  return hold && hold.session === txtSessionGeneration && hold.bookId === state.activeBookId
+    && hold.target.chunkIdx === currentChunkIdx ? hold : null;
+}
+
+function holdTxtSyncTarget(target) {
+  txtSyncRestoreTarget = target?.anchorText ? {
+    target, session: txtSessionGeneration, bookId: state.activeBookId, applied: false,
+  } : null;
+}
+
+// 실제 사용자 조작은 자동 복원보다 우선한다. 이전 세션의 예약 복원도 무효화한다.
+function releaseTxtSyncTarget() {
+  txtSyncRestoreTarget = null;
+  if (pendingTxtFlowPosition?.syncTarget) pendingTxtFlowPosition = null;
+}
+for (const event of ['pointerdown', 'touchstart', 'keydown', 'wheel']) {
+  window.addEventListener(event, releaseTxtSyncTarget, { passive: true });
 }
 
 function rememberStableTxtPageAnchor() {
@@ -205,7 +237,9 @@ function onTxtViewerVisibilityChange() {
 document.addEventListener('visibilitychange', onTxtViewerVisibilityChange);
 
 function saveProgress(bookId, pageIdx, totalPages, extraData = null) {
-  if (!textResumeReady || txtPageSnapInProgress) return;
+  if (!textResumeReady || txtPageSnapInProgress || document.hidden || txtResizePending
+      || txtRelayoutInProgress || heldTxtLayoutSnapshot()
+      || (activeTxtSyncTarget() && !activeTxtSyncTarget().applied)) return;
   const anchor = captureTextResume(document.getElementById('txt-scroll-wrapper'),
     document.getElementById('txt-content-area'), currentChunkIdx)
     || (state.currentViewerFormat === 'epub' ? { type: 'bookoasis-text-v1', chunkIdx: currentChunkIdx, offset: 0 } : null);
@@ -633,6 +667,7 @@ async function recalculateTxtPagination(generation) {
     const wrapper = document.getElementById('txt-scroll-wrapper');
     const chunk = document.querySelector(`#txt-content-area [data-idx="${pos.chunkIdx}"]`);
     if (wrapper) wrapper.scrollTop = chunk?.offsetTop || pos.scrollTop || 0;
+    if (pos.anchor) restoreTxtAnchorInfo(pos.anchor);
     if (pos.serverAnchor) restoreServerTextPosition(pos.serverAnchor);
   }
   textResumeReady = true;
@@ -975,6 +1010,7 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
   const sessionId = ++txtSessionGeneration;
   epubImagePairAnchor = null;
   resetTxtLayoutAnchor();
+  const localResumePosition = readLocalTxtPosition(bookId);
   textResumeReady = false;
   const isCurrentSession = () => sessionId === txtSessionGeneration && state.activeBookId === bookId;
   contentArea.dataset.viewerBookId = String(bookId);
@@ -1066,11 +1102,15 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
           }
         }
 
-        const ttsTarget = listenTargetForEpub(await ttsSyncPromise, totalChapters);
+        const syncState = await ttsSyncPromise;
+        if (!isCurrentSession()) return;
+        const ttsTarget = listenTargetForEpub(syncState, totalChapters)
+          || readTargetForEpub(syncState, totalChapters, localResumePosition);
         if (ttsTarget) startIdx = ttsTarget.chunkIdx;
 
         startIdx = Math.max(0, Math.min(totalChapters - 1, parseInt(startIdx, 10) || 0));
         currentChunkIdx = startIdx;
+        holdTxtSyncTarget(ttsTarget);
 
         // ─── 2단계: 현재 읽고 있는 챕터만 즉시 청크 스트리밍 렌더링 (0.01초) ───
         fetch(`/api/media/epub/chapter?db_type=${state.currentLibraryType}&book_id=${bookId}&chapter_idx=${startIdx}`)
@@ -1098,18 +1138,18 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
             // "scroll → page 모드 전환"으로 오판해 더블 rAF로 지연 적용된다. 그 사이
             // 컬럼 미설정 상태로 첫 페인트가 되어 1페이지 폭처럼 보이는 원인이 되므로,
             // 최초 렌더링임을 명시해 동기적으로 바로 적용되게 한다.
-            applyTxtSettings({ previousMode: getViewerSettings().scrollMode, skipSavedPositionRestore: !!serverEpubSession, resumePending: true });
+            applyTxtSettings({ previousMode: getViewerSettings().scrollMode, skipSavedPositionRestore: !!serverEpubSession || !!ttsTarget, resumePending: true });
             setupTxtViewerRuntimeListeners();
             await document.fonts?.ready;
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             if (!isCurrentSession()) return;
             const serverAnchor = readTextResume(serverEpubSession);
-            if (serverAnchor) restoreServerTextPosition(serverAnchor);
+            if (serverAnchor && !ttsTarget) restoreServerTextPosition(serverAnchor);
             else if (getViewerSettings().scrollMode === 'scroll') {
               const chunk = contentArea.querySelector(`[data-idx="${startIdx}"]`);
               document.getElementById('txt-scroll-wrapper').scrollTop = chunk?.offsetTop || 0;
             }
-            if (ttsTarget) applyListenTarget(ttsTarget);
+            if (ttsTarget) applySyncTarget(ttsTarget);
             textResumeReady = true;
             updateTxtSeekBar();
 
@@ -1209,12 +1249,20 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
         startIdx = Math.max(0, Math.min(txtChunks.length - 1, parseInt(startIdx, 10) || 0));
       }
 
-      const ttsTarget = isEpub ? null : listenTargetForTxt(await ttsSyncPromise, fullText, txtChunks);
+      const syncState = await ttsSyncPromise;
+      if (!isCurrentSession()) return;
+      const ttsTarget = isEpub ? null : (listenTargetForTxt(syncState, fullText, txtChunks)
+        || readTargetForTxt(syncState, fullText, txtChunks, localResumePosition));
       if (ttsTarget) startIdx = ttsTarget.chunkIdx;
 
       currentChunkIdx = startIdx;
+      holdTxtSyncTarget(ttsTarget);
 
       pendingTxtFlowPosition = { chunkIdx: startIdx, scrollLeft: 0 };
+      if (ttsTarget?.anchorText) {
+        pendingTxtFlowPosition.anchor = ttsTarget;
+        pendingTxtFlowPosition.syncTarget = true;
+      }
       if (!ttsTarget && savedPosStr && serverPagesRead === 0) {
         try { pendingTxtFlowPosition = JSON.parse(savedPosStr); } catch (_) {}
       }
@@ -1231,7 +1279,7 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
       applyTxtSettings({ previousMode: getViewerSettings().scrollMode, skipSavedPositionRestore: true, resumePending: true });
 
       setupTxtViewerRuntimeListeners();
-      if (ttsTarget) applyListenTarget(ttsTarget);
+      if (ttsTarget) applySyncTarget(ttsTarget);
       scheduleTxtPagination(180);
     })
     .catch((err) => {
@@ -1243,7 +1291,8 @@ export function initTxtViewer(bookId, initialPageIdx = 0) {
     });
 }
 
-function cancelPendingTxtRestore() {
+function cancelPendingTxtRestore({ preserveSyncTarget = false } = {}) {
+  if (!preserveSyncTarget) releaseTxtSyncTarget();
   if (!txtRelayoutInProgress) {
     txtStableAnchor = null;
     txtHeldAnchor = null;
@@ -1573,6 +1622,8 @@ export function logActiveViewportText() {
 }
 
 export function getTxtAnchorInfo(forcedMode = null) {
+  const hold = activeTxtSyncTarget();
+  if (hold) return { chunkIdx: hold.target.chunkIdx, anchorText: hold.target.anchorText };
   const scrollWrapper = document.getElementById('txt-scroll-wrapper');
   const contentArea = document.getElementById('txt-content-area');
   const isEpub = (state.currentViewerFormat === 'epub');
@@ -1589,17 +1640,53 @@ export function getTxtAnchorInfo(forcedMode = null) {
   });
 }
 
-function applyListenTarget(target) {
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (target?.anchorText) restoreTxtAnchorInfo({ chunkIdx: target.chunkIdx, anchorText: target.anchorText });
-    showToast(i18n.t('viewer.tts_moved_to_listen'), 'info');
-  }));
+function readLocalTxtPosition(bookId) {
+  try { return JSON.parse(localStorage.getItem(`viewer_last_pos_${bookId}`) || 'null'); }
+  catch { return null; }
+}
+
+function syncTargetTextResume(target) {
+  const chunk = document.getElementById('txt-content-area')?.querySelector(`[data-idx="${target.chunkIdx}"]`);
+  if (!chunk || !target.anchorText) return null;
+  const offset = findAnchorOffset(String(chunk.textContent || ''), target.anchorText, Number(target.offset) || 0);
+  return offset === null ? null : { type: 'bookoasis-text-v1', chunkIdx: target.chunkIdx, offset };
+}
+
+function applySyncTarget(target) {
+  const hold = activeTxtSyncTarget();
+  if (!hold) return;
+  const restore = () => {
+    if (activeTxtSyncTarget() !== hold) return;
+    const resume = syncTargetTextResume(target);
+    const restored = resume ? restoreServerTextPosition(resume)
+      : restoreTxtAnchorInfo({ chunkIdx: target.chunkIdx, anchorText: target.anchorText });
+    if (!restored) return;
+    // TXT의 실제 쪽수 계산이 뒤에 끝나더라도 기존 CFI 복원 경로가 같은 글자를 따른다.
+    if (resume && pendingTxtFlowPosition?.syncTarget) pendingTxtFlowPosition.serverAnchor = resume;
+    hold.applied = true;
+    txtStableAnchor = null;
+    rememberStableTxtPageAnchor();
+    saveDetailPosition();
+    if (!hold.notified) {
+      hold.notified = true;
+      showToast(target.kind === 'read' ? '다른 기기의 최신 읽기 위치로 이동했습니다.'
+        : i18n.t('viewer.tts_moved_to_listen'), 'info');
+    }
+  };
+  restore();
+  requestAnimationFrame(() => requestAnimationFrame(restore));
 }
 
 // 기존 뷰어 위치(user_progress)는 페이지/구간 단위로 계속 저장하고, TTS 동기화 테이블에는
 // 해당 구간에서 보이는 문장 앵커만 별도로 보고한다.
 function currentReadPosition() {
-  if (!Array.isArray(txtChunks) || txtChunks.length === 0) return null;
+  if (!textResumeReady || !Array.isArray(txtChunks) || txtChunks.length === 0) return null;
+  if (activeTxtSyncTarget() && !activeTxtSyncTarget().applied) return null;
+  if (document.hidden || txtResizePending || txtRelayoutInProgress || heldTxtLayoutSnapshot()) {
+    const saved = txtLastReadPosition;
+    return saved && saved.session === txtSessionGeneration && saved.bookId === state.activeBookId
+      && saved.chapter === currentChunkIdx ? saved.position : null;
+  }
   const content = document.getElementById('txt-content-area');
   const visible = captureTextResume(document.getElementById('txt-scroll-wrapper'), content, currentChunkIdx);
   const root = visible && content?.querySelector(`[data-idx="${visible.chunkIdx}"]`);
@@ -1607,7 +1694,7 @@ function currentReadPosition() {
     anchorText: String(root.textContent || '').slice(visible.offset, visible.offset + 120).replace(/\s+/g, ' ').trim().slice(0, 40) } : null;
   if (!info?.anchorText) {
     if (state.currentViewerFormat === 'epub' && textResumeReady) {
-      return { chapter_idx: currentChunkIdx, char_offset: 0, text_len: 0, anchor: '' };
+      return rememberReadPosition({ chapter_idx: currentChunkIdx, char_offset: 0, text_len: 0, anchor: '' });
     }
     return null;
   }
@@ -1617,15 +1704,21 @@ function currentReadPosition() {
     : String(txtChunks[chapterIdx] || '');
   const inChunk = findAnchorOffset(chunkText, info.anchorText, visible?.offset || 0) ?? 0;
   if (state.currentViewerFormat === 'epub') {
-    return { chapter_idx: chapterIdx, char_offset: inChunk, text_len: chunkText.length, anchor: info.anchorText };
+    return rememberReadPosition({ chapter_idx: chapterIdx, char_offset: inChunk, text_len: chunkText.length, anchor: info.anchorText });
   }
   const starts = chunkStarts(txtChunks);
-  return {
+  return rememberReadPosition({
     chapter_idx: 0,
     char_offset: (starts[chapterIdx] || 0) + inChunk,
     text_len: String(fullText || '').length,
     anchor: info.anchorText,
-  };
+  });
+}
+
+function rememberReadPosition(position) {
+  txtLastReadPosition = { session: txtSessionGeneration, bookId: state.activeBookId,
+    chapter: currentChunkIdx, position };
+  return position;
 }
 
 export function restoreTxtAnchorInfo(anchorInfo) {
@@ -1658,7 +1751,9 @@ export function restoreTxtAnchorInfo(anchorInfo) {
 }
 
 export function saveDetailPosition() {
-  if (!textResumeReady || txtRelayoutInProgress) return;
+  if (!textResumeReady || document.hidden || txtResizePending || txtRelayoutInProgress) return;
+  // 숨김/회전 중의 DOM 좌표로 마지막 안정 위치와 savedAt을 덮어쓰지 않는다.
+  if (heldTxtLayoutSnapshot() || (activeTxtSyncTarget() && !activeTxtSyncTarget().applied)) return;
   rememberStableTxtPageAnchor();
   const scrollWrapper = document.getElementById('txt-scroll-wrapper');
   if (scrollWrapper && state.activeBookId) {
@@ -1667,7 +1762,9 @@ export function saveDetailPosition() {
       anchor: state.currentViewerFormat === 'txt' ? getTxtAnchorInfo() : undefined,
       chunkIdx: currentChunkIdx,
       scrollLeft: getTxtPageScrollLeft(scrollWrapper),
-      scrollTop: scrollWrapper.scrollTop
+      scrollTop: scrollWrapper.scrollTop,
+      anchorText: currentReadPosition()?.anchor || undefined,
+      savedAt: Date.now(),
     };
     localStorage.setItem(`viewer_last_pos_${state.activeBookId}`, JSON.stringify(pos));
     saveProgress(state.activeBookId, currentChunkIdx, txtChunks.length);
@@ -1682,7 +1779,9 @@ export function applyTxtSettings(options = {}) {
 
   clearTimeout(txtPageSnapTimeout);
   txtPageSnapInProgress = false;
-  cancelPendingTxtRestore();
+  const syncHold = activeTxtSyncTarget();
+  if (syncHold) options = { ...options, skipSavedPositionRestore: true, resumePending: true };
+  cancelPendingTxtRestore({ preserveSyncTarget: true });
 
   applyTxtSettingsCore({
     options,
@@ -1719,6 +1818,7 @@ export function applyTxtSettings(options = {}) {
       );
     }
   });
+  if (syncHold && activeTxtSyncTarget() === syncHold) applySyncTarget(syncHold.target);
   if (state.currentViewerFormat === 'epub') {
     if (epubPagination?.bookId !== state.activeBookId) epubPagination = null;
     scheduleEpubPagination(260);

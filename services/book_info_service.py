@@ -56,7 +56,9 @@ class BookInfoService:
             return None
 
         total_pages = row['total_pages'] or 0
-        if total_pages == 0:
+        # PDF.js는 파일을 열며 쪽수를 확인한다. 제목 조회를 위해 원격 PDF를
+        # 서버에서 먼저 열어 세면 뷰어 진입까지 같은 파일을 중복 조회한다.
+        if total_pages == 0 and (row['file_format'] or '').lower() != 'pdf':
             total_pages = BookInfoService.get_total_pages(db_type, book_id) or 0
 
         return {
@@ -94,8 +96,8 @@ class BookInfoService:
                 zf = get_zip_file_hybrid(file_path)
                 if zf:
                     try:
-                        img_ext = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
-                        total_pages = len([n for n in zf.namelist() if n.lower().endswith(img_ext)])
+                        from utils.archive_entry import is_page_image_name
+                        total_pages = len([n for n in zf.namelist() if is_page_image_name(n)])
                     except Exception:
                         total_pages = 0
 

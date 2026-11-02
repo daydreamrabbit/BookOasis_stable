@@ -171,6 +171,11 @@
       "rescan_book": "이 책 재스캔"
     },
     "check": {
+      "content": {
+        "video_inside": "압축 파일 안에 영상이 있음 (이미지 {images}장, 영상 {videos}개)",
+        "timeout": "압축 내용 확인이 응답하지 않음 ({seconds}초)",
+        "bad": "압축파일의 내부 목록을 읽지 못했습니다."
+      },
       "db": {
         "ok": "DB 기록 정상",
         "trashed": "휴지통에 있음 · {purge} 자동 삭제 예정",
@@ -200,6 +205,7 @@
       }
     },
     "result": {
+      "video_inside": "영상이 ZIP으로 묶여 있어 만화 뷰어로는 볼 수 없습니다. 영상을 꺼내 영상 강좌 카테고리 폴더에 두세요.",
       "healthy": "이상이 없습니다.",
       "healthy_with_problems": "지금은 정상입니다. 아래 열린 문제 기록 {count}건은 재스캔하거나 카드에서 정리하세요.",
       "no_record": "DB에 이 도서가 없습니다 (이미 영구 삭제되었을 수 있습니다).",

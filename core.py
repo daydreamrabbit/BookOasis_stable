@@ -1,3 +1,6 @@
+import mimetypes as _mimetypes
+_mimetypes.add_type('text/javascript', '.mjs')
+_mimetypes.add_type('application/wasm', '.wasm')
 import os
 import sys
 import json

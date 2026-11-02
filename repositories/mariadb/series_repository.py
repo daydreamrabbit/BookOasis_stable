@@ -20,16 +20,24 @@ class SeriesRepository:
         lock_name = f'media_server:series_summary:{db_type}'
         lock_acquired = False
         try:
+            cursor.execute("SELECT NOW() AS now")
+            requested_at = cursor.fetchone()['now']
             cursor.execute("SELECT GET_LOCK(%s, 30) AS acquired", (lock_name,))
             lock_row = cursor.fetchone()
             lock_acquired = bool(lock_row and int(lock_row['acquired'] or 0))
             if not lock_acquired:
                 raise RuntimeError(f'series summary rebuild lock timeout: {db_type}')
-            if only_if_unready:
-                cursor.execute("SELECT is_ready FROM series_summary_state WHERE id = 1")
-                state = cursor.fetchone()
-                if state and int(state['is_ready'] or 0):
-                    return False
+            # Drop the old transaction snapshot after waiting for the shared rebuild lock.
+            conn.commit()
+            cursor.execute("SELECT NOW() AS now")
+            snapshot_at = cursor.fetchone()['now']
+            cursor.execute("SELECT is_ready, refreshed_at FROM series_summary_state WHERE id = 1")
+            summary_state = cursor.fetchone()
+            ready = bool(summary_state and int(summary_state['is_ready'] or 0))
+            if only_if_unready and ready:
+                return False
+            if ready and summary_state['refreshed_at'] and summary_state['refreshed_at'] > requested_at:
+                return False
 
             cursor.execute("SHOW FULL COLUMNS FROM books WHERE Field = 'series_name'")
             source_column = cursor.fetchone()
@@ -77,11 +85,108 @@ class SeriesRepository:
             """)
             cursor.execute("""
                 INSERT INTO series_summary_state (id, is_ready, refreshed_at)
-                VALUES (1, 1, CURRENT_TIMESTAMP)
-                ON DUPLICATE KEY UPDATE is_ready = 1, refreshed_at = CURRENT_TIMESTAMP
-            """)
+                VALUES (1, 1, %s)
+                ON DUPLICATE KEY UPDATE is_ready = 1, refreshed_at = VALUES(refreshed_at)
+            """, (snapshot_at,))
             conn.commit()
             return True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            if lock_acquired:
+                try:
+                    cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
+                except Exception:
+                    pass
+            conn.close()
+
+    @staticmethod
+    def fetch_series_snapshot(db_type, library_id, path_prefix):
+        """경로 아래 도서의 집계/대표 표지 선택 값을 스캔 전후로 비교한다.
+        폴더 경계와 LIKE 와일드카드를 구분하여 형제 폴더를 읽지 않는다."""
+        conn = database.get_connection(db_type)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, COALESCE(NULLIF(series_name, ''), title) AS series_key, series_name,
+                       cover_image, document_volume_index, document_number,
+                       (is_deleted = 0 OR is_deleted IS NULL) AS is_active, created_at
+                FROM books WHERE library_id = %s AND (file_path = %s OR file_path LIKE %s ESCAPE '!')
+            """, (library_id, path_prefix, path_prefix.rstrip('/').replace('!', '!!').replace('%', '!%').replace('_', '!_') + '/%'))
+            return {
+                row['id']: (row['series_key'], row['series_name'], str(row['cover_image'] or ''),
+                            bool(row['is_active']), str(row['created_at'] or ''),
+                            str(row['document_volume_index'] or ''), str(row['document_number'] or ''))
+                for row in cursor.fetchall()
+            }
+        finally:
+            conn.close()
+
+    @staticmethod
+    def refresh_summary_keys(db_type, keys):
+        """(library_id, series_key) 목록의 요약 줄만 전체 재생성과 같은 집계식으로 다시 계산한다.
+        전체 재생성이 돌고 있거나 요약이 아직 준비 안 됐으면 None - 호출측이 전체 재생성으로 넘어간다."""
+        if db_type in ('audiobook', 'video'):
+            return 0
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        lock_name = f'media_server:series_summary:{db_type}'
+        lock_acquired = False
+        try:
+            cursor.execute("SELECT GET_LOCK(%s, 5) AS acquired", (lock_name,))
+            lock_row = cursor.fetchone()
+            lock_acquired = bool(lock_row and int(lock_row['acquired'] or 0))
+            if not lock_acquired:
+                return None
+            conn.commit()
+            cursor.execute("SELECT is_ready FROM series_summary_state WHERE id = 1")
+            state = cursor.fetchone()
+            if not (state and int(state['is_ready'] or 0)):
+                return None
+            library_ids = sorted({lib for lib, _key in keys})
+            if library_ids:
+                placeholders = ', '.join(['%s'] * len(library_ids))
+                cursor.execute(f"SELECT COUNT(*) AS c FROM libraries WHERE pending_delete = 1 AND id IN ({placeholders})", library_ids)
+                if int(cursor.fetchone()['c'] or 0):
+                    return None
+            for library_id, series_key in keys:
+                # (series_name = k) 또는 (series_name 비어 있음 AND title = k) - idx_books_lib_del_series/_title을 탄다
+                cursor.execute(f"""
+                    SELECT rep.series_key, rep.rep_id, rep.series_book_count,
+                           COALESCE(b.series_name, '') AS sort_series_name, rep.latest_added
+                    FROM (
+                        SELECT COALESCE(NULLIF(b2.series_name, ''), b2.title) AS series_key,
+                               {series_cover_id_sql('b2', mariadb=True)} AS rep_id,
+                               COUNT(*) AS series_book_count,
+                               COALESCE(MAX(b2.created_at), '') AS latest_added
+                        FROM books b2
+                        WHERE b2.library_id = %s
+                          AND (b2.is_deleted = 0 OR b2.is_deleted IS NULL)
+                          AND (b2.series_name = %s OR ((b2.series_name IS NULL OR b2.series_name = '') AND b2.title = %s))
+                        GROUP BY COALESCE(NULLIF(b2.series_name, ''), b2.title)
+                    ) rep
+                    INNER JOIN books b ON b.id = rep.rep_id
+                """, (library_id, series_key, series_key))
+                row = cursor.fetchone()
+                if row:
+                    cursor.execute("""
+                        INSERT INTO series_summary (
+                            library_id, series_key, representative_book_id,
+                            series_book_count, sort_series_name, latest_added
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            representative_book_id = VALUES(representative_book_id),
+                            series_book_count = VALUES(series_book_count),
+                            sort_series_name = VALUES(sort_series_name),
+                            latest_added = VALUES(latest_added)
+                    """, (library_id, row['series_key'], row['rep_id'], row['series_book_count'],
+                          row['sort_series_name'], row['latest_added']))
+                else:
+                    cursor.execute("DELETE FROM series_summary WHERE library_id = %s AND series_key = %s",
+                                   (library_id, series_key))
+            conn.commit()
+            return len(keys)
         except Exception:
             conn.rollback()
             raise

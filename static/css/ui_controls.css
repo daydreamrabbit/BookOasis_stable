@@ -1,0 +1,44 @@
+/* Native controls follow the app theme, without resizing existing controls or players. */
+:where(.library-main-content, .library-modal, .advanced-search-panel) { color-scheme: dark; }
+:is([data-app-theme="light"],[data-app-theme="sepia"],[data-app-theme="epaper"]) :where(.library-main-content, .library-modal, .advanced-search-panel) { color-scheme: light; }
+:is([data-app-theme="light"],[data-app-theme="sepia"],[data-app-theme="epaper"]) :where(.library-main-content, .library-modal, .advanced-search-panel) :is(input,select,textarea) { color-scheme: light; }
+:where(.settings-table-wrapper, .library-modal-content, .advanced-search-panel,
+       .settings-tab-content [style*="overflow"], .library-modal [style*="overflow"]) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--app-text-muted) var(--app-bg-card);
+}
+:where(.settings-table-wrapper, .library-modal-content, .advanced-search-panel,
+       .settings-tab-content [style*="overflow"], .library-modal [style*="overflow"])::-webkit-scrollbar { width: 8px; height: 8px; }
+:where(.settings-table-wrapper, .library-modal-content, .advanced-search-panel,
+       .settings-tab-content [style*="overflow"], .library-modal [style*="overflow"])::-webkit-scrollbar-track { background: var(--app-bg-card); }
+:where(.settings-table-wrapper, .library-modal-content, .advanced-search-panel,
+       .settings-tab-content [style*="overflow"], .library-modal [style*="overflow"])::-webkit-scrollbar-thumb { background: var(--app-text-muted); border-radius: 8px; }
+:where(.settings-table-wrapper, .library-modal-content, .advanced-search-panel,
+       .settings-tab-content [style*="overflow"], .library-modal [style*="overflow"])::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+:where(.settings-tab-content, .library-modal) :where(button,select):focus-visible { outline: 2px solid var(--app-accent); outline-offset: 2px; }
+#settings-tab-reports .report-selectors {
+    flex-wrap: wrap;
+    flex: 0 1 460px;
+    width: min(100%,460px);
+    max-width: 100%;
+    min-width: 0;
+}
+#settings-tab-reports .report-selectors select { box-sizing: border-box; flex: 1 1 160px; max-width: 100%; }
+#settings-tab-queue .queue-row-layout { display: flex; align-items: center; gap: 8px; min-width: 0; }
+#settings-tab-queue .queue-row-meta { flex-wrap: wrap; justify-content: space-between; }
+.settings-tab-content#settings-tab-metadata-history :is(button,input,select) {
+    background: var(--app-input-bg);
+    color: var(--app-text-primary);
+    border-color: var(--app-border);
+}
+#settings-tab-metadata-history .metadata-history-scroll { min-width: 0; scrollbar-gutter: stable; }
+#settings-tab-metadata-history .metadata-history-scroll table { border-collapse: separate; border-spacing: 0; }
+#settings-tab-metadata-history thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: .65rem;
+    background: var(--app-bg-card);
+    color: var(--app-text-secondary);
+    border-bottom: 1px solid var(--app-border);
+}

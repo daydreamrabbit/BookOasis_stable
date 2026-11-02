@@ -7,7 +7,7 @@ from utils.cache_helper import get_zip_file_hybrid, get_zip_read_lock
 from utils.permission_clause import build_library_permission_clause
 import database
 
-IMG_EXT = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
+from utils.archive_entry import IMG_EXT, is_page_image_name
 
 
 def get_img_files(file_path: str, zf) -> list:
@@ -26,7 +26,7 @@ def get_img_files(file_path: str, zf) -> list:
     from utils.sort_helper import natural_sort_key
 
     img_files = sorted(
-        [n for n in zf.namelist() if n.lower().endswith(IMG_EXT)],
+        [n for n in zf.namelist() if is_page_image_name(n)],
         key=natural_sort_key,
     )
     namelist_cache.put(lookup_key, img_files)
@@ -49,7 +49,7 @@ def get_imgdir_files(folder_path: str) -> list:
         [
             os.path.join(folder_path, n)
             for n in os.listdir(folder_path)
-            if n.lower().endswith(IMG_EXT)
+            if is_page_image_name(n)
         ],
         key=natural_sort_key,
     )

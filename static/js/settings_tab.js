@@ -252,6 +252,7 @@ export function switchSettingsTab(tabId) {
 // 이 S/W는... 버전 정보 로딩 및 렌더링
 async function loadAboutInfo() {
   const dashEl = document.getElementById('about-ver-dashboard');
+  const dbmsEl = document.getElementById('about-ver-dbms');
   const latestEl = document.getElementById('about-ver-latest');
   const stateEl = document.getElementById('about-ver-state');
   const versionInfoEl = document.getElementById('about-update-status');
@@ -262,6 +263,8 @@ async function loadAboutInfo() {
     const data = await res.json();
     if (data.success) {
       dashEl.textContent = `v${data.version.dashboard}`;
+      dashEl.removeAttribute('data-i18n');
+      if (dbmsEl) dbmsEl.textContent = data.version.dbms || '확인 필요';
       stateEl.textContent = data.version.state;
 
       if (latestEl) {
@@ -290,11 +293,13 @@ async function loadAboutInfo() {
         }
       }
     } else {
+      if (dbmsEl) dbmsEl.textContent = '확인 필요';
       setAboutVersionLoadError(dashEl, latestEl, stateEl, 'settings.about_load_failed', '불러오기 실패');
       setAboutUpdateStatus(versionInfoEl, 'settings.about_update_status_failed', '업데이트 상태 확인 실패', '#f43f5e');
     }
   } catch (e) {
     console.error('About 정보 로딩 실패:', e);
+    if (dbmsEl) dbmsEl.textContent = '확인 필요';
     setAboutVersionLoadError(dashEl, latestEl, stateEl, 'settings.about_connection_error', '연결 오류');
     setAboutUpdateStatus(versionInfoEl, 'settings.about_update_status_failed', '업데이트 상태 확인 실패', '#f43f5e');
   }

@@ -3,7 +3,7 @@
 // 보고하고, 뷰어를 열 때 듣기 위치가 더 최근이면 그 문장으로 이동한다 (더 최근 쪽을 따르고 알림 — 2026-09-24 결정).
 // viewer_txt.js ↔ viewer_progress.js 순환 import를 피하려고, 현재 읽기 위치는 뷰어가 등록한 provider로 받는다.
 import { state } from '../state.js';
-import { makeAnchor, resolveOffset, offsetToChunk } from './text_position_utils.js';
+import { makeAnchor, resolveOffset, offsetToChunk, pickOtherDeviceReadTarget } from './text_position_utils.js';
 
 const REPORT_MIN_GAP_MS = 30_000;
 const REPORT_DEBOUNCE_MS = 3_000;
@@ -98,8 +98,11 @@ export async function fetchSyncState(dbType, bookId) {
       cache: 'no-store', signal: controller?.signal,
     });
     if (!res.ok) return null;
+    const receivedAt = Date.now();
     const data = await res.json();
-    return data && data.success ? data.state : null;
+    if (!data?.success || !data.state) return null;
+    const clockOffsetMs = Number(data.server_now_ms) > 0 ? Number(data.server_now_ms) - receivedAt : 0;
+    return { ...data.state, clockOffsetMs };
   } catch (e) {
     return null; // 느리거나 실패하면 동기화 없이 기존대로 연다
   } finally {
@@ -113,12 +116,28 @@ export function listenTargetForTxt(syncState, fullText, chunks) {
   const listen = syncState && syncState.latest === 'listen' ? syncState.listen : null;
   if (!listen || !fullText || !chunks || !chunks.length) return null;
   const offset = resolveOffset(fullText, listen);
-  return { chunkIdx: offsetToChunk(chunks, offset).chunkIdx, anchorText: makeAnchor(fullText, offset) };
+  const location = offsetToChunk(chunks, offset);
+  return { kind: 'listen', chunkIdx: location.chunkIdx, offset: location.inChunk, anchorText: makeAnchor(fullText, offset) };
 }
 
 export function listenTargetForEpub(syncState, totalChapters) {
   const listen = syncState && syncState.latest === 'listen' ? syncState.listen : null;
   if (!listen || !totalChapters) return null;
   const chunkIdx = Math.max(0, Math.min(totalChapters - 1, Number(listen.chapter_idx) || 0));
-  return { chunkIdx, anchorText: listen.anchor || '' };
+  return { kind: 'listen', chunkIdx, offset: Number(listen.char_offset) || 0, anchorText: listen.anchor || '' };
+}
+
+export function readTargetForTxt(syncState, fullText, chunks, localPos) {
+  const read = pickOtherDeviceReadTarget(syncState, localPos);
+  if (!read || !fullText || !chunks?.length) return null;
+  const offset = resolveOffset(fullText, read);
+  const location = offsetToChunk(chunks, offset);
+  return { kind: 'read', chunkIdx: location.chunkIdx, offset: location.inChunk, anchorText: makeAnchor(fullText, offset) };
+}
+
+export function readTargetForEpub(syncState, totalChapters, localPos) {
+  const read = pickOtherDeviceReadTarget(syncState, localPos);
+  if (!read || !totalChapters) return null;
+  const chunkIdx = Math.max(0, Math.min(totalChapters - 1, Number(read.chapter_idx) || 0));
+  return { kind: 'read', chunkIdx, offset: Number(read.char_offset) || 0, anchorText: read.anchor };
 }

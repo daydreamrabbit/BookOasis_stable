@@ -52,7 +52,8 @@ export async function initFloatingFilter() {
     updateActiveFilterBar();
     if (!document.getElementById('genre-tag-filter-mode')) {
         const label = document.createElement('label');
-        label.textContent = '선택값 연결 ';
+        label.className = 'filter-match-mode';
+        label.textContent = '선택값 연결';
         const mode = document.createElement('select');
         mode.id = 'genre-tag-filter-mode';
         mode.setAttribute('aria-label', '장르·태그 AND/OR');
@@ -60,7 +61,7 @@ export async function initFloatingFilter() {
             const option = document.createElement('option'); option.value=value; option.textContent=text; mode.append(option);
         }
         mode.value = state.filterMode || 'and';
-        label.append(mode); searchInput?.parentElement?.append(label);
+        label.append(mode); searchInput?.parentElement?.after(label);
     }
 
     // 드래그 앤 드롭 바인딩
@@ -69,7 +70,11 @@ export async function initFloatingFilter() {
     document.addEventListener('mousemove', drag);
 
     // 버튼 이벤트 바인딩
-    btnClose.addEventListener('click', toggleFilterModal);
+    btnClose.addEventListener('click', closeFilterModal);
+    window.addEventListener('bookoasis:view-changing', event => {
+        if (event.detail?.viewName !== 'grid') closeFilterModal();
+    });
+    window.addEventListener('library:category-selected', closeFilterModal);
     btnReset.addEventListener('click', resetAllFilters);
     btnApply.addEventListener('click', applyFilters);
 
@@ -295,6 +300,13 @@ async function leaveDetailForQuickFilter() {
     if (typeof window.goBackToList === 'function') window.goBackToList(false);
 }
 
+// Close the surface only; retain the existing filter/navigation state policy.
+export function closeFilterModal() {
+    const modal = document.getElementById('floating-filter-modal');
+    if (modal) modal.style.display = 'none';
+    activeDrag = false;
+}
+
 // 모달 토글
 export function toggleFilterModal() {
     const modal = document.getElementById('floating-filter-modal');
@@ -307,7 +319,7 @@ export function toggleFilterModal() {
         // 카테고리/스코프 변경 시 stale 데이터가 남지 않도록 모달 오픈마다 재조회
         loadGenresAndTagsData();
     } else {
-        modal.style.display = 'none';
+        closeFilterModal();
     }
 }
 
@@ -499,8 +511,8 @@ export async function applyFilters() {
     // 알림 바 UI 업데이트
     updateActiveFilterBar();
 
-    // 모달 닫기
-    toggleFilterModal();
+    // Navigation may already have closed the surface; never toggle it back open.
+    closeFilterModal();
 }
 
 // 필터 전체 초기화

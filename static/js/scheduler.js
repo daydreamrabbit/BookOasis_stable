@@ -79,7 +79,7 @@ function buildScheduleRow(lib) {
 
   return `
     <tr data-library-id="${lib.id}" class="${scheduleEnabled ? '' : 'schedule-row-disabled'}" style="border-bottom: 1px solid rgba(255,255,255,0.05); hover: background: rgba(255,255,255,0.02);">
-      <td style="padding: 1rem; font-weight: 600; color: var(--app-text-primary);">${escapeHtml(lib.name)}<span data-watch-status>${watchSummary(lib.watch)}</span>${lib.watch ? `<button type="button" data-role="folder-watch-settings" data-library-id="${lib.id}" style="margin-top:6px">폴더 감시 설정</button>` : ''}</td>
+      <td style="padding: 1rem; font-weight: 600; color: var(--app-text-primary);">${escapeHtml(lib.name)}<span data-watch-status>${watchSummary(lib.watch)}</span>${lib.watch ? `<button type="button" class="btn-toggle active" data-role="folder-watch-settings" data-library-id="${lib.id}" style="margin-top:8px;min-height:32px;padding:0.35rem 0.65rem;font-size:0.75rem;white-space:nowrap">폴더 감시 설정</button>` : ''}</td>
       <td class="schedule-path-cell">${buildCompactPaths(lib.physical_path)}</td>
       <td style="padding: 1rem; text-align: center;">
         <div style="position: relative; display: inline-block; width: 44px; height: 24px; vertical-align: middle;">
@@ -287,6 +287,7 @@ export async function loadLibrarySchedules() {
 }
 
 export async function refreshLibraryScheduleStatuses() {
+  initScheduleActionDelegation();
   const container = document.getElementById('settings-libraries-list');
   if (!container) return;
   const requestType = state.currentLibraryType;

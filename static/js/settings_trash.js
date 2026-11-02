@@ -114,18 +114,16 @@ function loadTrashList() {
             }
 
             body.innerHTML = list.map(item => `
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.04); background: rgba(255,255,255,0.01); transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.03)'" onmouseout="this.style.background='rgba(255,255,255,0.01)'">
-                    <td style="padding: 0.75rem 1rem; text-align: center;">
-                        <input type="checkbox" class="trash-item-checkbox" value="${item.id}" style="cursor: pointer; width: 14px; height: 14px; accent-color: #3b82f6;">
-                    </td>
-                    <td style="padding: 0.75rem 1rem; font-weight: 500; color: var(--app-text-primary);">${escapeHtml(item.title)}</td>
-                    <td style="padding: 0.75rem 1rem; color: var(--app-text-muted); font-family: monospace; font-size: 0.775rem; word-break: break-all;">${escapeHtml(item.file_path)}</td>
-                    <td style="padding: 0.75rem 1rem;"><span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.25); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.75rem;">${escapeHtml(item.library_name)}</span></td>
-                    <td style="padding: 0.75rem 1rem; color: var(--app-text-muted); font-size: 0.8rem;">${item.deleted_at || '-'}</td>
-                    <td style="padding: 0.75rem 1rem; text-align: center; display: flex; justify-content: center; gap: 0.35rem;">
-                        <button class="btn btn-secondary" data-role="trash-restore-single" data-book-id="${item.id}" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; border-radius: 4px;">복구</button>
-                        <button class="btn btn-danger-outline" data-role="trash-delete-single" data-book-id="${item.id}" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; border-radius: 4px;">삭제</button>
-                    </td>
+                <tr>
+                    <td class="trash-select-cell"><input type="checkbox" class="trash-item-checkbox" value="${item.id}" aria-label="도서 선택"></td>
+                    <td class="trash-title-cell">${escapeHtml(item.title)}</td>
+                    <td class="trash-path-cell">${escapeHtml(item.file_path)}</td>
+                    <td><span class="trash-library-badge">${escapeHtml(item.library_name)}</span></td>
+                    <td class="trash-date-cell">${item.deleted_at || '-'}</td>
+                    <td class="trash-actions-cell"><div class="trash-row-actions">
+                        <button type="button" class="trash-button" data-role="trash-restore-single" data-book-id="${item.id}">복구</button>
+                        <button type="button" class="trash-button trash-button-danger-outline" data-role="trash-delete-single" data-book-id="${item.id}">삭제</button>
+                    </div></td>
                 </tr>
             `).join('');
         })

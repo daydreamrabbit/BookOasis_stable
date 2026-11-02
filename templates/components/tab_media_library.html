@@ -8,11 +8,13 @@
 <link rel="stylesheet" href="{{ static_asset_url('css/dashboard_welcome.css') }}">
 <link rel="stylesheet" href="{{ static_asset_url('css/reading_activity.css') }}">
 <link rel="stylesheet" href="{{ static_asset_url('css/profile_customization.css') }}">
+<link rel="stylesheet" href="{{ static_asset_url('css/library_controls.css') }}">
+<link rel="stylesheet" href="{{ static_asset_url('css/ui_controls.css') }}">
 <script>
     window.__BO_LIB_URLS = {{ {
       'jszip': static_asset_url('lib/jszip/jszip.min.js'),
-      'pdfjs': static_asset_url('lib/pdfjs/pdf.min.js'),
-      'pdfjsWorker': static_asset_url('lib/pdfjs/pdf.worker.min.js')
+      'pdfjs': static_asset_url('lib/pdfjs-6.4.299/pdf.min.mjs'),
+      'pdfjsWorker': static_asset_url('lib/pdfjs-6.4.299/pdf.worker.min.mjs')
     } | tojson }};
 </script>
 

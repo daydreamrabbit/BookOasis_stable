@@ -36,10 +36,27 @@ export async function ensureJSZip() {
   return window.JSZip;
 }
 
+const PDFJS_FALLBACK = '/static/lib/pdfjs-6.4.299/pdf.min.mjs';
+let pdfJsPromise = null;
+
+// pdf.js 6.x는 ES 모듈이라 import()로 불러온다. 플러그인이 예전처럼 전역 pdfjsLib을 쓸 수 있게 window에도 둔다.
 export async function ensurePdfJs() {
-  if (!window.pdfjsLib) await loadScriptOnce(libUrl('pdfjs', '/static/lib/pdfjs/pdf.min.js'));
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc = libUrl('pdfjsWorker', '/static/lib/pdfjs/pdf.worker.min.js');
-  return window.pdfjsLib;
+  if (!pdfJsPromise) {
+    pdfJsPromise = import(libUrl('pdfjs', PDFJS_FALLBACK)).then((mod) => {
+      window.pdfjsLib = mod;
+      mod.GlobalWorkerOptions.workerSrc = libUrl('pdfjsWorker', '/static/lib/pdfjs-6.4.299/pdf.worker.min.mjs');
+      return mod;
+    }).catch((err) => {
+      pdfJsPromise = null; // 다음 호출 때 다시 시도
+      throw err;
+    });
+  }
+  return pdfJsPromise;
+}
+
+// cmaps/standard_fonts/wasm/iccs가 들어 있는 pdf.js 폴더 주소(끝에 /)
+export function pdfJsAssetBase() {
+  return libUrl('pdfjs', PDFJS_FALLBACK).split('?')[0].replace(/[^/]+$/, '');
 }
 
 // 플러그인 코드(new Function으로 실행)가 예전처럼 미리 로드된 전역을 기대해도 동작하게 한다.
@@ -50,5 +67,7 @@ export function withPluginGlobals(source, run) {
   if (!window.JSZip && /\bJSZip\b/.test(src)) needs.push(ensureJSZip());
   if (!window.pdfjsLib && /\bpdfjsLib\b/.test(src)) needs.push(ensurePdfJs());
   if (!needs.length) return run();
-  return Promise.all(needs).then(() => run());
+  return Promise.all(needs)
+    .catch((err) => console.error('[script_loader] 플러그인용 라이브러리 불러오기 실패:', err))
+    .then(() => run());
 }

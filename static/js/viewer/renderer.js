@@ -461,11 +461,16 @@ export function loadComicPage() {
     const loadScrollImage = (img) => {
       if (!img || img.dataset.loaded === '1' || !img.dataset.src) return;
       const url = img.dataset.src;
+      const isActiveImage = () => isCurrentRender() && img.isConnected;
+      let retries = 0;
+      let retryTimer = null;
       img.dataset.loaded = '1';
 
       loadTrace.log('scroll image fetch start', { index: img.dataset.index, url });
 
       const handleImgLoad = () => {
+        clearTimeout(retryTimer);
+        if (!isActiveImage()) return;
         loadTrace.log('scroll image loaded', { index: img.dataset.index });
         img.style.opacity = '1';
         img.style.minHeight = '0';
@@ -478,6 +483,18 @@ export function loadComicPage() {
 
       img.onload = handleImgLoad;
       img.onerror = () => {
+        clearTimeout(retryTimer);
+        if (!isActiveImage()) return;
+        if (retries < 2) {
+          const attempt = ++retries;
+          retryTimer = setTimeout(() => {
+            if (!isActiveImage()) return;
+            const retryUrl = new URL(url, window.location.href);
+            retryUrl.searchParams.set('_retry', String(attempt));
+            img.src = retryUrl.href;
+          }, attempt * 1000);
+          return;
+        }
         loadTrace.log('scroll image load failed', { index: img.dataset.index });
         console.error(`[Viewer-Comic] Scroll image load failed: page_idx=${img.dataset.index}`);
         img.style.opacity = '1';
@@ -486,7 +503,7 @@ export function loadComicPage() {
           firstLoaded = true;
           hideViewerLoading();
         }
-        showViewerError('Error', 'Failed to load image');
+        showViewerError('이미지를 불러오지 못했습니다.', '파일 연결 상태를 확인한 뒤 다시 열어 주세요.');
       };
 
       img.src = url;

@@ -573,7 +573,10 @@ async function playCurrent() {
     player.addEventListener('loadedmetadata', () => { player.currentTime = offset; }, { once: true });
     log(`${S.cur + 1}번째 조각 ${offset.toFixed(1)}초부터 재생`);
   }
-  player.play().catch((e) => log(`재생 실패 #${S.cur + 1}: ${e.name} ${e.message}`));
+  player.play().catch((e) => {
+    if (attempt !== playAttempt || token !== S.token || S.userPaused) return;
+    handlePlaybackFailure(e);
+  });
   renderStatus(); renderPlayBtn();
 }
 
@@ -602,6 +605,21 @@ function primeAudio() {
   return p;
 }
 
+window.addEventListener('bookoasis-tts-unlock', () => {
+  if (embedMode && !playerDisposed && (!S.active || S.userPaused)) S.primePromise = primeAudio();
+});
+
+function handlePlaybackFailure(error) {
+  log(`재생 실패: ${error.name} ${error.message}`);
+  S.userPaused = true;
+  player.pause();
+  renderPlayBtn(); renderStatus();
+  if (error.name === 'NotAllowedError') {
+    if (embedMode) toast('음성 재생을 허용하려면 하단의 TTS 재생 버튼을 한 번 더 눌러주세요.');
+    else $('tapStart').hidden = false;
+  } else toast('음성을 재생하지 못했습니다. 다시 재생해주세요.');
+}
+
 // 자동 시작: 브라우저 자동재생 정책상 이 페이지에서 사용자가 누른 적이 없으면 소리 재생이 막힌다
 // (누른 곳은 원래 화면이라 새 페이지로 넘어오지 않는다). 막히면 되돌리고 화면 전체 "탭해서 듣기"를 띄운다.
 // 홈 화면에 추가(PWA)했거나 미디어 재생 이력이 많으면 브라우저가 허용하기도 한다.
@@ -616,7 +634,8 @@ async function startAutoplay() {
     S.active = false; S.token++; wakeGenerator(); clearClips(); S.waiting = false;
     player.pause();
     renderPlayBtn(); renderStatus();
-    $('tapStart').hidden = false;
+    if (embedMode) handlePlaybackFailure(e);
+    else $('tapStart').hidden = false;
   }
 }
 $('tapStart').onclick = () => {
@@ -636,7 +655,7 @@ function togglePlay() {
   } else if (isPausedByUser() && !S.waiting) {
     S.userPaused = false;
     S.resumeTries = 0;
-    player.play().catch((e) => log('재생 실패: ' + e.message));
+    player.play().catch(handlePlaybackFailure);
   } else {
     // 생성 대기 중에 누르면 멈춘다 (다시 누르면 그 자리에서 이어서)
     S.userPaused = true;
@@ -647,7 +666,7 @@ function togglePlay() {
 }
 
 player.addEventListener('ended', () => {
-  if (player.dataset.prime === '1') { player.dataset.prime = '0'; if (!S.waiting) playCurrent(); return; }
+  if (player.dataset.prime === '1') { player.dataset.prime = '0'; if (S.active && !S.waiting) playCurrent(); return; }
   const finishedClip = S.clips.get(S.cur);
   if (finishedClip && player.src === finishedClip.url) {
     S.heardChapterSeconds += Math.max(0, finishedClip.audioSec - player.currentTime);

@@ -539,7 +539,8 @@ export function initViewerClickToggle() {
           touchTarget.closest('#comic-fit-controls') ||
           touchTarget.closest('#comic-overlay-menu') ||
           touchTarget.closest('#epub-toc-container') ||
-          touchTarget.closest('.viewer-side-panel')
+          touchTarget.closest('.viewer-side-panel') ||
+          touchTarget.closest('.ridi-view-settings')
         );
         touchStartedOnControl = !!onControl;
 

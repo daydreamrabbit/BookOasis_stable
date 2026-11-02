@@ -13,8 +13,10 @@ export async function openFolderWatch(libraryId, type, onSaved) {
   document.getElementById('folder-watch-dialog')?.remove();
   const dialog = document.createElement('dialog');
   dialog.id = 'folder-watch-dialog';
-  dialog.style.cssText = 'width:min(480px,calc(100vw - 32px));max-height:80dvh;overflow:auto;box-sizing:border-box;padding:20px;border:1px solid var(--app-border,#555);border-radius:12px;background:var(--app-panel,#222);color:var(--app-text-primary,#eee);';
-  dialog.innerHTML = '<p>폴더 감시 설정을 불러오는 중…</p><button type="button">닫기</button>';
+  dialog.setAttribute('aria-label', '폴더 감시 설정');
+  dialog.addEventListener('close', () => dialog.remove());
+  dialog.style.cssText = 'width:min(480px,calc(100vw - 32px));max-height:80dvh;overflow:auto;box-sizing:border-box;padding:20px;border:1px solid var(--app-border,#555);border-radius:12px;background:var(--app-bg-card,#222);color:var(--app-text-primary,#eee);';
+  dialog.innerHTML = '<p>폴더 감시 설정을 불러오는 중…</p><button class="btn-toggle active" type="button">닫기</button>';
   dialog.querySelector('button').onclick = () => dialog.remove();
   document.body.append(dialog);dialog.showModal();
   const url = `/api/media/libraries/${libraryId}/watch?type=${encodeURIComponent(type)}`;
@@ -39,7 +41,7 @@ export async function openFolderWatch(libraryId, type, onSaved) {
       <label><input name="reflect_deletions" type="checkbox" ${c.reflect_deletions?'checked':''}> 사라진 도서를 라이브러리 휴지통으로 이동</label>
       <small>원본 파일은 삭제하지 않습니다. 전체/대량 누락은 연결 장애로 판단해 보류합니다. 처음 켤 때는 기준 목록만 저장합니다.</small>
       <p role="status" style="white-space:pre-wrap;margin:0"></p>
-      <div style="display:flex;gap:10px;justify-content:flex-end"><button type="button" data-close>닫기</button><button type="submit">저장</button></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn-toggle" type="button" data-close>닫기</button><button class="btn-toggle active" type="submit">저장</button></div>
     </form>`;
     const form=dialog.querySelector('form');form.elements.mode.value=c.mode;
     const checked=data.watch.last_check?new Date(data.watch.last_check*1000).toLocaleString():'아직 확인 전';

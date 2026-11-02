@@ -31,6 +31,8 @@ TRASH_PURGE_DAYS = 7
 OK, FAIL, WARN, SKIP = 'ok', 'fail', 'warn', 'skip'
 
 _ZIP_FORMATS = ('zip', 'cbz', 'epub')
+_PAGE_ARCHIVE_FORMATS = ('zip', 'cbz')
+_VIDEO_EXT = ('.mp4', '.mkv', '.avi', '.mov', '.wmv', '.webm', '.m4v', '.ts', '.flv')
 
 
 def _check(check_id, status, key, **vars_):
@@ -132,6 +134,15 @@ def _format_state(path, fmt):
         with open(path, 'rb') as f:
             return 'ok' if f.read(5) == b'%PDF-' else 'bad'
     return 'skip'
+
+
+def _archive_content(path):
+    """Read only the ZIP directory; never extract payloads or macOS resource forks."""
+    from utils.archive_entry import is_macos_junk_name, is_page_image_name
+    with zipfile.ZipFile(path) as zf:
+        names = [n for n in zf.namelist() if not n.endswith('/')]
+    return (sum(is_page_image_name(n) for n in names),
+            sum(n.lower().endswith(_VIDEO_EXT) and not is_macos_junk_name(n) for n in names))
 
 
 def _human_size(size):
@@ -273,10 +284,31 @@ def diagnose_book(db_type, book_id):
         return result('file_corrupt')
     checks.append(_check('format', SKIP if value == 'skip' else OK, value))
 
+    video_inside = False
+    if (book.get('file_format') or '').lower() in _PAGE_ARCHIVE_FORMATS:
+        try:
+            done, value = _with_timeout(lambda: _archive_content(path), key=('content', path))
+        except (zipfile.BadZipFile, EOFError):
+            checks.append(_check('content', FAIL, 'bad'))
+            actions.append(rescan_book)
+            return result('file_corrupt')
+        except OSError:
+            checks.append(_check('remote', FAIL, 'unreachable', path=path))
+            return result('remote_unavailable')
+        if not done:
+            checks.append(_check('content', FAIL, 'timeout', seconds=FS_TIMEOUT_SECONDS))
+            return result('remote_slow')
+        images, videos = value
+        if videos:
+            video_inside = True
+            checks.append(_check('content', WARN, 'video_inside', images=images, videos=videos))
+
     if book.get('is_deleted'):
         # 파일이 다시 있다 → 다음 스캔(폴더 재스캔)에서 휴지통에서 복구된다
         actions.append(rescan_folder)
         return result('trashed_but_present')
+    if video_inside:
+        return result('video_inside')
     if problems:
         actions.append(rescan_book)
         return result('healthy_with_problems', count=len(problems))

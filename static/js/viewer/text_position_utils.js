@@ -76,3 +76,19 @@ export function offsetToChunk(chunks, offset) {
   }
   return { chunkIdx: lo, inChunk: target - starts[lo] };
 }
+
+// 이 기기의 마지막 안정 위치보다 서버 읽기 문장이 새로울 때만 선택한다.
+// 시계 차이와 이 기기 자신의 종료 보고 지연은 5초 여유로 보정한다.
+export function pickOtherDeviceReadTarget(syncState, localPos, { marginMs = 5000 } = {}) {
+  const read = syncState?.latest === 'read' ? syncState.read : null;
+  if (!read?.anchor || !(Number(read.updated_ms) > 0)) return null;
+  const compact = value => String(value || '').replace(/\s+/g, '');
+  if (localPos?.anchorText && Number(localPos.chunkIdx) === Number(read.chapter_idx)
+      && compact(localPos.anchorText) === compact(read.anchor)) return null;
+  const savedAt = Number(localPos?.savedAt) || 0;
+  if (savedAt > 0) {
+    const localOnServerClock = savedAt + (Number(syncState.clockOffsetMs) || 0);
+    if (!(Number(read.updated_ms) > localOnServerClock + marginMs)) return null;
+  }
+  return read;
+}

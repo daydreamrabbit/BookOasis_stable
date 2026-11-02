@@ -68,6 +68,13 @@ function postToPlayer(message) {
   return true;
 }
 
+function unlockPlayerAudio() {
+  // postMessage callbacks run after the reader's user gesture has ended.
+  // Keep the audio element unlock in the same call stack as the user's tap.
+  if (!playerPaused) return;
+  try { frame?.contentWindow?.dispatchEvent(new Event('bookoasis-tts-unlock')); } catch (_) { /* frame not ready */ }
+}
+
 function clearHighlight() {
   try { window.CSS?.highlights?.delete('bookoasis-tts-current'); } catch (_) { /* CSS Highlights 미지원 */ }
   activeHighlight = null;
@@ -269,6 +276,7 @@ async function ensureInlinePlayer({ autoplay = false, openSettings = false } = {
   if (!bookId || !['general', 'adult'].includes(dbType)
       || !['txt', 'text', 'epub'].includes(String(state.currentViewerFormat || '').toLowerCase())) return;
   if (host && autoplay) {
+    unlockPlayerAudio();
     const position = getCurrentReadPosition();
     postToPlayer({ type: 'start-position', position });
     lastTtsViewport = viewportKey(position);
@@ -310,7 +318,10 @@ async function ensureInlinePlayer({ autoplay = false, openSettings = false } = {
     play.title = 'TTS 재생';
     play.setAttribute('aria-label', play.title);
     play.innerHTML = '<i class="fa-solid fa-play"></i>';
-    play.onclick = () => postToPlayer({ type: 'toggle-play' });
+    play.onclick = () => {
+      unlockPlayerAudio();
+      postToPlayer({ type: 'toggle-play' });
+    };
     document.getElementById('seekbar-btn-first')?.after(play);
     themeObserver = new MutationObserver(syncPlayerTheme);
     themeObserver.observe(document.getElementById('media-viewer-modal'), { attributes: true, attributeFilter: ['style','data-viewer-theme'] });

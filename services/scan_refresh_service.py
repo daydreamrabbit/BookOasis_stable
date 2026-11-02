@@ -1,24 +1,17 @@
 # -*- coding: utf-8 -*-
-"""
-scan_refresh_service.py – 큐를 거치지 않는 즉시(동기) 스캔 뒤의 목록 반영
-
-큐 스캔은 끝날 때 scanner_queue가 시리즈 요약 테이블(series_summary) 재생성 + 목록 캐시 무효화를 한다.
-그런데 경로 지정 즉시 스캔(/libraries/<id>/scan-path, 시스템 API의 path 스캔, 플러그인 웹뷰 다운로드 등록)은
-큐를 거치지 않아 이 처리가 빠져 있었다. 일반 목록(그리드)은 요약 테이블을 먼저 읽고, 요약 테이블은
-시간이 지난다고 저절로 갱신되지 않으므로, 새 도서가 검색에는 나오는데 그리드에는 다음 큐 스캔 전까지
-보이지 않았다(커뮤니티 제보: Mate의 scan-path 등록).
-
-- 최근 추가/기록 캐시는 즉시 지운다(가볍다).
-- 요약 재생성(DB 전체 재집계, 수십만 권이면 1초 이상)과 목록 캐시 무효화는 짧게 모아(DEBOUNCE_SEC)
-  백그라운드에서 한 번 한다 - 여러 권을 연달아 등록해도 매번 다시 만들지 않고, API 응답을 늦추지 않는다.
-"""
+"""Refresh only changed series after direct scans; retain custom summary/health policy."""
+import os
 import threading
 import time
+from contextlib import contextmanager
 
 DEBOUNCE_SEC = 1.0
-
+MAX_INCREMENTAL_KEYS = 500
+SUMMARY_DB_TYPES = ('general', 'adult')
 _lock = threading.Lock()
 _timers = {}
+_pending = {}
+_running = set()
 
 
 def _clear_recent_caches(db_type):
@@ -26,41 +19,125 @@ def _clear_recent_caches(db_type):
         from utils.redis_helper import redis_delete_pattern
         redis_delete_pattern(f"cache:recent_added*:{db_type}:*")
         redis_delete_pattern(f"cache:history*:{db_type}:*")
-    except Exception as e:
-        print(f"[ScanRefresh] recent cache clear failed ({db_type}): {e}")
+    except Exception as error:
+        print(f"[ScanRefresh] recent cache clear failed ({db_type}): {error}")
 
 
-def rebuild_series_views(db_type):
-    """요약 테이블 재생성 + 목록 캐시 무효화 (웹/워커 프로세스 모두 공유 epoch로 감지)."""
+def rebuild_series_views(db_type, keys=None):
+    from repositories.series_repository import SeriesRepository
     from services.series_service import SeriesService
-    from services.system_health_service import SystemHealthService
+    from services.system_health_service import SystemHealthService, series_summary_health_key
     try:
-        if db_type in ('general', 'adult'):
-            started = time.perf_counter()
-            SystemHealthService.rebuild_series_summary(db_type)
-            print(f"[ScanRefresh] series summary rebuilt after direct scan: db={db_type}, "
-                  f"elapsed_ms={(time.perf_counter() - started) * 1000:.1f}")
-    except Exception as e:
-        print(f"[ScanRefresh] series summary rebuild failed ({db_type}): {e}")
+        if db_type not in SUMMARY_DB_TYPES:
+            return
+        started = time.perf_counter()
+        refreshed = None
+        if keys is not None and len(keys) <= MAX_INCREMENTAL_KEYS:
+            try:
+                refreshed = SeriesRepository.refresh_summary_keys(db_type, sorted(keys)) if keys else 0
+            except Exception as error:
+                # The repository rolled back; preserve visibility by falling back to a full rebuild.
+                print(f"[ScanRefresh] incremental refresh failed ({db_type}), rebuilding: {error}")
+            if refreshed:
+                SystemHealthService.record_success(series_summary_health_key(db_type)[0])
+        if refreshed is None:
+            rebuilt = SystemHealthService.rebuild_series_summary(db_type)
+            mode = 'full' if rebuilt else 'already fresh'
+        else:
+            mode = f'keys={refreshed}'
+        print(f"[ScanRefresh] summary refreshed: db={db_type}, {mode}, "
+              f"elapsed_ms={(time.perf_counter() - started) * 1000:.1f}")
+    except Exception as error:
+        print(f"[ScanRefresh] series summary refresh failed ({db_type}): {error}")
     finally:
         SeriesService.invalidate_all_books_cache(db_type=db_type)
+
+
+def _schedule_locked(db_type):
+    timer = threading.Timer(DEBOUNCE_SEC, _run, args=(db_type,))
+    timer.daemon = True
+    _timers[db_type] = timer
+    timer.start()
 
 
 def _run(db_type):
     with _lock:
         _timers.pop(db_type, None)
-    rebuild_series_views(db_type)
+        if db_type in _running:
+            return
+        _running.add(db_type)
+    try:
+        while True:
+            with _lock:
+                job = _pending.pop(db_type, None)
+                if job is None:
+                    return
+            rebuild_series_views(db_type, None if job['full'] else job['keys'])
+    finally:
+        with _lock:
+            _running.discard(db_type)
+            if db_type in _pending and db_type not in _timers:
+                _schedule_locked(db_type)
 
 
-def refresh_after_direct_scan(db_type):
-    """즉시 스캔이 끝난 뒤 부른다. 같은 db_type 요청이 DEBOUNCE_SEC 안에 또 오면 한 번으로 모은다."""
+def refresh_after_direct_scan(db_type, keys=None):
     db_type = str(db_type or 'general')
     _clear_recent_caches(db_type)
     with _lock:
-        timer = _timers.get(db_type)
+        job = _pending.setdefault(db_type, {'keys': set(), 'full': False})
+        if keys is None:
+            job['full'] = True
+            job['keys'].clear()
+        elif not job['full']:
+            job['keys'].update(keys)
+            if len(job['keys']) > MAX_INCREMENTAL_KEYS:
+                job['full'] = True
+                job['keys'].clear()
+        timer = _timers.pop(db_type, None)
         if timer is not None:
             timer.cancel()
-        timer = threading.Timer(DEBOUNCE_SEC, _run, args=(db_type,))
-        timer.daemon = True
-        _timers[db_type] = timer
-        timer.start()
+        _schedule_locked(db_type)
+
+
+def _scope_prefix(target_path):
+    from tools.scanner.path_utils import canonical_path
+    path = str(target_path or '').strip()
+    return canonical_path(os.path.dirname(path) if os.path.isfile(path) else path)
+
+
+def _snapshot(db_type, library_id, prefix):
+    try:
+        from repositories.series_repository import SeriesRepository
+        return SeriesRepository.fetch_series_snapshot(db_type, library_id, prefix)
+    except Exception as error:
+        print(f"[ScanRefresh] series snapshot failed ({db_type}, library={library_id}): {error}")
+        return None
+
+
+def changed_series_keys(library_id, before, after):
+    keys = set()
+    for book_id in set(before) | set(after):
+        old, new = before.get(book_id), after.get(book_id)
+        if old != new:
+            if old:
+                keys.add((library_id, old[0]))
+            if new:
+                keys.add((library_id, new[0]))
+    return keys
+
+
+@contextmanager
+def track_direct_scan(db_type, library_id, target_path):
+    from utils.drive_helper import is_gdrive_url
+    db_type = str(db_type or 'general')
+    before = prefix = None
+    if db_type in SUMMARY_DB_TYPES and not is_gdrive_url(str(target_path or '')):
+        prefix = _scope_prefix(target_path)
+        before = _snapshot(db_type, library_id, prefix)
+    yield
+    keys = None
+    if before is not None:
+        after = _snapshot(db_type, library_id, prefix)
+        if after is not None:
+            keys = changed_series_keys(library_id, before, after)
+    refresh_after_direct_scan(db_type, keys=keys)

@@ -171,6 +171,11 @@
       "rescan_book": "Rescan this book"
     },
     "check": {
+      "content": {
+        "video_inside": "Archive contains video ({images} images, {videos} videos)",
+        "timeout": "Archive content check not responding ({seconds}s)",
+        "bad": "The archive directory could not be read."
+      },
       "db": {
         "ok": "DB record OK",
         "trashed": "In the trash · auto-deleted on {purge}",
@@ -200,6 +205,7 @@
       }
     },
     "result": {
+      "video_inside": "This ZIP bundles a video, which the comic viewer can't play. Extract the video into a video course category folder.",
       "healthy": "No problems found.",
       "healthy_with_problems": "Healthy now. Rescan or clear the {count} open problem records below from the card.",
       "no_record": "This book is not in the DB (it may have been permanently deleted).",
