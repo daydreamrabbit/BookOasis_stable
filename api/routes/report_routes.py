@@ -54,6 +54,9 @@ def get_library_reports(library_id):
                 'timestamp': formatted_time,
                 'errors_count': errors_count
             })
+        from services.task_failure_reports import list_task_reports
+        report_list.extend(list_task_reports(db_type, library_id))
+        report_list.sort(key=lambda item: item['timestamp'], reverse=True)
         return jsonify({'success': True, 'reports': report_list})
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
@@ -67,6 +70,12 @@ def view_report_detail():
     user_file = request.args.get('file', '').strip()
     
     try:
+        if user_file.startswith('task-'):
+            from services.task_failure_reports import task_report
+            report = task_report(user_file)
+            if report is None:
+                return jsonify({'success': False, 'error': _t('api.err_report_not_found')}), 404
+            return jsonify({'success': True, 'report': report})
         filepath, _ = _resolve_report_file_path(user_file)
         if not os.path.exists(filepath):
             return jsonify({'success': False, 'error': _t('api.err_report_not_found')}), 404

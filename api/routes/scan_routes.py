@@ -649,6 +649,9 @@ def get_scan_history_api():
     try:
         from repositories.scanner_queue_repository import ScannerQueueRepository
         history = ScannerQueueRepository.get_scan_history(limit=20)
+        from services.task_failure_reports import failure_reason
+        for item in history:
+            item['failure_reason'] = failure_reason(item.get('error_message')) if item.get('status') in ('failed','cancelled') else ''
 
         return jsonify({'success': True, 'history': history})
     except Exception as e:

@@ -4,6 +4,7 @@ import json
 import os
 
 import database
+from services.task_failure_reports import failure_reason
 
 from apscheduler.triggers.cron import CronTrigger
 from repositories.scanner_queue_repository import ScannerQueueRepository
@@ -78,7 +79,8 @@ def scan_activity_details(now=None):
                 pass
         history.append(dict(id=row['id'], type=row['task_type'], key=row['task_key'],
             kwargs=kwargs, library_name=name or '도서 스캔', status=row['status'],
-            started_at=row.get('started_at'), finished_at=row.get('finished_at')))
+            started_at=row.get('started_at'), finished_at=row.get('finished_at'),
+            failure_reason=failure_reason(row.get('error_message'), hide_paths=True) if row['status'] in ('failed','cancelled') else ''))
     upcoming.sort(key=lambda item: dt.datetime.fromisoformat(item['next_run_at']))
     history.sort(key=lambda item: str(item['finished_at'] or ''), reverse=True)
     return dict(history=history, upcoming=upcoming, unavailable=unavailable)

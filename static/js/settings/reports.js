@@ -6,6 +6,7 @@ import { formatRelativeTime } from '../utils/time.js';
 let currentReportErrors = [];
 let currentReportPage = 1;
 const ITEMS_PER_PAGE = 50;
+const escapeReportText = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 
 function initReportsDelegation() {
   if (window.__reportsDelegationBound) return;
@@ -138,6 +139,7 @@ export async function loadScanHistory() {
           <td style="padding: 0.8rem 1rem; text-align: center;">${triggerBadge}</td>
           <td style="padding: 0.8rem 1rem; text-align: center; font-size: 0.8rem;">${statusBadge}</td>
         </tr>
+        ${item.failure_reason ? `<tr class="scan-history-failure-reason"><td colspan="6" style="padding:.5rem 1rem 1rem;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--app-text-secondary)">원인: ${escapeReportText(item.failure_reason)}</td></tr>` : ''}
       `;
     }).join('');
 
@@ -192,7 +194,7 @@ export async function loadReportList() {
       res.reports.forEach(rep => {
         const option = document.createElement('option');
         option.value = rep.filename;
-        option.textContent = `${rep.timestamp} (오류: ${rep.errors_count}건)`;
+        option.textContent = `${rep.timestamp} (${rep.kind === 'task_interruption' ? '작업 중단' : '오류: '+rep.errors_count+'건'})`;
         fileSelect.appendChild(option);
       });
       
@@ -327,15 +329,15 @@ function renderReportPage() {
 
     html += `
       <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;">
-        <td style="padding: 0.8rem 1rem; color: var(--app-text-primary); font-weight: 600; word-break: break-all;">${err.filename || ''}</td>
+        <td style="padding: 0.8rem 1rem; color: var(--app-text-primary); font-weight: 600; word-break: break-all;">${escapeReportText(err.filename)}</td>
         <td style="padding: 0.8rem 1rem; text-align: center; vertical-align: middle;">
           <span style="background: ${typeBadgeColor}; color: ${typeTextColor}; font-size: 0.75rem; font-weight: 700; padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid ${typeTextColor}33;">
-            ${err.error_type || 'Unknown'}
+            ${escapeReportText(err.error_type || 'Unknown')}
           </span>
         </td>
         <td style="padding: 0.8rem 1rem; color: var(--app-text-muted); font-size: 0.82rem; line-height: 1.4; word-break: break-all;">
-          <div style="color: var(--app-text-muted); margin-bottom: 0.2rem; font-weight: 500;">${msg}</div>
-          <div style="font-size: 0.74rem; opacity: 0.6; color: var(--app-text-muted);"><i class="fa-regular fa-folder" style="margin-right: 0.2rem;"></i>${err.file_path || ''}</div>
+          <div style="color: var(--app-text-muted); margin-bottom: 0.2rem; font-weight: 500;">${escapeReportText(msg)}</div>
+          <div style="font-size: 0.74rem; opacity: 0.6; color: var(--app-text-muted);"><i class="fa-regular fa-folder" style="margin-right: 0.2rem;"></i>${escapeReportText(err.file_path)}</div>
         </td>
       </tr>
     `;

@@ -310,7 +310,7 @@ class ScannerQueueRepository:
             cursor.execute(
                 """
                 SELECT id, task_type, task_key, kwargs, enqueue_at, started_at,
-                       finished_at, status
+                       finished_at, status, error_message
                 FROM scan_history
                 WHERE task_type = %s
                   AND status IN ('completed', 'failed', 'cancelled')
@@ -340,7 +340,7 @@ class ScannerQueueRepository:
             cursor.execute(
                 """
                 SELECT id, task_type, task_key, kwargs, enqueue_at, started_at,
-                       finished_at, status
+                       finished_at, status, error_message
                 FROM scan_history
                 WHERE task_type IN (%s, %s, %s)
                   AND status IN ('completed', 'failed', 'cancelled')

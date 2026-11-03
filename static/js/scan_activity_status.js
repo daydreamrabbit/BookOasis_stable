@@ -302,6 +302,7 @@ function renderScanActivity(data) {
 
   list.innerHTML = warningsHtml + filtered.map(({ task, pending: isPending, recent: isRecent }) => {
     const info = getScanActivityTaskInfo(task, isPending, isRecent);
+    const failureReason = task.failure_reason || activityDetails.history.find(item => activityIdentity(item) === activityIdentity(task))?.failure_reason || '';
     const recentStatus = task?.status || 'completed';
     const itemStateClass = isPending ? ' is-pending'
       : isRecent ? ` is-${recentStatus}`
@@ -329,6 +330,7 @@ function renderScanActivity(data) {
           <div class="scan-activity-item-title" title="${escapeActivityAttribute(info.title)}">${escapeActivityText(info.title)}</div>
           <div class="scan-activity-item-detail" title="${escapeActivityAttribute(info.detail)}">${escapeActivityText(info.detail)}</div>
           ${isRecent && task.finished_at ? `<div class="scan-activity-item-date">${escapeActivityText(formatRelativeTime(task.finished_at, {fallback:''}))}</div>` : ''}
+          ${isRecent && ['failed','cancelled'].includes(recentStatus) && failureReason ? `<div class="scan-activity-failure-reason" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:.78rem;color:var(--app-text-secondary)">원인: ${escapeActivityText(failureReason)}</div>` : ''}
           ${actions}
         </div>
         <span class="scan-activity-item-side"><span class="scan-activity-item-time">${escapeActivityText(elapsed)}</span>${isRecent ? `<button type="button" class="scan-activity-dismiss" data-scan-dismiss="${escapeActivityAttribute(activityIdentity(task))}" aria-label="이 활동 숨기기" title="표시만 숨깁니다. 서버 이력은 유지됩니다.">×</button>` : ''}</span>
