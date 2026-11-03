@@ -434,7 +434,7 @@ class BookRepository:
                            b.file_path, p.pages_read, p.is_completed,
                            CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
                            b.library_id, p.last_read_at, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                           b.books_lv, b.genre, b.tags,
+                           b.books_lv, b.genre, b.tags, b.document_volume_index, b.document_volume_count, b.document_number,
                            COALESCE(b.cover_align, 'center') AS cover_align
                     FROM books b
                     LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?
@@ -449,7 +449,7 @@ class BookRepository:
                            b.file_path, p.pages_read, p.is_completed,
                            CASE WHEN uf.book_id IS NULL THEN 0 ELSE 1 END AS is_favorite,
                            b.library_id, p.last_read_at, COALESCE(b.metadata_locked, 0) AS metadata_locked,
-                           b.books_lv, b.genre, b.tags,
+                           b.books_lv, b.genre, b.tags, b.document_volume_index, b.document_volume_count, b.document_number,
                            COALESCE(b.cover_align, 'center') AS cover_align
                     FROM books b
                     LEFT JOIN user_progress p ON b.id = p.book_id AND p.user_id = ?

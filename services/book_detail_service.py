@@ -442,6 +442,10 @@ class BookDetailService:
                     if bk['file_path'] and _comparison_dir(bk['file_path'], bk['file_format']) == target_dir
                 ]
                 
+        from services.series_coverage import coverage
+        visible_ids = {row['id'] for row in books_list}
+        visible_rows = [row for row in books_rows if row['id'] in visible_ids]
+        meta.update(coverage(visible_rows, meta.get('publication_status')))
         books_list.sort(key=lambda x: natural_sort_key(x['title']))
         return meta, books_list
 

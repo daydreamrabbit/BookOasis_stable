@@ -2,6 +2,7 @@
 import json
 import re
 import database
+from services.series_coverage import coverage_sql, missing_sql
 from repositories import rated_series_page as rated
 
 FIELDS = ('publisher', 'publication_status', 'genre', 'tags', 'rating')
@@ -61,30 +62,22 @@ def excluded_terms(conn, db_type='general'):
 
 
 def status_query(sql):
-    # Aggregate in SQL, before pagination. No archive opens or per-series API calls.
-    # Match the first non-empty stored status used by the series renderer, not
-    # any historical status on an arbitrary volume.
-    return sql + ''' , search_coverage AS (
-        SELECT g.representative_id,
-               MAX(COALESCE(m.document_volume_count,0)) AS expected,
-               MAX(COALESCE(m.document_volume_index,0)) AS last_volume,
-               COUNT(*) AS files,
-               COUNT(DISTINCT CASE WHEN m.document_volume_index>0 AND
-                    (m.document_volume_count IS NULL OR m.document_volume_index<=m.document_volume_count)
-                    THEN m.document_volume_index END) AS volumes,
-               COUNT(DISTINCT CASE WHEN m.document_number>0 THEN m.document_number END) AS chapters,
-               MAX(COALESCE(m.document_number,0)) AS last_chapter
+    # Computed holdings precede display classification; stored publication status is untouched.
+    fields = coverage_sql('m', database.is_mariadb_mode())
+    gap = missing_sql('c')
+    return sql + f''' , search_coverage AS (
+        SELECT g.representative_id, {fields}
         FROM grouped g JOIN scoped s ON s.library_id=g.library_id
             AND s.group_name=g.group_name AND s.group_dir=g.group_dir
         JOIN books m ON m.id=s.id GROUP BY g.representative_id
     ), search_status AS (
         SELECT g.representative_id,
-            CASE WHEN COALESCE(b.publication_status,'') IN ('0','1') THEN b.publication_status
-                 WHEN c.expected>0 AND
+            CASE WHEN {gap} THEN 'missing'
+                 WHEN COALESCE(b.publication_status,'') IN ('0','1') THEN b.publication_status
+                 WHEN c.ambiguous=0 AND c.expected>0 AND
                      (CASE WHEN c.volumes>0 THEN c.volumes WHEN c.chapters>0 THEN c.chapters ELSE c.files END)<c.expected
                      THEN 'missing'
                  WHEN COALESCE(b.publication_status,'')='2' THEN '2'
-                 WHEN c.chapters>0 AND c.chapters<c.last_chapter THEN 'missing'
                  WHEN c.expected>0 THEN '2'
                  WHEN c.last_volume>0 OR c.chapters>0 THEN '0'
                  ELSE 'unknown' END AS status

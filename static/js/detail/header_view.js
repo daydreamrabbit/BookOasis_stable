@@ -147,6 +147,8 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
   };
   const publicationStatusLabel = meta.publication_status_label || '알 수 없음';
   const publicationStatusColors = publicationStatusColorMap[publicationStatusLabel] || { bg: 'rgba(148, 163, 184, 0.15)', fg: '#94a3b8', border: 'rgba(148, 163, 184, 0.3)' };
+  const holdingsStatusBadgeHtml = meta.holdings_status === 'missing' && meta.holdings_label
+    ? `<span class="badge detail-badge" data-role="detail-holdings-badge" title="보유 권수 상태" style="color:#f87171;border:1px solid #f8717166;padding:.15rem .5rem;border-radius:4px;font-size:.75rem">${escapeHtml(meta.holdings_label)}</span>` : '';
   const publicationStatusBadgeHtml = `
     <span class="badge" data-role="detail-publication-status-badge" title="연재 상태" style="background: ${publicationStatusColors.bg}; color: ${publicationStatusColors.fg}; border: 1px solid ${publicationStatusColors.border}; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; font-weight: 700;">
       <i class="fa-solid fa-bookmark" style="font-size: 0.7rem; margin-right: 0.3rem;"></i>${escapeHtml(publicationStatusLabel)}
@@ -529,7 +531,7 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
           <span class="meta-item"><i class="fa-solid fa-book-open"></i> ${volumeCountLabel}</span>`}
         </div>
         <div class="detail-meta-tags" style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; margin-bottom: 0.8rem;">
-          ${!isMusicContext && (ratingBadgeHtml || publicationStatusBadgeHtml) ? `<div class="detail-rating-row" style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">${ratingBadgeHtml}${publicationStatusBadgeHtml}</div>` : ''}
+          ${!isMusicContext && (ratingBadgeHtml || publicationStatusBadgeHtml) ? `<div class="detail-rating-row" style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">${ratingBadgeHtml}${holdingsStatusBadgeHtml}${publicationStatusBadgeHtml}</div>` : ''}
           ${genreRowHtml}
           ${tagRowHtml}
         </div>
