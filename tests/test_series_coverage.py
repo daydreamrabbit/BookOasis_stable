@@ -54,4 +54,16 @@ class CoverageTest(unittest.TestCase):
   for number in [None,-1,'NaN','Infinity',1000001]:
    self.assertEqual(coverage([{'document_volume_index':number}],'0')['holdings_status'],'unknown')
 
+ def test_standalone_sort_sentinels_are_not_volume_numbers(self):
+  for number in [100000,100001,999999]:
+   rows=[{'document_volume_index':number,'document_volume_count':1}]
+   for status in [None,'','2']:
+    self.load(rows,status);self.assertEqual(self.sql_status()[0]['status'],'2');self.assertNotEqual(coverage(rows,status)['holdings_status'],'missing')
+ def test_sentinel_does_not_hide_real_31_gap_or_inflate_complete_series(self):
+  rows=[{'document_volume_index':31,'document_volume_count':1}];self.load(rows);self.assertEqual(self.sql_status()[0]['status'],'missing');self.assertEqual(coverage(rows,'0')['holdings_label'],'1~30권 누락')
+  rows=[{'document_volume_index':n} for n in range(1,32)]+[{'document_volume_index':100000,'document_volume_count':1}]
+  self.load(rows);self.assertEqual(self.sql_status()[0]['status'],'0');self.assertEqual(coverage(rows,'0')['holdings_status'],'available')
+ def test_high_real_chapter_numbers_keep_their_own_range(self):
+  rows=[{'document_number':100000}];self.load(rows);self.assertEqual(self.sql_status()[0]['status'],'missing');self.assertEqual(coverage(rows,'0')['coverage_basis'],'chapter')
+
 if __name__=='__main__':unittest.main(verbosity=2)

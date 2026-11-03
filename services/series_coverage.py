@@ -2,6 +2,8 @@
 from decimal import Decimal, InvalidOperation
 
 MAX_ORDINAL = 1000000
+# Existing standalone/special sort keys start at 100000; they are not volume ordinals.
+MAX_VOLUME_ORDINAL = 99999
 AMBIGUOUS_MARKERS = ('합본', '전권', '옴니버스', 'omnibus', '~', '～', '–', '—', '-', '_', '상권', '하권', '중권')
 EXTRA_MARKERS = ('외전', '번외', '특별편')
 
@@ -24,7 +26,7 @@ def coverage(rows, publication_status=''):
     main = [r for r in rows if not any(marker in _label(r) for marker in EXTRA_MARKERS)]
     if any(any(marker in _label(r) for marker in AMBIGUOUS_MARKERS) for r in main):
         return dict(holdings_status='unknown', holdings_label='', missing_ranges=[], coverage_basis='ambiguous')
-    volumes = {n for r in main if (n := ordinal(r.get('document_volume_index'))) is not None}
+    volumes = {n for r in main if (n := ordinal(r.get('document_volume_index'))) is not None and n <= MAX_VOLUME_ORDINAL}
     chapters = {n for r in main if (n := ordinal(r.get('document_number'))) is not None}
     seen, unit = (volumes, '권') if volumes else (chapters, '화')
     expected = max((ordinal(r.get('document_volume_count')) or 0 for r in main), default=0)
@@ -60,7 +62,8 @@ def coverage_sql(alias='m', mariadb=False):
     ambiguous = contains(AMBIGUOUS_MARKERS)
     def number(field):
         expr = f'{alias}.{field}'
-        return f'CASE WHEN NOT {extra} AND {expr} BETWEEN 1 AND {MAX_ORDINAL} AND {expr}=CAST({expr} AS {cast}) THEN {expr} END'
+        upper = MAX_VOLUME_ORDINAL if field == 'document_volume_index' else MAX_ORDINAL
+        return f'CASE WHEN NOT {extra} AND {expr} BETWEEN 1 AND {upper} AND {expr}=CAST({expr} AS {cast}) THEN {expr} END'
     volume, chapter, expected = (number(k) for k in ('document_volume_index','document_number','document_volume_count'))
     return f'''MAX(COALESCE({expected},0)) AS expected,
                MAX(COALESCE({volume},0)) AS last_volume,
