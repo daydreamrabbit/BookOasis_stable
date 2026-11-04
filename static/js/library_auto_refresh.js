@@ -7,6 +7,8 @@ let lastInputAt = 0;
 let deferred = null;
 let events = null;
 let reconnect = null;
+const refreshedViews = new Map();
+let retryDelay = 3000;
 document.addEventListener('input', () => { lastInputAt = Date.now(); }, true);
 
 export async function checkLibraryChanges() {
@@ -23,24 +25,30 @@ export async function checkLibraryChanges() {
     const category = String(state.currentLibraryId || '');
     if (['settings', 'plugins'].includes(category) || category.startsWith('plugin_')) return;
     if (typeof window.invalidateBookListAfterScan !== 'function') return;
-    const listRefresh = window.invalidateBookListAfterScan();
-    window.invalidateDashboardData?.();
-    if (category === 'home') {
-      await window.loadDashboardData?.({ force: true });
-    } else if (category === 'history') {
-      await window.loadReadingHistory?.();
-    } else {
-      const detail = document.getElementById('book-detail-view');
-      if (detail && getComputedStyle(detail).display !== 'none' && state.detailSeriesName) {
-        await window.openBookDetail?.(null, state.detailSeriesName, state.detailLibraryId,
-          state.detailRepresentativeBookId, state.detailDisplayTitle);
-      } else if (await listRefresh === false) {
-        return; // A busy/failed list must not consume the revision notification.
+    const viewKey = JSON.stringify([revision, String(state.currentLibraryId || ''), state.detailSeriesName || '', state.detailLibraryId ?? null]);
+    if (refreshedViews.get(type) !== viewKey) {
+      const listRefresh = window.invalidateBookListAfterScan();
+      window.invalidateDashboardData?.();
+      if (category === 'home') {
+        await window.loadDashboardData?.({ force: true });
+      } else if (category === 'history') {
+        await window.loadReadingHistory?.();
+      } else {
+        const detail = document.getElementById('book-detail-view');
+        if (detail && getComputedStyle(detail).display !== 'none' && state.detailSeriesName) {
+          await window.openBookDetail?.(null, state.detailSeriesName, state.detailLibraryId,
+            state.detailRepresentativeBookId, state.detailDisplayTitle);
+        } else if (await listRefresh === false) {
+          return; // A busy/failed list must not consume the revision notification.
+        }
       }
+      refreshedViews.set(type, viewKey);
     }
     if (typeof window.refreshLibraryCounts !== 'function'
         || await window.refreshLibraryCounts(type) === false) return;
     tracker.acknowledge(type, revision);
+    refreshedViews.delete(type);
+    retryDelay = 3000;
   } catch (error) {
     // Keep pending changes and retry; never reload the page or steal input focus.
     console.debug('[LibraryRefresh] 변경 확인 재시도 대기', error);
@@ -49,7 +57,8 @@ export async function checkLibraryChanges() {
     clearTimeout(deferred);
     // Retry only a known pending change, locally; never poll the revision API.
     if (!document.hidden && tracker.has(state.currentLibraryType || 'general')) {
-      deferred = setTimeout(checkLibraryChanges, 3000);
+      deferred = setTimeout(checkLibraryChanges, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30000);
     }
   }
 }
