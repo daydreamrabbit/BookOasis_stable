@@ -291,6 +291,10 @@
     "remember_me": "자동 로그인"
   },
   "settings": {
+    "perm_audiobook_access_desc": "끄면 아래 카테고리 권한과 상관없이 오디오북 메뉴가 보이지 않습니다. 켠 뒤 볼 카테고리를 아래에서 고르세요. (사용자가 다시 로그인하면 반영)",
+    "perm_video_access_desc": "끄면 아래 카테고리 권한과 상관없이 영상 강좌 메뉴가 보이지 않습니다. 켠 뒤 볼 카테고리를 아래에서 고르세요. (사용자가 다시 로그인하면 반영)",
+    "perm_col_audiobook_access": "오디오북 메뉴 사용 허용",
+    "perm_col_video_access": "영상 강좌 메뉴 사용 허용",
     "title": "설정",
     "general_tab": "일반 설정",
     "users_tab": "사용자 관리",

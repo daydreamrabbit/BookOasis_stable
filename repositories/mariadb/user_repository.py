@@ -216,6 +216,22 @@ class UserRepository:
             conn.close()
 
     @staticmethod
+    def update_video_access(db_type, user_id, has_video_access):
+        """사용자별 영상 강좌 접근 권한 갱신"""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE users SET has_video_access = %s WHERE id = %s", (has_video_access, user_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+
+    @staticmethod
     def update_download_access(db_type, user_id, has_download_access):
         """사용자별 파일 다운로드 접근 권한 갱신"""
         conn = database.get_connection(db_type)

@@ -545,38 +545,54 @@ export function loadComicPage() {
 
     observer = new IntersectionObserver((entries) => {
       if (!isCurrentRender()) return;
-      if (isScrollingToTarget) return;
-
-      let bestEntry = null;
-      let maxRatio = 0;
-
       entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          loadScrollImage(entry.target);
-          if (entry.intersectionRatio > maxRatio) {
-            maxRatio = entry.intersectionRatio;
-            bestEntry = entry;
-          }
-        }
+        if (entry.isIntersecting) loadScrollImage(entry.target);
       });
-
-      if (bestEntry) {
-        const pageIdx = parseInt(bestEntry.target.dataset.index, 10);
-        if (pageIdx !== comicCurrentPage) {
-          comicCurrentPage = pageIdx;
-          updatePageInfo();
-          saveProgress(state.activeBookId, comicCurrentPage, comicTotalPages);
-        }
-        preloadScrollImagesAround(pageIdx, 15);
-      }
     }, observerOptions);
 
     imgElements.forEach(img => {
       observer.observe(img);
     });
 
+    // 화면 위쪽 1/4 지점에 걸친 이미지를 현재 페이지로 본다 (이어보기 때 그 이미지 머리로 돌아가므로
+    // 가운데보다 위쪽 기준이 덜 건너뛴다). 바닥까지 내렸으면 마지막 페이지.
+    const computeVisiblePage = () => {
+      const maxScrollTop = wrapper.scrollHeight - wrapper.clientHeight;
+      if (maxScrollTop > 0 && wrapper.scrollTop >= maxScrollTop - 16) return comicTotalPages - 1;
+
+      const wrapperRect = wrapper.getBoundingClientRect();
+      const probeY = wrapperRect.top + wrapper.clientHeight / 4;
+      let lo = 0;
+      let hi = imgElements.length - 1;
+      let found = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (imgElements[mid].getBoundingClientRect().top <= probeY) {
+          found = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return found;
+    };
+
+    let trackFrame = 0;
+    const trackVisiblePage = () => {
+      trackFrame = 0;
+      if (!isCurrentRender() || isScrollingToTarget || !imgElements.length) return;
+      const pageIdx = computeVisiblePage();
+      if (pageIdx !== comicCurrentPage) {
+        comicCurrentPage = pageIdx;
+        updatePageInfo();
+        saveProgress(state.activeBookId, comicCurrentPage, comicTotalPages);
+        preloadScrollImagesAround(pageIdx, 15);
+      }
+    };
+
     const progressHandler = () => {
-      if (!isCurrentRender()) return;
+      if (!isCurrentRender() || isScrollingToTarget) return;
+      if (!trackFrame) trackFrame = requestAnimationFrame(trackVisiblePage);
       if (scrollPreloadTriggered || !state.activeBookId || comicTotalPages <= 1) return;
 
       const maxScrollTop = Math.max(1, wrapper.scrollHeight - wrapper.clientHeight);
@@ -584,7 +600,6 @@ export function loadComicPage() {
       if (scrollRatio < 0.9) return;
 
       scrollPreloadTriggered = true;
-      saveProgress(state.activeBookId, comicCurrentPage, comicTotalPages);
 
       return;
     };

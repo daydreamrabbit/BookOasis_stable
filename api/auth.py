@@ -796,7 +796,7 @@ def add_user():
         for db_type in ['general', 'adult', 'audiobook', 'video']:
             UserRepository.add_user(db_type, username, password_hash, role, has_adult_access, has_audiobook_access, has_video_access, has_download_access)
     except Exception as e:
-        if 'UNIQUE' in str(e):
+        if 'UNIQUE' in str(e) or 'Duplicate entry' in str(e) or '1062' in str(e):
             return jsonify({'success': False, 'error': _t('api.username_exists')}), 409
         return jsonify({'success': False, 'error': _t('api.add_user_failed', error=str(e))}), 500
         

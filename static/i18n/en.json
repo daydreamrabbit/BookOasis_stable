@@ -291,6 +291,10 @@
     "remember_me": "Remember Me"
   },
   "settings": {
+    "perm_audiobook_access_desc": "When off, the audiobook menu is hidden whatever the category permissions below say. Turn it on, then choose the categories below. (Takes effect when the user signs in again.)",
+    "perm_video_access_desc": "When off, the video course menu is hidden whatever the category permissions below say. Turn it on, then choose the categories below. (Takes effect when the user signs in again.)",
+    "perm_col_audiobook_access": "Audiobook menu allowed",
+    "perm_col_video_access": "Video course menu allowed",
     "title": "Settings",
     "general_tab": "General",
     "users_tab": "Users",

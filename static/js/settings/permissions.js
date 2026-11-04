@@ -261,6 +261,8 @@ export async function loadPermissionsMatrix() {
   const videoHeaderRow = document.getElementById('permissions-video-table-header');
   const videoBody = document.getElementById('permissions-video-table-body');
   const downloadBody = document.getElementById('permissions-download-table-body');
+  const audiobookAccessBody = document.getElementById('permissions-audiobook-access-table-body');
+  const videoAccessBody = document.getElementById('permissions-video-access-table-body');
   const contentRatingBody = document.getElementById('permissions-content-rating-table-body');
   if (!generalHeaderRow || !generalBody || !adultBody || !audiobookHeaderRow || !audiobookBody || !videoHeaderRow || !videoBody || !downloadBody || !contentRatingBody) return;
 
@@ -303,6 +305,8 @@ export async function loadPermissionsMatrix() {
     audiobookBody.innerHTML = renderMatrixBody(users, audiobookMatrix.categories, audiobookMatrix.permissions, 'audiobook');
     videoBody.innerHTML = renderMatrixBody(users, videoMatrix.categories, videoMatrix.permissions, 'video');
     adultBody.innerHTML = renderAdultBody(users);
+    if (audiobookAccessBody) audiobookAccessBody.innerHTML = renderMenuAccessBody(users, 'has_audiobook_access', 'audiobook', 'settings.perm_col_audiobook_access');
+    if (videoAccessBody) videoAccessBody.innerHTML = renderMenuAccessBody(users, 'has_video_access', 'video', 'settings.perm_col_video_access');
     downloadBody.innerHTML = renderDownloadBody(users);
     contentRatingBody.innerHTML = renderContentRatingBody(users);
 
@@ -401,6 +405,32 @@ function renderAdultBody(users) {
   }).join('');
 }
 
+function escapeMenuAccessText(value) {
+  const span = document.createElement('span');
+  span.textContent = String(value ?? '');
+  return span.innerHTML;
+}
+
+function renderMenuAccessBody(users, field, kind, labelKey) {
+  return users.map(user => {
+    const isChecked = Number(user[field]) === 1 ? 'checked' : '';
+    const isDisabled = user.role === 'admin' ? 'disabled' : '';
+    return `
+      <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+        <td style="padding:0.9rem 1rem; color: var(--app-text-primary); font-weight:700;">${escapeMenuAccessText(user.username)}</td>
+        <td style="padding:0.9rem 1rem; text-align:center; color: var(--app-text-muted);">${escapeMenuAccessText(user.role)}</td>
+        <td style="padding:0.9rem 1rem; text-align:center;">
+          <label style="display:inline-flex; align-items:center; gap:0.5rem; color:var(--app-accent-hover); font-weight:700;">
+            <input type="checkbox" class="permission-chk-menu-access" data-kind="${kind}" data-user-id="${user.id}" ${isChecked} ${isDisabled}
+                   style="cursor:pointer; width:1.2rem; height:1.2rem; accent-color:var(--app-accent);">
+            <span>${i18n.t(labelKey)}</span>
+          </label>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
 function renderDownloadBody(users) {
   return users.map(user => {
     const isChecked = user.has_download_access === 1 ? 'checked' : '';
@@ -479,6 +509,33 @@ function bindPermissionEvents() {
       } catch (err) {
         alert('네트워크 오류가 발생했습니다.');
         e.target.checked = !hasAdultAccess;
+      }
+    });
+  });
+
+  document.querySelectorAll('.permission-chk-menu-access').forEach(chk => {
+    chk.addEventListener('change', async (e) => {
+      const userId = e.target.getAttribute('data-user-id');
+      const kind = e.target.getAttribute('data-kind');
+      const allowed = e.target.checked;
+      const field = kind === 'video' ? 'has_video_access' : 'has_audiobook_access';
+
+      try {
+        const res = await fetch(`/api/admin/permissions/update-${kind}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: parseInt(userId), [field]: allowed })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert(i18n.t('settings.perm_change_failed', { error: data.error }));
+          e.target.checked = !allowed;
+        } else {
+          syncCurrentUserPermission(userId, field, allowed ? 1 : 0);
+        }
+      } catch (err) {
+        alert(i18n.t('settings.perm_network_error'));
+        e.target.checked = !allowed;
       }
     });
   });
