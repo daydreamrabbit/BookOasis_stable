@@ -622,13 +622,42 @@ export async function fetchPublicUiSettings() {
 }
 
 // 호출한 사용자 본인의 설정 오버라이드 + 전역 기본값을 병합한 유효값 조회
+let userSettingsRequest = null;
+let userSettingsSnapshot = null;
+let userSettingsExpiresAt = 0;
+let userSettingsGeneration = 0;
+
+export function invalidateUserSettingsCache() {
+  userSettingsGeneration++;
+  userSettingsRequest = null;
+  userSettingsSnapshot = null;
+  userSettingsExpiresAt = 0;
+}
+
 export async function fetchUserSettings() {
-  const res = await fetch('/api/media/settings/user');
-  return res.json();
+  if (userSettingsSnapshot && Date.now() < userSettingsExpiresAt) {
+    return JSON.parse(JSON.stringify(userSettingsSnapshot));
+  }
+  if (!userSettingsRequest) {
+    const generation = userSettingsGeneration;
+    const request = fetch('/api/media/settings/user').then(res => res.json()).then(data => {
+      if (data?.success && generation === userSettingsGeneration) {
+        userSettingsSnapshot = data;
+        userSettingsExpiresAt = Date.now() + 1000;
+      }
+      return data;
+    });
+    const tracked = request.finally(() => {
+      if (userSettingsRequest === tracked) userSettingsRequest = null;
+    });
+    userSettingsRequest = tracked;
+  }
+  return JSON.parse(JSON.stringify(await userSettingsRequest));
 }
 
 // 호출한 사용자 본인의 설정 오버라이드 저장 (허용 목록 내 키만 서버에서 수락)
 export async function updateUserSetting(key, value) {
+  invalidateUserSettingsCache();
   const formData = new FormData();
   formData.append('key', key);
   formData.append('value', value);
@@ -636,7 +665,9 @@ export async function updateUserSetting(key, value) {
     method: 'POST',
     body: formData
   });
-  return res.json();
+  const data = await res.json();
+  invalidateUserSettingsCache();
+  return data;
 }
 
 // 홈 화면 플러그인 배치 모드일 때의 위젯 순서/숨김 상태 조회 (꺼져 있으면 mode:'classic')

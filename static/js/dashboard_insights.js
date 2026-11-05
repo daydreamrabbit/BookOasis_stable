@@ -1,6 +1,7 @@
 // static/js/dashboard_insights.js - 대시보드 독서 동기부여 위젯 컨트롤러 (Compact & Slim)
 import { getBookCoverSrc, buildFallbackCoverUrl } from './cover_fallback.js';
 import { loadDashboardActivity } from './reading_activity.js';
+import { state } from './state.js';
 
 if (!window.__dashboardInsightsDelegationBound) {
   document.addEventListener('click', (event) => {
@@ -24,6 +25,7 @@ if (!window.__dashboardInsightsDelegationBound) {
 }
 
 export async function loadDashboardInsights(libraryType = 'general') {
+  if (state.currentLibraryId !== 'home') return;
   try {
     const isShow = (localStorage.getItem('show_dashboard_insights') !== '0');
     const container = document.querySelector('.dashboard-insights-container');
@@ -203,7 +205,4 @@ if (!window.__currentlyReadingClickBound) {
   window.__currentlyReadingClickBound = true;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  const activeType = window.currentLibraryType || 'general';
-  loadDashboardInsights(activeType);
-});
+// Dashboard entry loads insights after navigation resolves.

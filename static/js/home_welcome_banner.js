@@ -1,4 +1,5 @@
 import {state} from './state.js';
+import {fetchUserSettings, invalidateUserSettingsCache} from './api.js';
 
 export const welcomeDefaults = Object.freeze({
   eyebrow:'MY READING SPACE', title:'책이 있는 곳에\n언제나, 좋은 하루가.',
@@ -76,7 +77,8 @@ export function initWelcomeBanner(){
   function fill(value){for(const name of ['eyebrow','title','subtitle','goal_minutes','quote'])form.elements[name].value=value[name];form.elements.images.value=value.images.join('\n');}
   async function loadConfig(){
     try{
-      const data=await jsonResponse(await fetch('/api/media/settings/user'));
+      const data=await fetchUserSettings();
+      if(!data?.success) throw new Error(data?.error || '설정을 불러오지 못했습니다.');
       if(data.settings?.HOME_WELCOME_CONFIG) config=normalizeWelcomeConfig(JSON.parse(data.settings.HOME_WELCOME_CONFIG));
       render();loaded=true;
     }catch(e){console.warn('[Welcome] 설정 로드 실패:',e.message);}
@@ -97,9 +99,14 @@ export function initWelcomeBanner(){
       minutes.parentElement.title='서버에 저장된 독서 기록 기준';
     }catch(e){if(e.name!=='AbortError' && todayRequest===controller) summary.textContent='독서 기록을 불러오지 못했습니다.';}
   }
-  const ready=loadConfig();render();loadToday();
+  let ready=null;
+  function ensureConfig(){
+    if(!ready) ready=loadConfig().finally(()=>{if(!loaded) ready=null;});
+    return ready;
+  }
+  render();
   window.addEventListener('bookoasis:view-changing',event=>{
-    if(event.detail?.viewName==='dashboard') loadToday();
+    if(event.detail?.viewName==='dashboard'){ensureConfig();loadToday();}
     else {todayRequest?.abort();todayRequest=null;}
   });
   document.addEventListener('click',async event=>{
@@ -110,7 +117,7 @@ export function initWelcomeBanner(){
     if(action==='next') move(1);
     if(action==='previous') move(-1);
     if(action==='edit'){
-      await ready;
+      await ensureConfig();
       if(!loaded){error.textContent='설정을 불러오지 못했습니다. 새로고침 후 다시 시도하세요.';fill(config);dialog.showModal();return;}
       fill(config);error.textContent='';dialog.showModal();
     }
@@ -129,6 +136,7 @@ export function initWelcomeBanner(){
       saving=true;form.querySelector('[type="submit"]').disabled=true;error.textContent='';
       const body=new FormData();body.append('key','HOME_WELCOME_CONFIG');body.append('value',value);
       await jsonResponse(await fetch('/api/media/settings/user',{method:'POST',body}));
+      invalidateUserSettingsCache();
       config=next;slide=0;render();dialog.close();
     }catch(e){error.textContent=e.message;}
     finally{saving=false;form.querySelector('[type="submit"]').disabled=false;}

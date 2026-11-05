@@ -104,7 +104,7 @@ export async function initFloatingFilter() {
             }
 
             currentModal.style.display = 'none';
-        });
+        }, true);
     }
 
     if (modal.dataset.positionBound !== '1') {
