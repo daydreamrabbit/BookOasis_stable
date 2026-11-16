@@ -178,6 +178,16 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
         for target_p in target_paths:
             scan_audiobook_library(target_p, library_id=library_id, force=force, cancel_event=cancel_event)
         print(f"[Scanner-Audiobook] 🎧 Audiobook scan completed for library_id={library_id}")
+        if force:
+            from tools.scanner.engine import _queue_scan_completed_plugin_hook
+            _queue_scan_completed_plugin_hook(db_type, {
+                'db_type': db_type,
+                'library_id': library_id,
+                'force_rescan': True,
+                'scan_scope': 'library',
+                'new_books_count': 0,
+                'sample_titles': [],
+            })
         return
 
     if db_type == 'video':
@@ -186,6 +196,16 @@ def scan_library(db_path, library_id, physical_path, force=False, skip_vfs_refre
         for target_p in target_paths:
             scan_video_library(target_p, library_id=library_id, force=force, cancel_event=cancel_event)
         print(f"[Scanner-Video] 🎬 Video scan completed for library_id={library_id}")
+        if force:
+            from tools.scanner.engine import _queue_scan_completed_plugin_hook
+            _queue_scan_completed_plugin_hook(db_type, {
+                'db_type': db_type,
+                'library_id': library_id,
+                'force_rescan': True,
+                'scan_scope': 'library',
+                'new_books_count': 0,
+                'sample_titles': [],
+            })
         return
 
     threads_to_use = 1 if is_remote else MAX_SCANNER_THREADS
@@ -289,6 +309,16 @@ def scan_library_path(
         from services.audiobook_scanner import scan_audiobook_library
         scan_audiobook_library(target_path, library_id=library_id, force=force)
         print(f"[Scanner-Audiobook] 🎧 Audiobook single-path scan completed for library_id={library_id}")
+        if force:
+            from tools.scanner.engine import _queue_scan_completed_plugin_hook
+            _queue_scan_completed_plugin_hook(db_type, {
+                'db_type': db_type,
+                'library_id': library_id,
+                'force_rescan': True,
+                'scan_scope': 'series',
+                'new_books_count': 0,
+                'sample_titles': [],
+            })
         return
 
     if db_type == 'video':
@@ -296,6 +326,16 @@ def scan_library_path(
         from services.video_scanner import scan_video_library
         scan_video_library(target_path, library_id=library_id, force=force)
         print(f"[Scanner-Video] 🎬 Video single-path scan completed for library_id={library_id}")
+        if force:
+            from tools.scanner.engine import _queue_scan_completed_plugin_hook
+            _queue_scan_completed_plugin_hook(db_type, {
+                'db_type': db_type,
+                'library_id': library_id,
+                'force_rescan': True,
+                'scan_scope': 'series',
+                'new_books_count': 0,
+                'sample_titles': [],
+            })
         return
 
     threads_to_use = 1 if is_remote else MAX_SCANNER_THREADS

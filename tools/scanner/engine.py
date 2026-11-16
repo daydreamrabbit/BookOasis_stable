@@ -166,7 +166,12 @@ def _commit_with_retry(conn, context_label, max_attempts=12):
 
 def _publish_plugin_metadata_changes(db_type, result):
     """Async metadata finishes after the scan's own cache invalidation."""
-    if not isinstance(result, dict) or not result.get('success') or not (result.get('stats') or {}).get('updated'):
+    if not isinstance(result, dict):
+        return
+    stats = result.get('stats') or {}
+    scan_refresh_required = bool(stats.get('book_cache_refresh_required'))
+    metadata_updated = bool(result.get('success') and stats.get('updated'))
+    if not scan_refresh_required and not metadata_updated:
         return
     from repositories.series_repository import SeriesRepository
     from services.series_service import SeriesService
@@ -251,6 +256,16 @@ def _dispatch_scan_completed_to_plugin_hooks(db_type, event_payload):
                         callback('failed')
                 except Exception:
                     pass
+
+
+def _queue_scan_completed_plugin_hook(db_type, event_payload):
+    """Dispatch post-scan plugin work after scanner writes have committed."""
+    completion_thread = threading.Thread(
+        target=_dispatch_scan_completed_to_plugin_hooks,
+        args=(db_type, dict(event_payload or {})),
+        daemon=True,
+    )
+    completion_thread.start()
 
 
 def _lookup_detected_book_ids(cursor, library_id, detected_books):
@@ -1578,15 +1593,14 @@ def _scan_library_internal(
         'library_name': library_name,
         'new_books_count': len(detected_new_books),
         'sample_titles': [book['title'] for book in detected_new_books[:10]],
+        'force_rescan': bool(force),
+        'scan_scope': 'series' if path_scope else 'library',
     }
+    if path_scope:
+        completion_payload['scan_path'] = str(path_scope)
     if detected_new_book_ids:
         completion_payload['book_ids'] = detected_new_book_ids
-    completion_thread = threading.Thread(
-        target=_dispatch_scan_completed_to_plugin_hooks,
-        args=(db_type, completion_payload),
-        daemon=True,
-    )
-    completion_thread.start()
+    _queue_scan_completed_plugin_hook(db_type, completion_payload)
 
 
 def _scan_library_covers_only_internal(conn, db_path, library_id, physical_path, target_paths, db_type):
