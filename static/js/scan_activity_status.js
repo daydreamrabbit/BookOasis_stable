@@ -16,6 +16,8 @@ let lastStatusErrorSignature = '';
 let lastStatusErrorAt = 0;
 let seenRecentBatchScanIds = null;
 let seenRecentLibraryScanIds = null;
+let pendingDetailRefreshKey = '';
+let pendingDetailRefreshTimer = null;
 let pollingScanType = null;
 let pollingStartedAt = 0;
 let observedActiveScan = false;
@@ -33,6 +35,56 @@ let currentActivityTasks = [];
 function activityIdentity(task) {
   return JSON.stringify([task.type || task.task_type, task.id ?? task.key ?? task.run_id,
     task.finished_at || task.started_at || task.enqueued_at || '']);
+}
+
+function currentDetailRefreshKey() {
+  if (!state.detailSeriesName) return '';
+  return JSON.stringify([
+    state.currentLibraryType || 'general',
+    String(state.detailLibraryId ?? ''),
+    String(state.detailSeriesName),
+    String(state.detailRepresentativeBookId ?? ''),
+  ]);
+}
+
+function clearPendingDetailRefreshTimer() {
+  if (pendingDetailRefreshTimer !== null) {
+    clearTimeout(pendingDetailRefreshTimer);
+    pendingDetailRefreshTimer = null;
+  }
+}
+
+function queuePendingDetailRefresh(active = false) {
+  const key = currentDetailRefreshKey();
+  if (!key) return;
+  pendingDetailRefreshKey = key;
+  clearPendingDetailRefreshTimer();
+  if (active) return;
+
+  // Fast scans can start and finish between status polls. Coalesce their
+  // completion notices so one series detail is reopened after the burst.
+  pendingDetailRefreshTimer = setTimeout(() => {
+    pendingDetailRefreshTimer = null;
+    if (wasScanningPrevious) return;
+    if (pendingDetailRefreshKey !== currentDetailRefreshKey()) {
+      pendingDetailRefreshKey = '';
+      return;
+    }
+    const detailView = document.getElementById('book-detail-view');
+    if (!detailView || detailView.style.display === 'none'
+        || !state.detailBookIds?.length || typeof window.openBookDetail !== 'function') {
+      pendingDetailRefreshKey = '';
+      return;
+    }
+    pendingDetailRefreshKey = '';
+    window.openBookDetail(
+      null,
+      state.detailSeriesName,
+      state.detailLibraryId,
+      state.detailRepresentativeBookId,
+      state.detailDisplayTitle
+    );
+  }, STATUS_POLL_INTERVAL_MS + 500);
 }
 
 function activityStorageKey() {
@@ -439,6 +491,7 @@ function updateCategoryScanSpinners(data, scanRefresh = {}) {
   let isGlobalOrCurrentLibScanning = false;
 
   if (data && data.success && data.is_active) {
+    clearPendingDetailRefreshTimer();
     wasScanningPrevious = true;
 
     const checkTask = (t) => {
@@ -511,6 +564,8 @@ function updateCategoryScanSpinners(data, scanRefresh = {}) {
         }
       }
       if (shouldRefreshDetail && typeof window.openBookDetail === 'function') {
+        clearPendingDetailRefreshTimer();
+        pendingDetailRefreshKey = '';
         window.openBookDetail(
           null,
           state.detailSeriesName,
@@ -518,6 +573,10 @@ function updateCategoryScanSpinners(data, scanRefresh = {}) {
           state.detailRepresentativeBookId,
           state.detailDisplayTitle
         );
+      }
+      if (!shouldRefreshDetail && pendingDetailRefreshKey) {
+        clearPendingDetailRefreshTimer();
+        pendingDetailRefreshKey = '';
       }
     }
   }
@@ -592,15 +651,8 @@ function refreshDetailAfterBookScan(data) {
   });
   if (!affectsDetail) return { listInvalidated, detailRefreshed: false };
 
-  console.log('[ScanDetailRefresh] 도서 스캔 완료로 열린 상세 페이지를 갱신합니다.');
-  window.openBookDetail(
-    null,
-    state.detailSeriesName,
-    state.detailLibraryId,
-    state.detailRepresentativeBookId,
-    state.detailDisplayTitle
-  );
-  return { listInvalidated, detailRefreshed: true };
+  queuePendingDetailRefresh(data?.is_active === true);
+  return { listInvalidated, detailRefreshed: false };
 }
 
 // 카테고리 스캔은 파일 수가 적으면 2초 상태 폴링 사이에 끝날 수 있다.
@@ -669,14 +721,8 @@ function refreshAfterLibraryScan(data) {
     })
   );
   if (affectsDetail && typeof window.openBookDetail === 'function') {
-    window.openBookDetail(
-      null,
-      state.detailSeriesName,
-      state.detailLibraryId,
-      state.detailRepresentativeBookId,
-      state.detailDisplayTitle,
-    );
-    return { listInvalidated: true, detailRefreshed: true, dashboardInvalidated: false };
+    queuePendingDetailRefresh(data?.is_active === true);
+    return { listInvalidated: true, detailRefreshed: false, dashboardInvalidated: false };
   }
   return { ...none, listInvalidated: true };
 }
