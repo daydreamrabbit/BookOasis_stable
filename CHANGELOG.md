@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v3.1.1.c (커스텀 · 2026-11-17)
+
+- 등급 제한 목록에서 `libraries.pending_delete`가 있는 DB에만 삭제 대기 제외 조건을 적용한다. 열이 없는 기존 DB에서도 목록을 정상 조회한다.
+- 기존 권수 메타데이터 필드와 등급 제한 판정은 유지한다. DB 스키마·DBMS 리비전·DB_POOL_SIZE는 변경하지 않는다.
+
 ## v3.1.1.b (커스텀 · 2026-11-17)
 
 - EPUB OPF의 Comic Book Butler `comic-book-butler:ageRating` 값을 등급 종류와 관계없이 `books_lv`에 반영한다.

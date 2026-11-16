@@ -1,10 +1,17 @@
 """SQL pagination with the highest active volume rating applied to its series."""
 import os
 import re
+import threading
+import time
 
 import database
 from services.content_rating_service import ContentRatingService, _BOOKS_LV_LEVEL_MAP
 from repositories.series_metadata_utils import series_cover_id_sql
+
+
+_PENDING_DELETE_COLUMN_CACHE = {}
+_PENDING_DELETE_COLUMN_CACHE_LOCK = threading.Lock()
+_PENDING_DELETE_COLUMN_CACHE_TTL = 60
 
 
 def supported(db_type, rating, search='', genres=None, tags=None, group='', author=''):
@@ -22,6 +29,50 @@ def _dir(path, fmt):
 def _sort(value):
     raw = str(value or '').strip()
     return re.sub(r'^\s*(?:(?:\[[^\]]+\]|\{[^}]+\})\s*)+', '', raw).strip() or raw
+
+
+def _has_pending_delete_column(conn, db_type):
+    """Use the lifecycle exclusion only when this library schema has the column."""
+    cache_key = (bool(database.is_mariadb_mode()), str(db_type)) if db_type else None
+    now = time.monotonic()
+    if cache_key is not None:
+        with _PENDING_DELETE_COLUMN_CACHE_LOCK:
+            cached = _PENDING_DELETE_COLUMN_CACHE.get(cache_key)
+            if cached and cached[0] > now:
+                return cached[1]
+
+    cursor = conn.cursor()
+    try:
+        if database.is_mariadb_mode():
+            cursor.execute("""
+                SELECT 1
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'libraries'
+                  AND COLUMN_NAME = 'pending_delete'
+                LIMIT 1
+            """)
+            exists = cursor.fetchone() is not None
+        else:
+            cursor.execute('PRAGMA table_info(libraries)')
+            rows = cursor.fetchall()
+            names = []
+            for row in rows:
+                if isinstance(row, dict):
+                    names.append(row.get('name'))
+                elif hasattr(row, 'keys') and 'name' in row.keys():
+                    names.append(row['name'])
+                else:
+                    names.append(row[1])
+            exists = 'pending_delete' in names
+    except Exception:
+        # A missing optional metadata probe must not make the book list fail.
+        exists = False
+
+    if cache_key is not None:
+        with _PENDING_DELETE_COLUMN_CACHE_LOCK:
+            _PENDING_DELETE_COLUMN_CACHE[cache_key] = (now + _PENDING_DELETE_COLUMN_CACHE_TTL, exists)
+    return exists
 
 
 def _rating_expressions(conn, keywords=None):
@@ -55,9 +106,11 @@ def _rating_expressions(conn, keywords=None):
     return level, directory, params
 
 
-def _query(conn, library_id, user_id, rating, series_scope=None, library_ids=None, read_filter=''):
+def _query(conn, library_id, user_id, rating, series_scope=None, library_ids=None, read_filter='', db_type=None):
     level, directory, params = _rating_expressions(conn)
     where = ['(b.is_deleted=0 OR b.is_deleted IS NULL)']
+    if _has_pending_delete_column(conn, db_type):
+        where.append('NOT EXISTS(SELECT 1 FROM libraries lifecycle WHERE lifecycle.id=b.library_id AND COALESCE(lifecycle.pending_delete,0)<>0)')
     if library_ids:
         where.append('b.library_id IN (' + ','.join('?' for _ in library_ids) + ')')
         params.extend(map(int, library_ids))
@@ -129,7 +182,7 @@ def fetch(db_type, library_id, user_id, rating, *, limit=31, offset=0, sort='asc
             from services.advanced_search_service import filtered_query
             sql, params = filtered_query(conn, library_id, user_id, rating, filters)
         else:
-            sql, params = _query(conn, library_id, user_id, rating, read_filter=read_filter)
+            sql, params = _query(conn, library_id, user_id, rating, read_filter=read_filter, db_type=db_type)
         plugin_join = ''
         if plugin_sort:
             from services import plugin_rating_sort
@@ -149,6 +202,7 @@ def fetch(db_type, library_id, user_id, rating, *, limit=31, offset=0, sort='asc
         else:
             # Rich fields are fetched only for the selected page, not all books.
             sql += """SELECT b.id,b.library_id,b.series_name,b.title,b.title_alias,b.file_path,b.file_format,b.created_at,
+                b.document_volume_index,b.document_volume_count,b.document_number,
                 g.series_book_count,g.series_latest_added,g.any_locked AS rated_locked,
                 g.all_completed,g.has_progress,g.is_favorite,g.series_level,
                 cover.cover_image AS rated_cover,cover.cover_updated_at AS rated_cover_updated,
