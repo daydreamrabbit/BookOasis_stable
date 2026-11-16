@@ -27,7 +27,7 @@ COMICINFO_FIELDS = (
 )
 # EPUB은 장르(dc:subject)가 분류 문자열이라 잡음이 많아 제외한다.
 EPUB_FIELDS = ('author', 'cover_artist', 'translator', 'publisher', 'summary',
-               'release_date', 'isbn', 'uci', 'localized_series', 'link', 'tags')
+               'release_date', 'isbn', 'uci', 'localized_series', 'link', 'tags', 'books_lv')
 
 # 비신뢰 파일이라 읽는 XML 크기를 제한한다.
 _MAX_CONTAINER_BYTES = 256 * 1024

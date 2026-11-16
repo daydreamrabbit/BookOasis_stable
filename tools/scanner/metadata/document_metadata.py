@@ -20,7 +20,7 @@ _CALIBRE_SERIES_INDEX_NS = 'http://calibre-ebook.com/xmp-namespace-series-index'
 _REMOTE_TIMEOUT_SECONDS = 15
 _MAX_XMP_BYTES = 8 * 1024 * 1024
 _METADATA_FIELDS = (
-    'title', 'author', 'translator', 'cover_artist', 'isbn', 'uci', 'publisher', 'summary',
+    'title', 'author', 'translator', 'cover_artist', 'isbn', 'uci', 'publisher', 'summary', 'books_lv',
     'release_date', 'genre', 'tags', 'link', 'localized_series',
     'publication_status',
     'document_series_name', 'document_volume_index', 'document_volume_count',
@@ -174,6 +174,9 @@ def parse_epub_opf_metadata(opf):
     localized = named_metadata.get('comic-book-butler:localizedseries')
     if localized:
         metadata['localized_series'] = localized.strip()
+    age_rating = named_metadata.get('comic-book-butler:agerating')
+    if age_rating:
+        metadata['books_lv'] = age_rating.strip()
     for field, name in (('link', 'weburls'), ('tags', 'tags')):
         raw = named_metadata.get('comic-book-butler:' + name, '')
         if not raw:

@@ -1,5 +1,6 @@
 """Computed holdings only; never rewrite publication metadata or inspect archives."""
 from decimal import Decimal, InvalidOperation
+import re
 
 MAX_ORDINAL = 1000000
 # Existing standalone/special sort keys start at 100000; they are not volume ordinals.
@@ -77,3 +78,52 @@ def coverage_sql(alias='m', mariadb=False):
 def missing_sql(alias='c'):
     return (f"({alias}.ambiguous=0 AND (({alias}.volumes>0 AND {alias}.volumes<{alias}.last_volume) "
             f"OR ({alias}.volumes=0 AND {alias}.chapters>0 AND {alias}.chapters<{alias}.last_chapter)))")
+
+
+def resolve_status_label(rows, publication_status='', book_count=None):
+    """Resolve display status from saved source status and file-level evidence."""
+    rows = list(rows or ())
+    try:
+        count = int(book_count) if book_count is not None else len(rows)
+    except (TypeError, ValueError, OverflowError):
+        count = len(rows)
+
+    standalone = re.compile(r'[（(]\s*단편\s*[)）]')
+    completed = re.compile(r'[（(]\s*완결\s*[)）]')
+    paths = [str(row.get('file_path') or '') for row in rows]
+    titles = [str(row.get(field) or '') for row in rows
+              for field in ('title', 'metadata_title', '_volume_title')]
+    if count == 1 and any(standalone.search(value) for value in paths + titles):
+        return '단편'
+    if any(completed.search(path) for path in paths):
+        return '완결'
+
+    volumes = {
+        value for row in rows
+        if (value := ordinal(row.get('document_volume_index'))) is not None
+        and value <= MAX_VOLUME_ORDINAL
+    }
+    expected = max((ordinal(row.get('document_volume_count')) or 0 for row in rows), default=0)
+    expected_volumes = {value for value in volumes if value <= expected}
+    if expected > 0 and len(expected_volumes) == expected:
+        return '완결'
+
+    labels = {'0': '연재', '1': '휴재', '2': '완결'}
+    status = str(publication_status or '').strip()
+    if status in labels:
+        return labels[status]
+
+    has_volume_or_chapter = False
+    for row in rows:
+        for field, maximum in (('document_volume_index', MAX_VOLUME_ORDINAL),
+                               ('document_number', MAX_ORDINAL)):
+            try:
+                value = Decimal(str(row.get(field)))
+            except (InvalidOperation, ValueError, TypeError):
+                continue
+            if value.is_finite() and 0 < value <= maximum:
+                has_volume_or_chapter = True
+                break
+        if has_volume_or_chapter:
+            break
+    return '연재' if has_volume_or_chapter else '알 수 없음'
