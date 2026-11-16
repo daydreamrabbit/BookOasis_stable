@@ -7,6 +7,7 @@ import { evaluateScanPollingState } from './scan_status_polling_policy.js';
 
 let statusIntervalId = null;
 let wasScanningPrevious = false;
+const activeLazyScanTargets = new Map();
 let lastActiveLibIds = new Set();
 let lastIsHeaderScanning = false;
 let scanLatchTimerMap = new Map();
@@ -35,6 +36,18 @@ let currentActivityTasks = [];
 function activityIdentity(task) {
   return JSON.stringify([task.type || task.task_type, task.id ?? task.key ?? task.run_id,
     task.finished_at || task.started_at || task.enqueued_at || '']);
+}
+
+function lazyScanAffectsOpenDetail(task) {
+  const target = task.kwargs || {};
+  if (String(target.db_type || 'general') !== String(state.currentLibraryType)) return false;
+  if (Array.isArray(target.book_ids) && target.book_ids.length) {
+    const ids = new Set((state.detailBookIds || []).map(String));
+    return target.book_ids.some(id => ids.has(String(id)));
+  }
+  if (target.library_id != null && String(target.library_id) !== String(state.detailLibraryId)) return false;
+  if (target.series_name != null) return String(target.series_name) === String(state.detailSeriesName);
+  return true;
 }
 
 function currentDetailRefreshKey() {
@@ -505,6 +518,10 @@ function updateCategoryScanSpinners(data, scanRefresh = {}) {
       const taskDbType = kwargs.db_type || 'general';
 
       if (taskType === 'lazy_scan') {
+        if (t === data.raw_status?.running) {
+          const identity = String(t.id ?? t.key ?? JSON.stringify(kwargs));
+          activeLazyScanTargets.set(identity, t);
+        }
         isGlobalOrCurrentLibScanning = true;
       } else if (libId !== undefined && libId !== null) {
         currentActiveLibIds.add(`${taskDbType}:${libId}`);
@@ -533,18 +550,17 @@ function updateCategoryScanSpinners(data, scanRefresh = {}) {
   } else {
     if (wasScanningPrevious) {
       wasScanningPrevious = false;
-      // 스캔이 끝난 라이브러리의 상세 화면이 열려 있으면 그 상세도 함께 갱신한다
-      // (아래에서 scanLatchTimerMap을 비우기 전의 활성 목록으로 판단해야 한다).
+      // Lazy 작업의 실제 대상이 열린 시리즈와 일치할 때만 갱신한다.
       const detailView = document.getElementById('book-detail-view');
-      const detailLibraryKey = `${state.currentLibraryType}:${state.detailLibraryId}`;
       const shouldRefreshDetail = Boolean(
         !scanRefresh.detailRefreshed
         && detailView
         && detailView.style.display !== 'none'
         && state.detailSeriesName
         && state.detailBookIds?.length
-        && (lastActiveLibIds.has(detailLibraryKey) || lastIsHeaderScanning)
+        && [...activeLazyScanTargets.values()].some(lazyScanAffectsOpenDetail)
       );
+      activeLazyScanTargets.clear();
       scanLatchTimerMap.clear();
       console.log('[ScanSpinner] 🏁 백그라운드 스캔 완수. 리스트 자동 갱신');
       if (!scanRefresh.dashboardInvalidated && typeof window.invalidateDashboardData === 'function') {
@@ -575,8 +591,12 @@ function updateCategoryScanSpinners(data, scanRefresh = {}) {
         );
       }
       if (!shouldRefreshDetail && pendingDetailRefreshKey) {
-        clearPendingDetailRefreshTimer();
-        pendingDetailRefreshKey = '';
+        if (pendingDetailRefreshKey === currentDetailRefreshKey()) {
+          queuePendingDetailRefresh(false);
+        } else {
+          clearPendingDetailRefreshTimer();
+          pendingDetailRefreshKey = '';
+        }
       }
     }
   }
