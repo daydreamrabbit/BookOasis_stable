@@ -526,6 +526,13 @@ function initDynamicSidebarDelegation() {
       runAfterMobileSidebarClose(() => {
         window.setTrashLibraryFilter?.(trashButton.dataset.dbType,trashButton.dataset.libraryId,libraryName);
         sessionStorage.setItem('bookoasis:settings:activeTab','trash');
+        if (state.currentLibraryId === 'settings') {
+          const trashTabButton = document.querySelector('.settings-tab-btn[data-settings-tab="trash"]');
+          if (trashTabButton) {
+            trashTabButton.click();
+            return;
+          }
+        }
         selectCategory('settings');
       });
       return;
