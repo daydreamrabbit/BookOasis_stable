@@ -11,8 +11,16 @@ const CONTENT_RATING_LABELS = {
   20: '포르노',
 };
 
-export function resolveContentRatingLabel(ratingLevel) {
-  return CONTENT_RATING_LABELS[ratingLevel] || '등급 확인 필요';
+export function resolveContentRatingLabel(ratingLevel, genre = '', tags = '') {
+  const normalizedLevel = Number(ratingLevel);
+  const metadataTokens = [genre, tags].flatMap((value) => String(value || '')
+    .replace(/，/g, ',')
+    .split(',')
+    .map((token) => token.trim().toLowerCase().replace(/\s+/g, '')));
+  const isLightNovel = metadataTokens.some((token) => token.endsWith('라이트노벨') || token.endsWith('라노벨') || token.includes('lightnovel'));
+  const hasAdultMarker = metadataTokens.some((token) => ['성인', 'adult', 'adultonly', 'r18', 'r18+'].includes(token));
+  if (normalizedLevel === 19 && isLightNovel && hasAdultMarker) return '성인라노벨';
+  return CONTENT_RATING_LABELS[normalizedLevel] || '등급 확인 필요';
 }
 
 const PORN_RATING_VALUES = new Set([
@@ -128,7 +136,7 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
     const colors = ratingColorMap[ratingLevel] || ratingColorMap[18];
     // The numeric level is the normalized authority. A cached/older display
     // string must not turn level 19 (R18+) into the level-20 Porn label.
-    const ratingLabel = resolveContentRatingLabel(ratingLevel);
+    const ratingLabel = resolveContentRatingLabel(ratingLevel, meta.genre, meta.tags);
     ratingBadgeHtml = `
       <span class="badge" data-role="detail-rating-badge" title="열람 등급" style="background: ${colors.bg}; color: ${colors.fg}; border: 1px solid ${colors.border}; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; font-weight: 700;">
         <i class="fa-solid fa-shield-halved" style="font-size: 0.7rem; margin-right: 0.3rem;"></i>${ratingLabel}
@@ -148,7 +156,7 @@ export function renderDetailHeader(meta, books, safeSeriesName, actualLibraryId,
   const publicationStatusLabel = meta.publication_status_label || '알 수 없음';
   const publicationStatusColors = publicationStatusColorMap[publicationStatusLabel] || { bg: 'rgba(148, 163, 184, 0.15)', fg: '#94a3b8', border: 'rgba(148, 163, 184, 0.3)' };
   const holdingsStatusBadgeHtml = meta.holdings_status === 'missing' && meta.holdings_label
-    ? `<span class="badge detail-badge" data-role="detail-holdings-badge" title="보유 권수 상태" style="color:#f87171;border:1px solid #f8717166;padding:.15rem .5rem;border-radius:4px;font-size:.75rem">${escapeHtml(meta.holdings_label)}</span>` : '';
+    ? `<span class="badge detail-badge" data-role="detail-holdings-badge" title="보유 권수 상태" style="color:#f87171;border:1px solid #f8717166;padding:.15rem .5rem;border-radius:4px;font-size:.75rem">${escapeHtml('누락')}</span>` : '';
   const publicationStatusBadgeHtml = `
     <span class="badge" data-role="detail-publication-status-badge" title="연재 상태" style="background: ${publicationStatusColors.bg}; color: ${publicationStatusColors.fg}; border: 1px solid ${publicationStatusColors.border}; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; font-weight: 700;">
       <i class="fa-solid fa-bookmark" style="font-size: 0.7rem; margin-right: 0.3rem;"></i>${escapeHtml(publicationStatusLabel)}

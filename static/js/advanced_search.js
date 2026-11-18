@@ -2,32 +2,34 @@ import {state} from './state.js';
 import {closeLibrarySearchPreview} from './library_search_preview.js?rev=20260921-search-preview-v1';
 
 const names={categories:'카테고리',series:'시리즈명',author:'글 작가',cover_artist:'그림 작가',publisher:'출판사',publication_status:'연재상태',genre:'장르',tags:'태그',rating:'연령등급'};
-const ratings={'0':'전체이용가','15':'15세이상','18':'18세이상(성인)','19':'성인망가','20':'포르노'};
-const statuses={'0':'연재','1':'휴재','2':'완결','missing':'누락','unknown':'알 수 없음'};
+const ratings={'0':'전체이용가','15':'15세이상','18':'18세이상(성인)','19':'성인망가·성인라노벨','19-manga':'성인망가','19-light-novel':'성인라노벨','20':'포르노'};
+const statuses={'0':'연재','1':'휴재','2':'완결','missing':'누락','unknown':'알 수 없음','short':'단편'};
 const empty=()=>({categories:[],series:'',author:'',cover_artist:'',publisher:[],publication_status:[],genre:[],tags:[],rating:[],genre_mode:'and',tags_mode:'and'});
 const copy=value=>JSON.parse(JSON.stringify(value));
-let panel,button,form,message,submit,draft=empty(),choices={},request,serial=0,busy=false,openedType;
+let panel,button,form,message,submit,draft=empty(),choices={},request,serial=0,busy=false,openedType,optionsTimer;
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
 function label(key,value){return key==='categories'?(choices.categories||[]).find(v=>v.value===value)?.label||value:key==='rating'?ratings[value]||value:key==='publication_status'?statuses[value]||value:value;}
 async function json(url,signal){const r=await fetch(url,{signal,cache:'no-store'});if(!r.ok||!r.headers.get('content-type')?.includes('application/json'))throw Error('검색 조건을 불러오지 못했습니다. 다시 열어 주세요.');const d=await r.json();if(!d.success)throw Error(d.error||'조회 실패');return d;}
 function position(){if(!panel||panel.hidden)return;const r=button.closest('.library-search-box').getBoundingClientRect();if(innerWidth>640){const top=Math.max(8,Math.min(r.bottom+8,innerHeight-200));panel.style.top=top+'px';panel.style.maxHeight=Math.max(120,innerHeight-top-8)+'px';panel.style.left=Math.max(8,Math.min(r.left,innerWidth-Math.min(860,innerWidth-16)-8))+'px';}else{panel.style.top='auto';panel.style.left='8px';panel.style.maxHeight='85dvh';}}
-function close(){if(!panel)return;panel.hidden=true;button.setAttribute('aria-expanded','false');request?.abort();serial++;button.focus();}
-function renderChoices(key,loading=false){
+function close(){if(!panel)return;panel.hidden=true;button.setAttribute('aria-expanded','false');clearTimeout(optionsTimer);request?.abort();serial++;busy=false;if(submit)submit.disabled=false;button.focus();}
+function scheduleOptionsLoad(){clearTimeout(optionsTimer);optionsTimer=setTimeout(()=>loadOptions(),250);}
+function renderChoices(key,loading=false,error=''){
   const field=form.querySelector(`[data-field="${key}"]`);if(!field)return;
   field.replaceChildren();const summary=el('summary');field.append(summary);
   const updateSummary=()=>{summary.replaceChildren(el('span',names[key]+' · '),el('span',draft[key].length?draft[key].length+'개 선택':'전체','advanced-selection-count'));field.classList.toggle('has-selection',draft[key].length>0);summary.title=draft[key].map(v=>label(key,v)).join(', ')||'전체';};updateSummary();
   const input=el('input');input.type='search';input.placeholder=names[key]+' 값 찾기';input.setAttribute('aria-label',input.placeholder);field.append(input);
   const list=el('div',undefined,'advanced-choice-list');field.append(list);
   if(loading){input.disabled=true;list.append(el('p','불러오는 중…'));return;}
-  const draw=()=>{list.replaceChildren();const matches=(choices[key]||[]).filter(v=>v.label.toLocaleLowerCase().includes(input.value.toLocaleLowerCase()));for(const v of matches){const row=el('label');const check=el('input');check.type='checkbox';check.checked=draft[key].includes(v.value);check.addEventListener('change',()=>{draft[key]=check.checked?[...draft[key],v.value]:draft[key].filter(x=>x!==v.value);updateSummary();if(key==='categories')loadOptions();});row.append(check,el('span',v.label));list.append(row);}if(!matches.length)list.append(el('p','해당 값이 없습니다.'));};input.addEventListener('input',draw);draw();
+  if(error){input.disabled=true;list.append(el('p',error));return;}
+  const draw=()=>{list.replaceChildren();const matches=(choices[key]||[]).filter(v=>v.label.toLocaleLowerCase().includes(input.value.toLocaleLowerCase()));for(const v of matches){const row=el('label');const check=el('input');check.type='checkbox';check.checked=draft[key].includes(v.value);check.addEventListener('change',()=>{draft[key]=check.checked?[...draft[key],v.value]:draft[key].filter(x=>x!==v.value);updateSummary();if(key==='categories')scheduleOptionsLoad();});row.append(check,el('span',v.label));list.append(row);}if(!matches.length)list.append(el('p','해당 값이 없습니다.'));};input.addEventListener('input',draw);draw();
 }
 async function loadOptions(){
-  request?.abort();request=new AbortController();const current=++serial;busy=true;submit.disabled=true;message.textContent='선택한 카테고리의 정보를 불러오는 중…';
+  request?.abort();const controller=new AbortController();request=controller;let timedOut=false;const timeout=setTimeout(()=>{timedOut=true;controller.abort();},30_000);const current=++serial;busy=true;submit.disabled=true;message.textContent='선택한 카테고리의 정보를 불러오는 중…';
   for(const key of ['publisher','publication_status','genre','tags','rating'])renderChoices(key,true);
-  try{const q=new URLSearchParams({type:openedType,filters:JSON.stringify({categories:draft.categories})});const data=await json('/api/media/advanced-search/options?'+q,request.signal);if(current!==serial||openedType!==state.currentLibraryType)return;
+  try{const q=new URLSearchParams({type:openedType,filters:JSON.stringify({categories:draft.categories})});const data=await json('/api/media/advanced-search/options?'+q,controller.signal);if(current!==serial||openedType!==state.currentLibraryType)return;
     let removed=0;for(const key of ['publisher','publication_status','genre','tags','rating']){const values=data.options[key]||[];const prior=draft[key].length;draft[key]=draft[key].filter(x=>values.includes(x));removed+=prior-draft[key].length;choices[key]=values.map(value=>({value,label:label(key,value)}));renderChoices(key);}
     message.textContent=removed?`새 범위에 없는 선택값 ${removed}개를 해제했습니다.`:'카테고리를 선택하지 않으면 접근 가능한 전체 카테고리를 검색합니다.';busy=false;submit.disabled=false;
-  }catch(e){if(e.name!=='AbortError'&&current===serial)message.textContent=e.message;}
+  }catch(e){if(current!==serial)return;busy=false;submit.disabled=false;if(e.name==='AbortError'&&!timedOut)return;const reason=timedOut?'요청 시간이 초과되었습니다.':'목록을 불러오지 못했습니다.';for(const key of ['publisher','publication_status','genre','tags','rating'])renderChoices(key,false,reason);message.textContent=timedOut?'조건 조회가 오래 걸려 중단했습니다. 닫았다 다시 열어 재시도해 주세요.':'조건 조회에 실패했습니다. 닫았다 다시 열어 재시도해 주세요.';}finally{clearTimeout(timeout);}
 }
 async function apply(value){
   if(!['general','adult'].includes(state.currentLibraryType))return;
@@ -53,6 +55,9 @@ function renderActive(){
 async function open(){
   if(!panel.hidden){close();return;}openedType=state.currentLibraryType;if(!['general','adult'].includes(openedType))return;busy=true;
   closeLibrarySearchPreview();draft={...empty(),...copy(state.advancedSearch||{}),series:state.advancedSearch?.series??document.getElementById('library-search').value};
+  // Older saved searches used one combined level-19 value. Preserve its
+  // meaning while exposing separate adult manga and adult light novel facets.
+  draft.rating=[...new Set((Array.isArray(draft.rating)?draft.rating:[]).flatMap(value=>String(value)==='19'?['19-manga','19-light-novel']:[String(value)]))];
   // Keep explicit advanced scopes (including "all"); otherwise inherit the
   // category currently being browsed, never virtual home/history/favorite IDs.
   if(!state.advancedSearch&&/^[1-9]\d*$/.test(String(state.currentLibraryId))){
@@ -68,8 +73,10 @@ async function open(){
   message=el('p','','advanced-message');message.setAttribute('role','status');submit=el('button','검색','advanced-submit');submit.type='submit';submit.disabled=true;
   const actions=el('div',undefined,'advanced-actions');const reset=el('button','초기화','advanced-reset');reset.type='button';reset.addEventListener('click',resetSearch);actions.append(reset,submit);
   form.append(message,actions);panel.hidden=false;button.setAttribute('aria-expanded','true');position();
-  const current=++serial;request?.abort();request=new AbortController();
-  try{const data=await json('/api/media/libraries?type='+openedType,request.signal);if(current!==serial)return;choices.categories=(data.libraries||[]).map(l=>({value:String(l.id),label:l.name}));const allowed=new Set(choices.categories.map(v=>v.value));draft.categories=draft.categories.filter(v=>allowed.has(v));renderChoices('categories');await loadOptions();form.querySelector('input')?.focus();}catch(e){if(e.name!=='AbortError')message.textContent=e.message;}
+  const current=++serial;request?.abort();const controller=new AbortController();request=controller;let timedOut=false;const timeout=setTimeout(()=>{timedOut=true;controller.abort();},30_000);
+  try{const data=await json('/api/media/libraries?type='+openedType,controller.signal);if(current!==serial)return;choices.categories=(data.libraries||[]).map(l=>({value:String(l.id),label:l.name}));const allowed=new Set(choices.categories.map(v=>v.value));draft.categories=draft.categories.filter(v=>allowed.has(v));renderChoices('categories');await loadOptions();form.querySelector('input')?.focus();}
+  catch(e){if(current!==serial)return;if(e.name==='AbortError'&&!timedOut)return;busy=false;submit.disabled=false;for(const key of ['categories','publisher','publication_status','genre','tags','rating'])renderChoices(key,false,timedOut?'요청 시간이 초과되었습니다.':'목록을 불러오지 못했습니다.');message.textContent=timedOut?'카테고리 조회가 오래 걸려 중단했습니다. 닫았다 다시 열어 재시도해 주세요.':'카테고리 조회에 실패했습니다. 닫았다 다시 열어 재시도해 주세요.';}
+  finally{clearTimeout(timeout);}
 }
 export function initAdvancedSearch(){
   button=document.getElementById('btn-advanced-search');if(!button||button.dataset.bound)return;button.dataset.bound='1';

@@ -75,6 +75,31 @@ def _has_pending_delete_column(conn, db_type):
     return exists
 
 
+def _adult_light_novel_expression(conn, alias='b'):
+    """Return a SQL predicate matching the shared adult-light-novel rule."""
+    if database.is_mariadb_mode():
+        metadata_tokens = (
+            f"CONCAT(',',REPLACE(REPLACE(LOWER(CONCAT(COALESCE({alias}.genre,''),',',"
+            f"COALESCE({alias}.tags,''))),' ',''),'，',','),',')"
+        )
+        adult_marker = "(" + ' OR '.join(
+            f"INSTR({metadata_tokens},'{marker}')>0"
+            for marker in (',성인,', ',adult,', ',adultonly,', ',r18,', ',r18+,')
+        ) + ")"
+        light_novel_marker = (
+            f"(INSTR({metadata_tokens},'라이트노벨,')>0 "
+            f"OR INSTR({metadata_tokens},'라노벨,')>0 "
+            f"OR INSTR({metadata_tokens},'lightnovel')>0)"
+        )
+        return f"({adult_marker} AND {light_novel_marker})"
+
+    conn.create_function(
+        'bo_adult_light_novel', 2,
+        ContentRatingService.is_adult_light_novel,
+    )
+    return f"bo_adult_light_novel({alias}.genre,{alias}.tags)=1"
+
+
 def _rating_expressions(conn, keywords=None):
     maria = database.is_mariadb_mode()
     keywords = ContentRatingService.get_adult_keywords() if keywords is None else keywords
@@ -86,6 +111,9 @@ def _rating_expressions(conn, keywords=None):
             params.append(key)
         normalized = "LOWER(REGEXP_REPLACE(COALESCE(b.books_lv,''), '^[[:space:]]+|[[:space:]]+$', ''))"
         level = "CASE WHEN b.books_lv IS NULL OR b.books_lv='' THEN 0 ELSE CASE " + normalized + ' ' + ' '.join(cases) + ' ELSE 20 END END'
+        # Keep rating calculation and the advanced-search facet on one rule.
+        adult_light_novel = _adult_light_novel_expression(conn)
+        level = f"GREATEST(({level}),CASE WHEN {adult_light_novel} THEN 19 ELSE 0 END)"
         keyword_conditions = []
         for keyword in keywords:
             keyword_conditions.append("INSTR(CAST(LOWER(CONCAT(COALESCE(b.genre,''),' ',COALESCE(b.tags,''))) AS BINARY), CAST(? AS BINARY)) > 0")
@@ -101,6 +129,7 @@ def _rating_expressions(conn, keywords=None):
         conn.create_function('bo_rating', 3, lambda lv, genre, tags: ContentRatingService.compute_effective_level(lv, genre, tags, keywords))
         conn.create_function('bo_dir', 2, _dir)
         conn.create_function('bo_sort', 1, _sort)
+        adult_light_novel = _adult_light_novel_expression(conn)
         level = 'bo_rating(b.books_lv,b.genre,b.tags)'
         directory = 'bo_dir(b.file_path,b.file_format)'
     return level, directory, params
@@ -108,6 +137,7 @@ def _rating_expressions(conn, keywords=None):
 
 def _query(conn, library_id, user_id, rating, series_scope=None, library_ids=None, read_filter='', db_type=None):
     level, directory, params = _rating_expressions(conn)
+    adult_light_novel = _adult_light_novel_expression(conn)
     where = ['(b.is_deleted=0 OR b.is_deleted IS NULL)']
     if _has_pending_delete_column(conn, db_type):
         where.append('NOT EXISTS(SELECT 1 FROM libraries lifecycle WHERE lifecycle.id=b.library_id AND COALESCE(lifecycle.pending_delete,0)<>0)')
@@ -132,6 +162,7 @@ def _query(conn, library_id, user_id, rating, series_scope=None, library_ids=Non
                {directory} AS group_dir,b.created_at,b.cover_image,b.author,b.genre,b.tags,
                b.books_lv,b.publication_status,b.series_alias,b.metadata_locked,
                b.document_volume_index,b.document_number,({level}) AS effective_level,
+               {adult_light_novel} AS adult_light_novel,
                CASE WHEN COALESCE(p.is_completed,0)=1 OR (COALESCE(b.total_pages,0)>0 AND COALESCE(p.pages_read,0)>=b.total_pages) THEN 1 ELSE 0 END AS completed,
                COALESCE(p.pages_read,0) AS pages_read,
                CASE WHEN EXISTS(SELECT 1 FROM user_favorites f WHERE f.book_id=b.id AND f.user_id={safe_user}) THEN 1 ELSE 0 END AS favorite
@@ -139,6 +170,7 @@ def _query(conn, library_id, user_id, rating, series_scope=None, library_ids=Non
         WHERE {' AND '.join(where)}
     ), scoped AS (
         SELECT raw_books.*,MAX(effective_level) OVER(PARTITION BY library_id,group_name,group_dir) AS series_level,
+            MAX(adult_light_novel) OVER(PARTITION BY library_id,group_name,group_dir) AS series_is_adult_light_novel,
             MIN(completed) OVER(PARTITION BY library_id,group_name,group_dir) AS series_completed FROM raw_books
     ), eligible AS (
         SELECT * FROM scoped {'WHERE favorite=1' if library_id == 'favorite' else ''}
@@ -148,6 +180,7 @@ def _query(conn, library_id, user_id, rating, series_scope=None, library_ids=Non
                MAX(COALESCE(metadata_locked,0)) AS any_locked,
                MIN(series_completed) AS all_completed, MAX(CASE WHEN completed=1 OR pages_read>0 THEN 1 ELSE 0 END) AS has_progress,
                MAX(favorite) AS is_favorite,MAX(series_level) AS series_level,
+               MAX(series_is_adult_light_novel) AS series_is_adult_light_novel,
                {series_cover_id_sql('eligible', database.is_mariadb_mode(), fallback=False)} AS cover_id,
                {','.join(f"MIN(CASE WHEN {field} IS NOT NULL AND {field}<>'' THEN id END) AS {field}_id" for field in ('author','genre','tags','books_lv','publication_status','series_alias'))}
         FROM eligible GROUP BY library_id,group_name,group_dir HAVING MAX(series_level)<=?{read_condition}
