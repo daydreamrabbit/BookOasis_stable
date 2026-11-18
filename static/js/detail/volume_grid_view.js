@@ -13,6 +13,8 @@ export function renderVolumeGrid(orderedBooks, safeSeriesName, dbType = 'general
     const totalPages = Math.max(1, Number(book.total_pages) || 1);
     const isCompletedValue = Number(book.is_completed) === 1;
     const format = (book.file_format || '').toLowerCase();
+    const documentVolumeIndex = book.document_volume_index == null ? '' : String(book.document_volume_index);
+    const documentNumber = book.document_number == null ? '' : String(book.document_number);
     // title_alias is an alternate/original title, not the display title of an
     // individual volume.  Prefer the core-provided volume title so a metadata
     // alias such as "Wild Ranker" cannot replace "와일드 랭커 01화".
@@ -46,6 +48,8 @@ export function renderVolumeGrid(orderedBooks, safeSeriesName, dbType = 'general
            data-cover-align="${book.cover_align || 'center'}"
            data-title="${(rawDisplayTitle || '').replace(/"/g, '&quot;')}"
            data-book-title="${(rawDisplayTitle || '').replace(/"/g, '&quot;')}"
+           data-document-volume-index="${documentVolumeIndex.replace(/"/g, '&quot;')}"
+           data-document-number="${documentNumber.replace(/"/g, '&quot;')}"
            data-file-format="${(book.file_format || '').replace(/"/g, '&quot;')}"
            data-pages-read="${pagesRead}"
            data-total-pages="${book.total_pages}"

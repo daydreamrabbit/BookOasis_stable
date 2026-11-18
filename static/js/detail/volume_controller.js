@@ -1,4 +1,5 @@
 // volume_controller.js – 권별(Volume) 목록 필터링, 정렬 및 뷰 상태 관리
+import { compareVolumeOrder } from './volume_sort.js';
 
 export const detailVolumeViewState = {
   key: '',
@@ -15,11 +16,7 @@ export function applyDetailVolumeView() {
   const cards = Array.from(section.querySelectorAll('.volume-card, .vol-grid-card'));
 
   cards.sort((left, right) => {
-    // data-title 기반 자연 정렬 (파일명 순서 기준)
-    const titleA = left.dataset.title || '';
-    const titleB = right.dataset.title || '';
-    const cmp = titleA.localeCompare(titleB, 'ko', { numeric: true, sensitivity: 'base' });
-    return detailVolumeViewState.sortOrder === 'newest' ? -cmp : cmp;
+    return compareVolumeOrder(left, right, detailVolumeViewState.sortOrder === 'newest');
   });
 
   let visibleCount = 0;

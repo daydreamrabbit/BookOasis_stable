@@ -5,6 +5,7 @@ import { renderAudiobookVolumes } from './detail/volume_audiobook_view.js';
 import { renderVideoVolumes } from './detail/volume_video_view.js';
 import { renderVolumeGrid } from './detail/volume_grid_view.js';
 import { renderVolumeList } from './detail/volume_list_view.js?rev=20260927-tts-listen-v1';
+import { compareVolumeOrder } from './detail/volume_sort.js';
 export { renderDetailHeader } from './detail/header_view.js';
 
 export function renderVolumesList(books, safeSeriesName, actualLibraryId, dbType = 'general', viewOptions = {}) {
@@ -13,10 +14,7 @@ export function renderVolumesList(books, safeSeriesName, actualLibraryId, dbType
   const gridMode = viewOptions.gridMode === true || state.detailVolumeGridView === true;
 
   const orderedBooks = [...books].sort((left, right) => {
-    const titleL = (left.title || '').toLowerCase();
-    const titleR = (right.title || '').toLowerCase();
-    const cmp = titleL.localeCompare(titleR, undefined, { numeric: true, sensitivity: 'base' });
-    return sortOrder === 'newest' ? -cmp : cmp;
+    return compareVolumeOrder(left, right, sortOrder === 'newest');
   });
 
   const isAudiobook = (state.currentLibraryType === 'audiobook') || (books && books.length > 0 && (books[0].audiobook_id || (books[0].file_format || '').toLowerCase() === 'm4a'));

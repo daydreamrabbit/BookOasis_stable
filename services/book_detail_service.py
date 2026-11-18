@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+from decimal import Decimal, InvalidOperation
 # pyrefly: ignore [missing-import]
 from repositories.audiobook_repository import AudiobookRepository
 from repositories.video_repository import VideoRepository
@@ -24,6 +25,27 @@ def _series_book_display_title(book):
     if file_path:
         return os.path.splitext(os.path.basename(file_path))[0]
     return title
+
+
+def _series_book_sort_key(book):
+    """Sort explicit volume/chapter metadata before title-only fallbacks; zero is valid."""
+    for field, upper_bound in (
+        ('document_volume_index', 100000),
+        ('document_number', 1000000),
+    ):
+        raw_value = book.get(field)
+        if raw_value is None or not str(raw_value).strip():
+            continue
+        try:
+            number = Decimal(str(raw_value))
+        except (InvalidOperation, ValueError, TypeError):
+            continue
+        if number.is_finite() and Decimal(0) <= number < Decimal(upper_bound):
+            title = book.get('title') or ''
+            return (0, number, natural_sort_key(title))
+
+    title = book.get('title') or ''
+    return (1, Decimal(0), natural_sort_key(title))
 
 
 # album.yaml genres의 분류 머리말처럼 정보가 없는 값
@@ -429,6 +451,8 @@ class BookDetailService:
                 'last_read_at': b['last_read_at'] or '',
                 'metadata_locked': b.get('metadata_locked', 0),
                 'cover_align': b.get('cover_align') or 'center',
+                'document_volume_index': '' if b.get('document_volume_index') is None else str(b.get('document_volume_index')),
+                'document_number': '' if b.get('document_number') is None else str(b.get('document_number')),
             })
         
         # 부모 디렉토리 기반 단행본 격리 필터
@@ -448,7 +472,7 @@ class BookDetailService:
         meta.update(coverage(visible_rows, meta.get('publication_status')))
         meta['publication_status_label'] = resolve_status_label(
             visible_rows, meta.get('publication_status'), book_count=len(visible_rows))
-        books_list.sort(key=lambda x: natural_sort_key(x['title']))
+        books_list.sort(key=_series_book_sort_key)
         return meta, books_list
 
     @staticmethod

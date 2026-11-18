@@ -15,6 +15,8 @@ export function renderVolumeList(orderedBooks, safeSeriesName, actualLibraryId, 
     const isCompletedValue = Number(book.is_completed) === 1;
     const isNotCompleted = !isCompletedValue;
     const format = (book.file_format || '').toLowerCase();
+    const documentVolumeIndex = book.document_volume_index == null ? '' : String(book.document_volume_index);
+    const documentNumber = book.document_number == null ? '' : String(book.document_number);
     const pathText = book.file_path || '';
     const imgdirPathDisplay = pathText.replace(/[\\/]__folder__\.imgdir$/i, '');
     const pathDisplay = format === 'imgdir' ? imgdirPathDisplay : pathText;
@@ -104,7 +106,7 @@ export function renderVolumeList(orderedBooks, safeSeriesName, actualLibraryId, 
       : readBtn;
 
     volumesHtml += `
-      <div class="volume-card" data-role="detail-volume-open-reader" data-book-id="${book.id}" data-cover-align="${book.cover_align || 'center'}" data-title="${(rawDisplayTitle || '').replace(/"/g, '&quot;')}" data-book-title="${(rawDisplayTitle || '').replace(/"/g, '&quot;')}" data-file-format="${(book.file_format || '').replace(/"/g, '&quot;')}" data-pages-read="${pagesRead}" data-total-pages="${book.total_pages}" data-is-completed="${isCompletedValue ? 1 : 0}" data-page-missing="${noOffsets ? 1 : 0}" style="${unreadOnly && !isNotCompleted ? 'display: none;' : ''}">
+      <div class="volume-card" data-role="detail-volume-open-reader" data-book-id="${book.id}" data-cover-align="${book.cover_align || 'center'}" data-title="${(rawDisplayTitle || '').replace(/"/g, '&quot;')}" data-book-title="${(rawDisplayTitle || '').replace(/"/g, '&quot;')}" data-document-volume-index="${documentVolumeIndex.replace(/"/g, '&quot;')}" data-document-number="${documentNumber.replace(/"/g, '&quot;')}" data-file-format="${(book.file_format || '').replace(/"/g, '&quot;')}" data-pages-read="${pagesRead}" data-total-pages="${book.total_pages}" data-is-completed="${isCompletedValue ? 1 : 0}" data-page-missing="${noOffsets ? 1 : 0}" style="${unreadOnly && !isNotCompleted ? 'display: none;' : ''}">
         <img class="volume-thumb" src="${volumeCoverSrc}" alt="cover" style="object-position: ${coverAlignToObjectPosition(book.cover_align)} center;"
              onerror="if(this.src.indexOf('/covers/fallback')===-1 &amp;&amp; !this.src.startsWith('data:image/svg+xml')){this.src='${volumeFallbackCoverSrc}';}else{this.onerror=null; this.src='${buildTextCoverDataUri({ title: book.title || rawDisplayTitle, format: book.file_format, seed: book.id })}';}">
         <div class="volume-info">
