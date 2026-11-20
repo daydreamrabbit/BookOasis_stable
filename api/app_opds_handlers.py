@@ -233,8 +233,8 @@ class AppOpdsHandlers:
         if not self._check_auth_cached(is_adult=is_adult):
             return self._unauthorized()
 
-        from urllib.parse import unquote
-        resolved_series_name = '' if series_name == EMPTY_SERIES_TOKEN else unquote(series_name)
+        # Flask decodes the path once; decoding it again breaks names such as '100%AB'.
+        resolved_series_name = '' if series_name == EMPTY_SERIES_TOKEN else series_name
         db_type = 'adult' if is_adult else 'general'
         page, page_size, offset = self._get_page_params()
         cache_key = f"app_opds_series:{db_type}:{lib_id}:{resolved_series_name}:{page}:{page_size}"

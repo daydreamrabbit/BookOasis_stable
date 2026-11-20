@@ -380,12 +380,25 @@ server {
         proxy_send_timeout 300;
     }
 }
-        proxy_send_timeout 300;
-    }
-}
 ```
 
 After changing the Nginx configuration, verify it with `sudo nginx -t` and apply the settings using `sudo systemctl reload nginx`.
+
+### Send the Host header only once
+
+If direct IP access works but access through your domain (via a proxy) shows this error, the proxy is sending the `Host` header twice.
+
+```
+Bad Request
+Invalid HTTP Header: 'HOST'
+```
+
+Gunicorn rejects requests with more than one Host header as required by RFC 9112 section 3.2. This prevents the proxy and backend from reading different Host values, so fix the proxy configuration instead of relaxing the server check.
+
+* **Nginx Proxy Manager**: it already sends Host. Remove an extra `proxy_set_header Host $host;` from the Advanced tab.
+* **Plain Nginx**: check that `proxy_set_header Host` is not duplicated in the same block or an included file such as `proxy_params`.
+* **Synology reverse proxy**: do not add `Host` under Custom Header.
+* **Traefik / Caddy**: do not add Host through a custom header setting.
 
 ### Caddy Setup Example (`/etc/caddy/Caddyfile`)
 
