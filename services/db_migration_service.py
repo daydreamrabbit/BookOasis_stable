@@ -232,7 +232,9 @@ _SCHEMA_SQL = """
         cover_aspect_ratio TEXT DEFAULT '4:3',
         hide_title INTEGER DEFAULT 0,
         use_folder_cover INTEGER NOT NULL DEFAULT 0,
-        content_kind TEXT NOT NULL DEFAULT 'unspecified'
+        content_kind TEXT NOT NULL DEFAULT 'unspecified',
+        pending_delete INTEGER NOT NULL DEFAULT 0,
+        transfer_target_id INTEGER DEFAULT NULL
     );
 
     CREATE TABLE IF NOT EXISTS plugin_group_assignments (
@@ -511,6 +513,18 @@ _SCHEMA_SQL = """
         last_epub_percent INTEGER DEFAULT 0,
         last_epub_fingerprint TEXT,
         last_epub_updated_at DATETIME
+    );
+
+    -- 사용자/도서당 한 행. 원본 도서 삭제 시 정리되어 UUID별 무한 누적을 피한다.
+    CREATE TABLE IF NOT EXISTS reading_progress_sync_state (
+        book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL,
+        issued_version INTEGER NOT NULL DEFAULT 0,
+        reserved_token TEXT,
+        applied_version INTEGER NOT NULL DEFAULT 0,
+        applied_token TEXT,
+        payload_hash TEXT,
+        PRIMARY KEY(book_id, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS tts_progress (
@@ -1344,6 +1358,14 @@ def _ensure_mariadb_columns():
         ('media_adult', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
         ('media_audiobook', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
         ('media_video', 'libraries', 'use_folder_cover', 'TINYINT(1) NOT NULL DEFAULT 0'),
+        ('media_general', 'libraries', 'pending_delete', 'INT NOT NULL DEFAULT 0'),
+        ('media_adult', 'libraries', 'pending_delete', 'INT NOT NULL DEFAULT 0'),
+        ('media_audiobook', 'libraries', 'pending_delete', 'INT NOT NULL DEFAULT 0'),
+        ('media_video', 'libraries', 'pending_delete', 'INT NOT NULL DEFAULT 0'),
+        ('media_general', 'libraries', 'transfer_target_id', 'BIGINT DEFAULT NULL'),
+        ('media_adult', 'libraries', 'transfer_target_id', 'BIGINT DEFAULT NULL'),
+        ('media_audiobook', 'libraries', 'transfer_target_id', 'BIGINT DEFAULT NULL'),
+        ('media_video', 'libraries', 'transfer_target_id', 'BIGINT DEFAULT NULL'),
         ('media_general', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
         ('media_adult', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
         ('media_audiobook', 'libraries', 'content_kind', "VARCHAR(24) NOT NULL DEFAULT 'unspecified'"),
