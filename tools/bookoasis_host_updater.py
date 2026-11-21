@@ -4,6 +4,7 @@
 import argparse
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 import pathlib
