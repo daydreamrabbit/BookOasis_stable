@@ -34,6 +34,7 @@ export const state = {
     ? localStorage.getItem('library_read_filter') : '',
   currentSortDirection: localStorage.getItem('library_sort_direction') === 'score_desc' ? 'rating_desc' : (localStorage.getItem('library_sort_direction') || 'asc'), // 이전 평점 정렬도 플러그인 별점으로 전환
   groupMode: localStorage.getItem('library_group_mode') || 'default', // 'default'(시리즈) | 'author'(작가별 모음)
+  listViewMode: localStorage.getItem('library_list_view_mode') === 'table' ? 'table' : 'grid',
   authorKeyFilter: '', // 작가별 카드 클릭 드릴다운용 정규화 작가 키(기본 그리드로 전환 시에만 사용)
   
   // 시스템 전역 설정

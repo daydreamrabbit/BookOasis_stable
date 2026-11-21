@@ -7,6 +7,7 @@ import re
 import database
 from repositories.series_search_query import parse_series_search_query
 from repositories.series_metadata_utils import book_metadata_select_expr, series_cover_id_sql
+from repositories.series_table_query import build_table_queries
 
 class SeriesRepository:
     @staticmethod
@@ -79,6 +80,7 @@ class SeriesRepository:
                            COALESCE(MAX(b2.created_at), '') AS latest_added
                     FROM books b2
                     WHERE (b2.is_deleted = 0 OR b2.is_deleted IS NULL)
+                      AND b2.library_id NOT IN (SELECT id FROM libraries WHERE COALESCE(pending_delete,0)<>0)
                     GROUP BY b2.library_id, COALESCE(NULLIF(b2.series_name, ''), b2.title)
                 ) rep
                 INNER JOIN books b ON b.id = rep.rep_id
@@ -340,6 +342,29 @@ class SeriesRepository:
             }
         finally:
             conn.close()
+
+    @staticmethod
+    def fetch_series_table(db_type, library_id=None, sort=None, direction=None, missing=None, search='',
+                           genres=None, tags=None, filter_mode='and', limit=100, offset=0, with_total=True):
+        """Admin table rows from the existing series summary; None while it is rebuilding."""
+        if db_type in ('audiobook', 'video'):
+            return None
+        rows_sql, rows_params, count_sql, count_params = build_table_queries(
+            'mariadb', library_id=library_id, sort=sort, direction=direction, missing=missing, search=search,
+            genres=genres, tags=tags, filter_mode=filter_mode, limit=limit, offset=offset,
+        )
+        with database.connection(db_type) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT is_ready FROM series_summary_state WHERE id = 1')
+            state = cursor.fetchone()
+            if not state or not int(state['is_ready'] or 0):
+                return None
+            total = None
+            if with_total:
+                cursor.execute(count_sql, tuple(count_params))
+                total = int(cursor.fetchone()['total'] or 0)
+            cursor.execute(rows_sql, tuple(rows_params))
+            return {'rows': [dict(row) for row in cursor.fetchall()], 'total': total}
 
     @staticmethod
     def fetch_books_for_grouping(db_type, library_id, search_query='', favorite_only=False, genre_filters=None, tag_filters=None, user_id=None, role=None, limit=None, offset=None, sort='asc', lightweight=False, include_has_metadata=False, include_all_rows=False):

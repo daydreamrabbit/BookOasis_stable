@@ -8,12 +8,17 @@ import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js
 import { BookListRefreshState, getLoadedPageRange } from './book_list_refresh_state.js';
 import { resolveSearchNavigation } from './search_navigation.js?rev=20260921-global-search-v1';
 import { toggleLibrarySortMenu } from './library_sort_menu.js';
+import { lazyModule } from './utils/lazy_module.js';
+import { syncTableModeUi } from './table_view/mode.js';
+
+const loadTableView = lazyModule(() => import('./table_view/index.js'));
 
 let filterDebounceTimer = null;
 let totalsRequestSerial = 0;
 const bookListRefreshState = new BookListRefreshState();
 let refreshAfterCurrentLoad = false;
 let activeListRequest = null;
+let renderedListQueryKey = null;
 
 function currentListQueryKey() {
   return JSON.stringify([
@@ -30,6 +35,10 @@ function currentListQueryKey() {
     state.filterTags || [],
     state.showMetadataConnectionStatus === true,
   ]);
+}
+
+export function hasRenderedCurrentBookList() {
+  return renderedListQueryKey !== null && renderedListQueryKey === currentListQueryKey();
 }
 
 window.addEventListener('bookoasis:reading-reset', event => {
@@ -235,6 +244,17 @@ export async function loadBooksList(isAppend = false, startPage = null, options 
     return;
   }
 
+  // 표 모드는 관리자 도서 목록에서만 켜지며, 표 자체가 페이지를 추가로 불러온다.
+  if (syncTableModeUi()) {
+    if (isAppend) return;
+    renderedListQueryKey = null;
+    state.hasMore = false;
+    state.hasPrevious = false;
+    unmountIndexScrollbar();
+    const loaded = await (await loadTableView()).reloadSeriesTable();
+    return loaded ? { table: true } : null;
+  }
+
   if (isAppend && (state.isLoading || state.isLoadingPrevious)) {
     console.warn('[Book-List] append skipped: already loading');
     return;
@@ -279,6 +299,7 @@ export async function loadBooksList(isAppend = false, startPage = null, options 
       state.hasPrevious = targetPage > 1;
       // 스캔 후 자동 갱신(keepCurrentGrid)은 기존 그리드를 유지한 채 교체해 깜빡임을 줄인다.
       if (!options.keepCurrentGrid) {
+        renderedListQueryKey = null;
         container.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> ${i18n.t('book_list.loading')}</div>`;
         setLibraryCountText('', '결과 조회 중…');
       }
@@ -326,6 +347,7 @@ export async function loadBooksList(isAppend = false, startPage = null, options 
     }
 
     state.filteredBooksData = state.currentBooksData;
+    renderedListQueryKey = request.key;
     loaded = true;
     if (!isAppend && !options.skipTotals) {
       api.fetchBooksTotals({...requestFilters, signal: request.controller.signal})
@@ -500,7 +522,14 @@ export function filterBooks() {
     state.searchQuery = state.advancedSearch.series.toLowerCase();
     history.replaceState({...history.state, searchQuery:state.advancedSearch.series, advancedSearch: state.advancedSearch}, '', location.href);
     window.dispatchEvent(new Event('bookoasis:advanced-search-changed'));
-    loadBooksList(false);
+    updateSearchActionButtonUI(state.searchQuery);
+    if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = setTimeout(() => {
+      filterDebounceTimer = null;
+      state.currentPage = 1;
+      state.hasMore = true;
+      loadBooksList(false, null, { keepCurrentGrid: true });
+    }, 220);
     return;
   }
   const searchInput = document.getElementById('library-search');

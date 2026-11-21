@@ -42,6 +42,7 @@ import {
   updateSortButtonUI,
   clearLibrarySearchQuery,
   restoreLibrarySearchQuery,
+  hasRenderedCurrentBookList,
 } from './book_list.js?rev=20260929-cover-url-cache-fix-v1';
 import { clearBookSelection } from './book_selection.js';
 
@@ -460,14 +461,28 @@ async function initTabMediaLibrary() {
         applyLibraryTypeButtonState(canAccessLibraryType(targetType) ? targetType : 'general');
         await loadLibraries();
       }
+      const targetLibraryId = event.state.libraryId || 'all';
       const searchQuery = String(event.state.searchQuery || '');
       state.advancedSearch = event.state.advancedSearch || null;
       window.dispatchEvent(new Event('bookoasis:advanced-search-changed'));
       restoreLibrarySearchQuery(searchQuery);
-      await selectCategory(event.state.libraryId || 'all', true, {
-        preserveSearch: true,
-        searchQuery,
-      });
+      const canReuseSearchResults = state.currentLibraryType === targetType
+        && String(state.currentLibraryId || '') === String(targetLibraryId)
+        && hasRenderedCurrentBookList()
+        && state.groupMode === 'default'
+        && !state.authorKeyFilter
+        && !(state.filterGenres || []).length
+        && !(state.filterTags || []).length;
+      if (canReuseSearchResults) {
+        // The search grid remains mounted under the detail view. Restore it
+        // immediately and only fetch again if a scan invalidated that list.
+        goBackToList(false);
+      } else {
+        await selectCategory(targetLibraryId, true, {
+          preserveSearch: true,
+          searchQuery,
+        });
+      }
       if (event.state.scrollTop !== undefined) {
         restoreNavigationScroll(event.state.scrollTop, event.state.libraryId || 'all');
       }
@@ -769,7 +784,7 @@ function restoreNavigationScroll(scrollTop, libraryId = state.currentLibraryId) 
 
 function saveNavigationScrollState() {
   const current = history.state;
-  if (!current || !['category', 'list'].includes(current.view)) return;
+  if (!current || !['category', 'list', 'search'].includes(current.view)) return;
   if (String(current.libraryId || '') !== String(state.currentLibraryId || '')) return;
   if (String(current.type || 'general') !== String(state.currentLibraryType || 'general')) return;
 

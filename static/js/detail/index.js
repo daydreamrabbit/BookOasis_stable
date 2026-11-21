@@ -1,6 +1,7 @@
 // index.js – 상세 뷰 라이프사이클 관리 (오케스트레이터)
 import { state } from '../state.js';
 import { withPluginGlobals } from '../utils/script_loader.js';
+import { applyCoverTint, clearCoverTint } from './cover_tint.js';
 import { isDifferentDetail } from './history_navigation.js';
 import * as api from '../api.js';
 import { switchActiveView } from '../view_manager.js';
@@ -166,6 +167,9 @@ export async function openBookDetail(event, seriesName, libraryId, representativ
           <aside class="detail-page-sidebar" id="detail-widget-sidebar" style="display:none;"></aside>
         </div>
       `;
+
+      if (pluginDetailBundle) clearCoverTint();
+      else applyCoverTint(document.getElementById('detail-cover-img-preview'));
 
       // Suppress native image/link drag ghosts without blocking text selection.
       detailView.ondragstart = (event) => {
@@ -688,7 +692,9 @@ export function goBackToList(triggerBack = true) {
   }
 
   // 상세를 보는 동안 스캔이 끝났다면 그사이 무효화된 목록만 지금 다시 불러온다.
-  if (state.currentLibraryId !== 'home' && typeof window.refreshBooksListIfStale === 'function') {
+  if (state.currentLibraryId === 'home') {
+    window.loadDashboardData?.();
+  } else if (typeof window.refreshBooksListIfStale === 'function') {
     window.refreshBooksListIfStale();
   }
 

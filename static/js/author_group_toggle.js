@@ -1,6 +1,7 @@
 /* author_group_toggle.js – 작가별 모음 / 기본(시리즈) 그리드 뷰 전환 모듈 */
 import { state } from './state.js';
 import { loadBooksList } from './book_list.js?rev=20260920-mobile-request-cancel-v4';
+import { isTableModeActive, setListViewMode, syncTableModeUi } from './table_view/mode.js';
 
 export function applyGroupModeButtonState(mode) {
   const safeMode = mode === 'author' ? 'author' : 'default';
@@ -12,6 +13,7 @@ export function applyGroupModeButtonState(mode) {
   } else {
     document.getElementById('btn-group-default')?.classList.add('active');
   }
+  syncTableModeUi();
 }
 
 // 작가별 카드를 클릭해 특정 작가로 드릴다운한 상태에서도 "작가별" 토글을 계속 활성 표시한다.
@@ -39,8 +41,23 @@ function pushGroupModeHistory(mode, authorKey) {
 }
 
 export function switchGroupMode(mode) {
+  if (mode === 'table') {
+    if (isTableModeActive()) return;
+    setListViewMode('table');
+    if (!syncTableModeUi()) {
+      setListViewMode('grid');
+      return;
+    }
+    state.authorKeyFilter = '';
+    state.currentPage = 1;
+    loadBooksList(false);
+    return;
+  }
+
   const safeMode = mode === 'author' ? 'author' : 'default';
-  if (state.groupMode === safeMode && !state.authorKeyFilter) return;
+  const leavingTable = state.listViewMode === 'table';
+  if (leavingTable) setListViewMode('grid');
+  if (!leavingTable && state.groupMode === safeMode && !state.authorKeyFilter) return;
 
   pushGroupModeHistory(safeMode, '');
   applyGroupModeState(safeMode, '');

@@ -2,6 +2,8 @@
 import { state } from './state.js';
 import { clearViewerReportAction, showViewerReportAction } from './viewer/report_problem.js';
 import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js';
+import { clearCoverTint } from './detail/cover_tint.js';
+import { isTableModeActive, syncTableModeUi } from './table_view/mode.js';
 
 /**
  * ────────────────────────────────────────────────────────
@@ -10,6 +12,7 @@ import { mountIndexScrollbar, unmountIndexScrollbar } from './index_scrollbar.js
  * @param {string} viewName - 활성화할 뷰 영역 ('dashboard' | 'grid' | 'detail')
  */
 export function switchActiveView(viewName) {
+  if (viewName !== 'detail') clearCoverTint();
   window.dispatchEvent(new CustomEvent('bookoasis:view-changing', { detail: { viewName } }));
   const dashboardView = document.getElementById('library-dashboard-view');
   const gridView = document.getElementById('books-grid-view');
@@ -100,6 +103,7 @@ export function switchActiveView(viewName) {
       break;
       
     case 'grid':
+      syncTableModeUi();
       if (gridView) gridView.style.display = 'block';
       if (btnSort) {
         // 'history'(최근 읽은 도서), 'collection'(컬렉션), 'smart_rec'(스마트 추천) 카테고리에서는 정렬 버튼을 노출하지 않고 그 외 보관함에서는 노출
@@ -109,7 +113,7 @@ export function switchActiveView(viewName) {
         const scrollSpinner = document.getElementById('infinite-scroll-spinner');
         if (scrollSpinner) scrollSpinner.style.display = 'none';
       }
-      if (!['history', 'collection', 'smart_rec'].includes(state.currentLibraryId)) {
+      if (!isTableModeActive() && !['history', 'collection', 'smart_rec'].includes(state.currentLibraryId)) {
         mountIndexScrollbar();
       }
       break;
@@ -246,7 +250,10 @@ export function showToast(message, type = 'success') {
     window.toastTimer = null;
   }
 
-  container.innerHTML = `${iconHtml} <span>${message}</span>`;
+  container.innerHTML = iconHtml;
+  const messageEl = document.createElement('span');
+  messageEl.textContent = String(message ?? '');
+  container.appendChild(messageEl);
   container.style.opacity = '0';
   container.style.transform = 'translateX(-50%) translateY(20px)';
   
