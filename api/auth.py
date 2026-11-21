@@ -786,24 +786,28 @@ def update_user_role(target_user_id):
     if old_role == 'admin' and new_role == 'user' and UserRepository.count_by_role('general', 'admin') <= 1:
         return jsonify(success=False, error='마지막 관리자 계정은 일반 사용자로 변경할 수 없습니다.'), 400
 
+    username = primary_user.get('username')
+    mirrored_users = {}
     for db_type in ACCOUNT_DB_TYPES:
-        mirrored_user = UserRepository.find_by_id(db_type, target_user_id)
-        if not mirrored_user or mirrored_user.get('username') != primary_user.get('username'):
+        mirrored_user = UserRepository.find_by_username(db_type, username)
+        if not mirrored_user:
             return jsonify(success=False, error=f'{db_type} 사용자 정보가 일치하지 않아 역할을 변경하지 않았습니다.'), 409
         if mirrored_user.get('role') != old_role:
             return jsonify(success=False, error=f'{db_type} 사용자 역할이 서로 달라 역할을 변경하지 않았습니다.'), 409
+        mirrored_users[db_type] = mirrored_user
 
     updated_databases = []
     try:
         for db_type in ACCOUNT_DB_TYPES:
-            if not UserRepository.update_user_role(db_type, target_user_id, new_role):
+            db_user_id = int(mirrored_users[db_type]['id'])
+            if not UserRepository.update_user_role(db_type, db_user_id, new_role):
                 raise LookupError(f'{db_type} 사용자 행을 찾지 못했습니다.')
-            updated_databases.append(db_type)
+            updated_databases.append((db_type, db_user_id))
     except Exception as error:
         rollback_errors = []
-        for db_type in reversed(updated_databases):
+        for db_type, db_user_id in reversed(updated_databases):
             try:
-                if not UserRepository.update_user_role(db_type, target_user_id, old_role):
+                if not UserRepository.update_user_role(db_type, db_user_id, old_role):
                     rollback_errors.append(db_type)
             except Exception:
                 rollback_errors.append(db_type)
