@@ -134,6 +134,7 @@ def _refresh_content_rating_session():
         user = UserRepository.find_by_id('general', int(user_id))
         if user:
             session['content_rating_max'] = get_user_content_rating_max(user)
+            session['role'] = user.get('role', session.get('role', 'user'))
     except Exception as exc:
         # 인증 자체를 실패시키지는 않고 기존 세션값을 유지한다. DB 일시 오류
         # 때문에 로그인 사용자가 앱 전체에서 차단되는 것을 피한다.
@@ -160,6 +161,7 @@ def admin_required(f):
     @wraps(f)
     @login_required
     def decorated_function(*args, **kwargs):
+        _refresh_content_rating_session()
         if session.get('role') != 'admin':
             return jsonify({'success': False, 'error': _t('api.admin_required')}), 403
         return f(*args, **kwargs)
@@ -752,20 +754,69 @@ def upload_account_profile_avatar():
 # --- 어드민 전용 사용자 관리 API ---
 
 @auth_bp.route('/api/admin/users', methods=['GET'])
-@login_required
+@admin_required
 def get_users():
-    if session.get('role') != 'admin':
-        return jsonify({'success': False, 'error': _t('api.admin_required')}), 403
-        
     users = UserRepository.get_all_users('general')
     return jsonify({'success': True, 'users': users})
 
-@auth_bp.route('/api/admin/users', methods=['POST'])
-@login_required
-def add_user():
-    if session.get('role') != 'admin':
-        return jsonify({'success': False, 'error': _t('api.admin_required')}), 403
 
+@auth_bp.route('/api/admin/users/<int:target_user_id>/role', methods=['PUT'])
+@admin_required
+def update_user_role(target_user_id):
+    oversized = _reject_oversized_auth_request()
+    if oversized:
+        return oversized
+
+    data = request.get_json(silent=True)
+    new_role = str(data.get('role') or '').strip() if isinstance(data, dict) else ''
+    if new_role not in ('user', 'admin'):
+        return jsonify(success=False, error='역할 값은 user 또는 admin이어야 합니다.'), 400
+
+    primary_user = UserRepository.find_by_id('general', target_user_id)
+    if not primary_user:
+        return jsonify(success=False, error='사용자를 찾을 수 없습니다.'), 404
+    old_role = primary_user.get('role')
+    if old_role not in ('user', 'admin'):
+        return jsonify(success=False, error='현재 역할 값이 올바르지 않습니다.'), 409
+    if old_role == new_role:
+        return jsonify(success=True, role=new_role, unchanged=True)
+
+    if target_user_id == int(session.get('user_id') or 0) and new_role != 'admin':
+        return jsonify(success=False, error='현재 로그인한 관리자 계정의 역할은 낮출 수 없습니다.'), 400
+    if old_role == 'admin' and new_role == 'user' and UserRepository.count_by_role('general', 'admin') <= 1:
+        return jsonify(success=False, error='마지막 관리자 계정은 일반 사용자로 변경할 수 없습니다.'), 400
+
+    for db_type in ACCOUNT_DB_TYPES:
+        mirrored_user = UserRepository.find_by_id(db_type, target_user_id)
+        if not mirrored_user or mirrored_user.get('username') != primary_user.get('username'):
+            return jsonify(success=False, error=f'{db_type} 사용자 정보가 일치하지 않아 역할을 변경하지 않았습니다.'), 409
+        if mirrored_user.get('role') != old_role:
+            return jsonify(success=False, error=f'{db_type} 사용자 역할이 서로 달라 역할을 변경하지 않았습니다.'), 409
+
+    updated_databases = []
+    try:
+        for db_type in ACCOUNT_DB_TYPES:
+            if not UserRepository.update_user_role(db_type, target_user_id, new_role):
+                raise LookupError(f'{db_type} 사용자 행을 찾지 못했습니다.')
+            updated_databases.append(db_type)
+    except Exception as error:
+        rollback_errors = []
+        for db_type in reversed(updated_databases):
+            try:
+                if not UserRepository.update_user_role(db_type, target_user_id, old_role):
+                    rollback_errors.append(db_type)
+            except Exception:
+                rollback_errors.append(db_type)
+        print(f'[Auth] User role update failed for user {target_user_id}: {type(error).__name__}; rollback failures={rollback_errors}')
+        if rollback_errors:
+            return jsonify(success=False, error='역할 변경 중 일부 DB에서 복구하지 못했습니다. 사용자 DB 상태를 확인해야 합니다.'), 500
+        return jsonify(success=False, error='역할 변경에 실패해 이전 역할로 되돌렸습니다.'), 500
+
+    return jsonify(success=True, role=new_role, synchronized_databases=len(updated_databases))
+
+@auth_bp.route('/api/admin/users', methods=['POST'])
+@admin_required
+def add_user():
     oversized = _reject_oversized_auth_request()
     if oversized:
         return oversized
@@ -803,11 +854,8 @@ def add_user():
     return jsonify({'success': True, 'message': _t('api.user_added_success')})
 
 @auth_bp.route('/api/admin/users/<int:target_user_id>', methods=['DELETE'])
-@login_required
+@admin_required
 def delete_user(target_user_id):
-    if session.get('role') != 'admin':
-        return jsonify({'success': False, 'error': _t('api.admin_required')}), 403
-        
     if session.get('user_id') == target_user_id:
         return jsonify({'success': False, 'error': _t('api.delete_self_error')}), 400
 
@@ -830,11 +878,8 @@ def delete_user(target_user_id):
     return jsonify({'success': True, 'message': _t('api.user_deleted_success')})
 
 @auth_bp.route('/api/admin/users/<int:target_user_id>/password', methods=['PUT'])
-@login_required
+@admin_required
 def reset_user_password(target_user_id):
-    if session.get('role') != 'admin':
-        return jsonify({'success': False, 'error': _t('api.admin_required')}), 403
-
     oversized = _reject_oversized_auth_request()
     if oversized:
         return oversized

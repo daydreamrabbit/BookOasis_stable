@@ -43,7 +43,7 @@ function initUsersDelegation() {
 
   document.addEventListener('click', (event) => {
     const target = event && event.target && typeof event.target.closest === 'function'
-      ? event.target.closest('[data-role="users-add"], [data-role="user-delete"], [data-role="user-reset-password"], [data-role="user-change-password"], [data-role="user-modal-close"], [data-role="user-reset-modal-close"], [data-role="admin-pwd-modal-close"]')
+      ? event.target.closest('[data-role="users-add"], [data-role="user-delete"], [data-role="user-reset-password"], [data-role="user-change-password"], [data-role="user-role-save"], [data-role="user-modal-close"], [data-role="user-reset-modal-close"], [data-role="admin-pwd-modal-close"]')
       : null;
     if (!target) return;
 
@@ -80,6 +80,10 @@ function initUsersDelegation() {
     }
     if (role === 'user-change-password') {
       openAdminChangePwdModal(userId);
+      return;
+    }
+    if (role === 'user-role-save') {
+      updateUserRole(userId);
     }
   }, true);
 
@@ -139,11 +143,17 @@ export async function loadUsersList() {
           <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
             <td style="padding:0.8rem 1rem;">${user.id}</td>
             <td style="padding:0.8rem 1rem; font-weight:700; color: var(--app-text-primary);">${escapeHtml(user.username)}</td>
-            <td style="padding:0.8rem 1rem;"><span class="badge" style="background:color-mix(in srgb, var(--app-accent) 10%, transparent); color:var(--app-accent-hover); border:1px solid color-mix(in srgb, var(--app-accent) 20%, transparent); padding:0.2rem 0.5rem; border-radius:4px; font-size:0.75rem;">${escapeHtml(user.role)}</span></td>
+            <td style="padding:0.8rem 1rem;">
+              <select id="user-role-${user.id}" data-current-role="${escapeHtml(user.role)}" aria-label="${escapeHtml(user.username)} ${userText('settings.user_col_role', '역할')}" style="min-width:105px; padding:0.4rem 0.55rem; border-radius:6px; border:1px solid rgba(var(--app-panel-border-rgb),0.18); background:var(--app-panel-bg, #222); color:var(--app-text-primary);">
+                <option value="user" ${user.role === 'user' ? 'selected' : ''} ${isSelf && user.role === 'admin' ? 'disabled' : ''}>${escapeHtml(userText('settings.user_role_user', '일반 사용자'))}</option>
+                <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>${escapeHtml(userText('settings.user_role_admin', '관리자'))}</option>
+              </select>
+            </td>
             <td style="padding:0.8rem 1rem; text-align:center;">${isDefault}</td>
             <td class="user-last-access" style="padding:0.8rem 1rem; white-space:nowrap;">${renderLastAccess(user.last_seen_at)}</td>
             <td style="padding:0.8rem 1rem; text-align:right;">
               <div style="display:inline-flex; align-items:center; justify-content:flex-end; gap:0.5rem; width:100%;">
+                <button data-role="user-role-save" data-user-id="${user.id}" class="btn-settings-action" style="background:#0ea5e9; color:#fff; border:none; padding:0.4rem 0.65rem; border-radius:6px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:0.3rem; height:32px; white-space:nowrap;">${escapeHtml(userText('settings.user_role_save', '역할 저장'))}</button>
                 ${resetPwdBtn}${deleteBtn}
               </div>
             </td>
@@ -156,6 +166,39 @@ export async function loadUsersList() {
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:2rem; color:#ef4444;">${window.i18n ? window.i18n.t('settings.users_server_error') : '서버 요청 중 오류가 발생했습니다.'}</td></tr>`;
     console.error(err);
+  }
+}
+
+async function updateUserRole(userId) {
+  const select = document.getElementById(`user-role-${userId}`);
+  if (!select) return;
+  const oldRole = String(select.dataset.currentRole || '');
+  const newRole = String(select.value || '');
+  if (newRole === oldRole) return;
+
+  const roleName = newRole === 'admin'
+    ? userText('settings.user_role_admin', '관리자')
+    : userText('settings.user_role_user', '일반 사용자');
+  if (!confirm(userText('settings.user_role_confirm', `이 사용자의 역할을 ${roleName}(으)로 변경할까요?`, {role: roleName}))) return;
+
+  try {
+    const res = await fetch(`/api/admin/users/${userId}/role`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({role: newRole})
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      alert(data.error || userText('settings.user_role_failed', '역할 변경에 실패했습니다.'));
+      await loadUsersList();
+      return;
+    }
+    await loadUsersList();
+    alert(userText('settings.user_role_changed', '사용자 역할을 변경했습니다.'));
+  } catch (error) {
+    console.error('사용자 역할 변경 실패:', error);
+    alert(userText('settings.user_role_failed', '역할 변경에 실패했습니다.'));
+    await loadUsersList();
   }
 }
 

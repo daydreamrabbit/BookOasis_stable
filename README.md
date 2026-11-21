@@ -101,6 +101,8 @@ BookOasis가 대용량(10만 권 이상) 환경에서도 버벅임 없이 초광
 
 **기존 MariaDB 사용자는 기본 Compose만으로 전환하지 마세요.** 기존 DB 연결·서비스·볼륨·비밀번호 설정을 로컬 override에 유지해야 합니다. 기존 공식 설치에서 전환할 때는 기존 Compose를 유지하고 앱 이미지만 교체하는 방법을 권장합니다.
 
+관리자 화면의 **설정 > 업데이트 내역**에서 GitHub 업데이트를 적용하려면 Linux 호스트 감시 작업을 한 번 설치해야 합니다. Compose 프로젝트 루트에서 `bash tools/install_bookoasis_host_updater.sh`를 실행합니다. 감시 작업은 고정된 `daydreamrabbit/BookOasis_stable` 저장소만 확인하며, 앱 컨테이너에 Docker 소켓을 마운트하지 않습니다. 업데이트를 누르면 새 이미지를 빌드하고 실행 중인 스캔이 끝난 뒤 BookOasis만 재시작합니다.
+
 > 보안 정책에 따라 운영자용 배포/업데이트 절차는 비공개 내부 문서로 관리합니다.
 
 ### 직접 구동 (Native Python)

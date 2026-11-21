@@ -79,6 +79,22 @@ class UserRepository:
         return int(row['cnt']) if row else 0
 
     @staticmethod
+    def update_user_role(db_type, user_id, role):
+        """Update a single user's role and report whether the account exists."""
+        conn = database.get_connection(db_type)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE users SET role = %s WHERE id = %s", (role, int(user_id)))
+            changed = cursor.rowcount
+            conn.commit()
+            return changed > 0
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
     def add_user(db_type, username, password_hash, role, has_adult_access, has_audiobook_access=1, has_video_access=1, has_download_access=1, is_default_password=1):
         """신규 사용자 등록 및 카테고리 권한 기본 매핑 시딩"""
         conn = database.get_connection(db_type)
@@ -90,7 +106,7 @@ class UserRepository:
             )
             user_id = cursor.lastrowid
             
-            cursor.execute("SELECT id FROM libraries")
+            cursor.execute("SELECT id FROM libraries WHERE COALESCE(pending_delete,0)=0")
             lib_ids = [row['id'] for row in cursor.fetchall()]
             for lid in lib_ids:
                 cursor.execute(

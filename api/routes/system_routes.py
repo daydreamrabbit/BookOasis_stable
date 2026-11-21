@@ -4,18 +4,27 @@ system_routes.py – 시스템 상태, 큐, 정보 조회 라우터
 """
 import os
 import re
+import json
+import fcntl
+import tempfile
+import threading
+import time
+import uuid
 import datetime
 from flask import Blueprint, request, jsonify, session
-from api.auth import admin_required, login_required, verify_webhook_token, webhook_token_required
+from api.auth import _refresh_content_rating_session, admin_required, login_required, verify_webhook_token, webhook_token_required
 from flask import render_template, current_app, send_from_directory
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
-from services.plugin_service import PluginService
 from services.settings_service import SettingsService
 import database
 
 system_bp = Blueprint('system', __name__)
 
 _LIB_NAME_MEM_CACHE = {}
+_GITHUB_UPDATE_REPO = 'daydreamrabbit/BookOasis_stable'
+_GITHUB_UPDATE_CACHE = {'checked_at': 0.0, 'version': None, 'commit': None}
+_GITHUB_UPDATE_CACHE_LOCK = threading.Lock()
 
 
 @system_bp.route('/api/system/scan-activity', methods=['GET'])
@@ -137,6 +146,7 @@ def favicon():
 @system_bp.route('/media-library', methods=['GET'])
 @login_required
 def index():
+    _refresh_content_rating_session()
     settings = {}
     view_log_enabled = os.environ.get('VIEW_LOG', 'false').lower() == 'true'
     develop_mode = os.environ.get('DEVELOP', 'false').lower() == 'true'
@@ -164,7 +174,24 @@ def index():
         'index.html', active_page='media_library', settings=settings,
         view_log_enabled=view_log_enabled, develop_mode=develop_mode, home_layout=home_layout,
         home_widget_initial_data=home_widget_initial_data,
+        menu_has_categories=_menu_has_categories(),
     )
+
+
+def _menu_has_categories():
+    """Hide audiobook/video tabs for non-admin users with no accessible category."""
+    result = {'audiobook': True, 'video': True}
+    if session.get('role') == 'admin':
+        return result
+    user_id = session.get('user_id')
+    from repositories.category_repository import CategoryRepository
+    for db_type in result:
+        try:
+            result[db_type] = bool(CategoryRepository.get_libraries_by_user_permissions(db_type, user_id))
+        except Exception as error:
+            # A failed visibility lookup must not alter route-level access checks.
+            print(f"[Index] Failed to count {db_type} categories for user {user_id}; keeping the tab visible: {error}")
+    return result
 
 @system_bp.route('/api/system/status', methods=['GET'])
 @login_required
@@ -407,79 +434,224 @@ def cancel_system_queue_task():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+def _dashboard_version_order(version):
+    match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:\.([a-z]))?', str(version or '').strip(), re.I)
+    if not match:
+        raise ValueError('지원하지 않는 대시보드 버전 형식입니다.')
+    suffix = match.group(4)
+    # 커스텀 .a/.b 릴리스는 같은 공식 버전보다 뒤의 수정 릴리스로 취급한다.
+    suffix_order = ord(suffix.lower()) - ord('a') + 1 if suffix else 0
+    return int(match.group(1)), int(match.group(2)), int(match.group(3)), suffix_order
+
+
+def _read_dashboard_versions():
+    version_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'VERSION'))
+    values = {}
+    with open(version_path, 'r', encoding='utf-8-sig') as version_file:
+        for line in version_file:
+            match = re.match(r'\s*"([^"]+)"\s*:\s*"([^"]+)"', line)
+            if match:
+                values[match.group(1)] = match.group(2).strip()
+    return {
+        'dashboard': values.get('dashboard', 'unknown'),
+        'dbms': values.get('DBMS', 'unknown'),
+        'state': values.get('state', 'unknown'),
+    }
+
+
+def _fetch_github_update_target():
+    now = time.monotonic()
+    with _GITHUB_UPDATE_CACHE_LOCK:
+        if now - _GITHUB_UPDATE_CACHE['checked_at'] < 30:
+            return _GITHUB_UPDATE_CACHE['version'], _GITHUB_UPDATE_CACHE['commit']
+
+    version = commit = None
+    try:
+        version_request = Request(
+            f'https://raw.githubusercontent.com/{_GITHUB_UPDATE_REPO}/main/VERSION',
+            headers={'User-Agent': 'BookOasis-Custom-Updater/1.0'}
+        )
+        with urlopen(version_request, timeout=5) as response:
+            version_text = response.read(64 * 1024).decode('utf-8-sig', errors='replace')
+        match = re.search(r'"dashboard"\s*:\s*"([^"]+)"', version_text)
+        if match:
+            version = match.group(1).strip()
+
+        commit_request = Request(
+            f'https://api.github.com/repos/{_GITHUB_UPDATE_REPO}/commits/main',
+            headers={
+                'User-Agent': 'BookOasis-Custom-Updater/1.0',
+                'Accept': 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+            }
+        )
+        with urlopen(commit_request, timeout=5) as response:
+            commit_data = json.loads(response.read(64 * 1024).decode('utf-8'))
+        candidate = str(commit_data.get('sha') or '').strip().lower()
+        if re.fullmatch(r'[0-9a-f]{40}', candidate):
+            commit = candidate
+    except Exception as error:
+        print(f'[Update] GitHub version check failed: {type(error).__name__}')
+
+    with _GITHUB_UPDATE_CACHE_LOCK:
+        _GITHUB_UPDATE_CACHE.update(checked_at=time.monotonic(), version=version, commit=commit)
+    return version, commit
+
+
+def _write_update_json(path, value):
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix='.bookoasis-update-', suffix='.tmp', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as temp_file:
+            json.dump(value, temp_file, ensure_ascii=False)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.chmod(temp_path, 0o640)
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 @system_bp.route('/api/media/about', methods=['GET'])
 def get_about_info():
     if 'user_id' not in session:
         return jsonify({'success': False, 'error': 'Login required'}), 401
-    """BookOasis 소프트웨어 정보 및 버전 데이터 리턴"""
-    version_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'VERSION')
-    
-    dashboard_ver = '0.2.6'
-    dbms_ver = 'unknown'
-    state_ver = 'pre-alpha'
-    
-    if os.path.exists(version_path):
-        try:
-            with open(version_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    line_clean = line.strip().replace('"', '')
-                    if line_clean.startswith('dashboard:'):
-                        dashboard_ver = line_clean.split(':', 1)[1].strip()
-                    elif line_clean.startswith('DBMS:'):
-                        dbms_ver = line_clean.split(':', 1)[1].split(',', 1)[0].strip()
-                    elif line_clean.startswith('state:'):
-                        state_ver = line_clean.split(':', 1)[1].strip()
-        except Exception as e:
-            pass
-    
-    github_dashboard_ver = None
-    update_check = {
-        'can_update': False,
-        'reason': 'github_version_unavailable'
-    }
 
-    try:
-        req = Request(
-            'https://raw.githubusercontent.com/leeyj/BookOasis_stable/main/VERSION',
-            headers={'User-Agent': 'BookOasis/1.0'}
-        )
-        with urlopen(req, timeout=5) as resp:
-            text = resp.read().decode('utf-8', errors='replace')
-            match = re.search(r'"dashboard"\s*:\s*"([^"]+)"', text)
-            if match:
-                github_dashboard_ver = match.group(1).strip()
-    except Exception:
-        github_dashboard_ver = None
-
+    versions = _read_dashboard_versions()
+    github_dashboard_ver, github_commit = _fetch_github_update_target()
+    can_update = False
+    update_reason = 'github_version_unavailable'
     if github_dashboard_ver:
         try:
-            can_update, reason = PluginService.can_update_to_github_version(dashboard_ver, github_dashboard_ver)
-            update_check = {
-                'can_update': can_update,
-                'reason': reason
-            }
-        except Exception:
-            update_check = {
-                'can_update': False,
-                'reason': 'version_compare_failed'
-            }
+            can_update = _dashboard_version_order(versions['dashboard']) < _dashboard_version_order(github_dashboard_ver)
+            update_reason = None if can_update else 'current_version_is_latest'
+        except ValueError:
+            update_reason = 'version_compare_failed'
+    if can_update and not github_commit:
+        update_reason = 'github_commit_unavailable'
+        can_update = False
 
-    return jsonify({
+    response = jsonify({
         'success': True,
-        'version': {
-            'dashboard': dashboard_ver,
-            'dbms': dbms_ver,
-            'state': state_ver
-        },
-        'github_version': {
-            'dashboard': github_dashboard_ver
-        },
-        'update': update_check,
-        'github_url': 'https://github.com/leeyj/BookOasis_stable'
+        'version': versions,
+        'github_version': {'dashboard': github_dashboard_ver, 'commit': github_commit},
+        'update': {'can_update': can_update, 'reason': update_reason},
+        'github_url': f'https://github.com/{_GITHUB_UPDATE_REPO}',
     })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@system_bp.route('/api/media/update', methods=['POST'])
+@admin_required
+def request_github_update():
+    origin = request.headers.get('Origin', '')
+    origin_host = urlsplit(origin).netloc.lower() if origin else ''
+    if not origin_host or origin_host != request.host.lower():
+        return jsonify(success=False, error='요청 출처를 확인하지 못했습니다.'), 403
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(success=False, error='업데이트 요청 형식이 올바르지 않습니다.'), 400
+    target_commit = str(data.get('commit') or '').strip().lower()
+    target_version = str(data.get('version') or '').strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', target_commit):
+        return jsonify(success=False, error='GitHub 커밋 식별자가 올바르지 않습니다.'), 400
+
+    current_version = _read_dashboard_versions()['dashboard']
+    latest_version, latest_commit = _fetch_github_update_target()
+    if not latest_version or not latest_commit:
+        return jsonify(success=False, error='GitHub 최신 버전을 확인하지 못했습니다.'), 503
+    if target_commit != latest_commit or target_version != latest_version:
+        return jsonify(success=False, error='GitHub에 새 변경이 올라왔습니다. 업데이트를 다시 확인해 주세요.'), 409
+    try:
+        if _dashboard_version_order(current_version) >= _dashboard_version_order(latest_version):
+            return jsonify(success=False, error='현재 서버가 GitHub 버전과 같거나 더 최신입니다.'), 409
+    except ValueError:
+        return jsonify(success=False, error='현재 서버 버전 형식을 확인할 수 없습니다.'), 409
+
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    logs_dir = os.path.join(base_dir, 'logs')
+    request_path = os.path.join(logs_dir, 'bookoasis-update-request.json')
+    status_path = os.path.join(logs_dir, 'bookoasis-update-status.json')
+    request_id = uuid.uuid4().hex
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    request_data = {
+        'request_id': request_id,
+        'commit': target_commit,
+        'version': target_version,
+        'requested_at': now,
+        'requested_by': int(session.get('user_id')),
+    }
+    status_data = {
+        'request_id': request_id,
+        'state': 'queued',
+        'version': target_version,
+        'message': '서버 업데이트 요청을 대기열에 넣었습니다.',
+        'updated_at': now,
+    }
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+        lock_path = os.path.join(logs_dir, '.bookoasis-update-request.lock')
+        with open(lock_path, 'a', encoding='utf-8') as request_lock:
+            fcntl.flock(request_lock.fileno(), fcntl.LOCK_EX)
+            if os.path.isfile(request_path):
+                try:
+                    with open(request_path, 'r', encoding='utf-8') as pending_file:
+                        pending = json.load(pending_file)
+                    requested_at = datetime.datetime.fromisoformat(str(pending.get('requested_at') or '').replace('Z', '+00:00'))
+                    if (datetime.datetime.now(datetime.timezone.utc) - requested_at).total_seconds() > 7200:
+                        os.unlink(request_path)
+                    else:
+                        return jsonify(success=False, error='이미 업데이트 요청이 대기 중입니다.'), 409
+                except (ValueError, OSError, TypeError):
+                    return jsonify(success=False, error='기존 업데이트 요청을 확인하지 못했습니다. 서버 업데이트 상태를 점검해야 합니다.'), 409
+            if os.path.isfile(status_path):
+                try:
+                    with open(status_path, 'r', encoding='utf-8') as status_file:
+                        current_status = json.load(status_file)
+                    if current_status.get('state') in {'queued', 'checking', 'waiting', 'downloading', 'building', 'restarting', 'verifying'}:
+                        updated_at = datetime.datetime.fromisoformat(str(current_status.get('updated_at') or '').replace('Z', '+00:00'))
+                        if (datetime.datetime.now(datetime.timezone.utc) - updated_at).total_seconds() <= 7200:
+                            return jsonify(success=False, error='이미 서버 업데이트가 진행 중입니다.'), 409
+                except Exception:
+                    pass
+            _write_update_json(status_path, status_data)
+            _write_update_json(request_path, request_data)
+    except Exception as error:
+        print(f'[Update] Could not queue GitHub update: {type(error).__name__}')
+        try:
+            _write_update_json(status_path, {
+                'request_id': request_id, 'state': 'failed',
+                'message': '서버 업데이트 요청 파일을 저장하지 못했습니다.',
+                'updated_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass
+        return jsonify(success=False, error='서버 업데이트 요청 파일을 저장하지 못했습니다.'), 503
+    return jsonify(success=True, request_id=request_id, state='queued', version=target_version), 202
+
+
+@system_bp.route('/api/media/update/status', methods=['GET'])
+@admin_required
+def github_update_status():
+    request_id = str(request.args.get('request_id') or '').strip().lower()
+    if not re.fullmatch(r'[0-9a-f]{32}', request_id):
+        return jsonify(success=False, error='업데이트 요청 번호가 올바르지 않습니다.'), 400
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    status_path = os.path.join(base_dir, 'logs', 'bookoasis-update-status.json')
+    try:
+        with open(status_path, 'r', encoding='utf-8') as status_file:
+            status = json.load(status_file)
+    except FileNotFoundError:
+        return jsonify(success=False, error='업데이트 상태를 아직 받지 못했습니다.'), 404
+    except Exception:
+        return jsonify(success=False, error='업데이트 상태를 읽지 못했습니다.'), 503
+    if status.get('request_id') != request_id:
+        return jsonify(success=False, error='해당 업데이트 요청의 상태가 만료되었거나 없습니다.'), 404
+    return jsonify(success=True, status=status)
 
 @system_bp.route('/api/client-log', methods=['POST'])
 @login_required

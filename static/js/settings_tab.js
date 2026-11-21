@@ -2,7 +2,7 @@
 import { applySettingsToUI, loadInitialSystemSettings, loadGeneralSettings, submitGeneralSettings, loadMySettings, submitMySettings } from './settings/general.js';
 import { loadPluginsSettings } from './settings/plugins.js?rev=20260921-plugin-settings-account-sync-v6';
 import { initReportsTab, loadReportList, loadReportDetail } from './settings/reports.js';
-import { loadUsersList } from './settings/users.js';
+import { loadUsersList } from './settings/users.js?rev=20261122-role-management-v1';
 import { loadPermissionsMatrix } from './settings/permissions.js?rev=20260921-admin-permissions-v1';
 import { loadQueueStatus } from './settings/queue.js';
 import { openMetadataHistory, stopMetadataHistory } from './settings/metadata_history.js';
@@ -32,6 +32,19 @@ function initSettingsTabDelegation() {
   if (window.__settingsTabDelegationBound) return;
 
   document.addEventListener('click', (event) => {
+    const updateAction = event && event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('[data-role="github-update-check"], [data-role="github-update-start"]')
+      : null;
+    if (updateAction) {
+      event.preventDefault();
+      if (updateAction.getAttribute('data-role') === 'github-update-check') {
+        refreshGithubUpdateInfo();
+      } else {
+        startGithubUpdate();
+      }
+      return;
+    }
+
     const btn = event && event.target && typeof event.target.closest === 'function'
       ? event.target.closest('.settings-tab-btn[data-settings-tab]')
       : null;
@@ -46,6 +59,9 @@ function initSettingsTabDelegation() {
 }
 
 let scheduleRefreshPending = null;
+let githubUpdateInfo = null;
+let githubUpdatePollTimer = null;
+let githubUpdatePollStartedAt = 0;
 
 function isScheduleTabVisible() {
   const settings = document.getElementById('library-settings-view');
@@ -310,14 +326,14 @@ async function loadChangelog() {
   const contentEl = document.getElementById('changelog-content');
   const loadingEl = document.getElementById('changelog-loading');
   if (!contentEl || !loadingEl) return;
-  
+  refreshGithubUpdateInfo();
   if (contentEl.innerHTML.trim() !== '') return; // 이미 로딩됨
 
   loadingEl.style.display = 'block';
   contentEl.style.display = 'none';
 
   try {
-    const res = await fetch('https://raw.githubusercontent.com/leeyj/BookOasis_stable/main/CHANGELOG.md');
+    const res = await fetch('https://raw.githubusercontent.com/daydreamrabbit/BookOasis_stable/main/CHANGELOG.md', {cache: 'no-cache'});
     if (res.ok) {
       const text = await res.text();
       // marked.js를 통해 렌더링
@@ -337,6 +353,136 @@ async function loadChangelog() {
     loadingEl.style.display = 'none';
     contentEl.style.display = 'block';
   }
+}
+
+async function refreshGithubUpdateInfo() {
+  const panel = document.getElementById('github-update-panel');
+  const currentEl = document.getElementById('github-update-current');
+  const latestEl = document.getElementById('github-update-latest');
+  const statusEl = document.getElementById('github-update-status');
+  const applyButton = document.querySelector('[data-role="github-update-start"]');
+  if (!panel || !currentEl || !latestEl || !statusEl) return;
+  if (window.currentUser?.role !== 'admin') {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  statusEl.textContent = userSettingsText('settings.update_checking', 'GitHub 업데이트 확인 중...');
+  if (applyButton) {
+    applyButton.disabled = true;
+    applyButton.style.display = 'none';
+  }
+
+  try {
+    const response = await fetch('/api/media/about', {cache: 'no-store'});
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '버전 정보를 불러오지 못했습니다.');
+    currentEl.textContent = `v${data.version?.dashboard || '?'}`;
+    latestEl.textContent = data.github_version?.dashboard ? `v${data.github_version.dashboard}` : '확인 실패';
+    githubUpdateInfo = data.update?.can_update && data.github_version?.commit
+      ? {version: data.github_version.dashboard, commit: data.github_version.commit}
+      : null;
+    if (githubUpdateInfo && applyButton) {
+      applyButton.disabled = false;
+      applyButton.style.display = 'inline-flex';
+      statusEl.textContent = userSettingsText('settings.update_available', '새 업데이트를 설치할 수 있습니다.');
+      statusEl.style.color = '#4ade80';
+    } else {
+      statusEl.textContent = data.github_version?.dashboard
+        ? userSettingsText('settings.update_not_available', '이 서버는 최신 버전입니다.')
+        : userSettingsText('settings.update_unavailable', 'GitHub 버전을 확인할 수 없습니다.');
+      statusEl.style.color = 'var(--app-text-muted)';
+    }
+  } catch (error) {
+    githubUpdateInfo = null;
+    statusEl.textContent = error.message || userSettingsText('settings.update_unavailable', 'GitHub 버전을 확인할 수 없습니다.');
+    statusEl.style.color = '#f87171';
+  }
+}
+
+async function startGithubUpdate() {
+  if (!githubUpdateInfo) {
+    await refreshGithubUpdateInfo();
+    if (!githubUpdateInfo) return;
+  }
+  const confirmText = userSettingsText(
+    'settings.update_confirm',
+    `GitHub v${githubUpdateInfo.version}을 이 서버에 적용합니다. 적용 중 BookOasis가 재시작됩니다. 진행할까요?`,
+    {version: githubUpdateInfo.version}
+  );
+  if (!confirm(confirmText)) return;
+
+  const applyButton = document.querySelector('[data-role="github-update-start"]');
+  const statusEl = document.getElementById('github-update-status');
+  if (applyButton) applyButton.disabled = true;
+  if (statusEl) {
+    statusEl.textContent = userSettingsText('settings.update_queued', '서버 업데이트 요청을 전달하고 있습니다...');
+    statusEl.style.color = 'var(--app-text-muted)';
+  }
+  try {
+    const response = await fetch('/api/media/update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(githubUpdateInfo)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '서버 업데이트를 시작하지 못했습니다.');
+    githubUpdatePollStartedAt = Date.now();
+    pollGithubUpdateStatus(data.request_id);
+  } catch (error) {
+    if (statusEl) {
+      statusEl.textContent = error.message || '서버 업데이트를 시작하지 못했습니다.';
+      statusEl.style.color = '#f87171';
+    }
+    if (applyButton) applyButton.disabled = false;
+  }
+}
+
+function userSettingsText(key, fallback, values = {}) {
+  return window.i18n?.t(key, values, fallback) || fallback;
+}
+
+function pollGithubUpdateStatus(requestId) {
+  if (githubUpdatePollTimer) clearInterval(githubUpdatePollTimer);
+  const statusEl = document.getElementById('github-update-status');
+  const applyButton = document.querySelector('[data-role="github-update-start"]');
+  const messages = {
+    queued: '업데이트 대기 중...', checking: 'GitHub와 서버 상태를 확인 중...',
+    waiting: '진행 중인 스캔이 끝나기를 기다리는 중...', downloading: 'GitHub 소스를 내려받는 중...',
+    building: '새 서버 이미지를 만드는 중...', restarting: 'BookOasis를 재시작하는 중...',
+    verifying: '재시작 후 서버 상태를 확인 중...'
+  };
+  const poll = async () => {
+    try {
+      const response = await fetch(`/api/media/update/status?request_id=${encodeURIComponent(requestId)}`, {cache: 'no-store'});
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '업데이트 상태를 확인하지 못했습니다.');
+      const status = data.status || {};
+      if (statusEl) {
+        statusEl.textContent = status.message || messages[status.state] || '서버 업데이트 중...';
+        statusEl.style.color = status.state === 'failed' ? '#f87171' : 'var(--app-text-muted)';
+      }
+      if (status.state === 'complete') {
+        clearInterval(githubUpdatePollTimer);
+        githubUpdatePollTimer = null;
+        if (statusEl) {
+          statusEl.textContent = status.message || '업데이트가 완료되어 화면을 새로고침합니다.';
+          statusEl.style.color = '#4ade80';
+        }
+        setTimeout(() => window.location.reload(), 2500);
+      } else if (status.state === 'failed') {
+        clearInterval(githubUpdatePollTimer);
+        githubUpdatePollTimer = null;
+        if (applyButton) applyButton.disabled = false;
+      }
+    } catch (_) {
+      if (Date.now() - githubUpdatePollStartedAt > 180000 && statusEl) {
+        statusEl.textContent = '업데이트 작업 응답을 기다리는 중입니다. 잠시 후 다시 확인해 주세요.';
+      }
+    }
+  };
+  poll();
+  githubUpdatePollTimer = setInterval(poll, 3000);
 }
 
 // 뷰어 여백 설정 로드

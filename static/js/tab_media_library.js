@@ -47,7 +47,7 @@ import { clearBookSelection } from './book_selection.js';
 
 // plugin_custom_view.js 임포트
 import { mountCategoryPluginUI } from './plugin_custom_view.js?rev=20260921-theme-mobile-v3';
-import { switchSettingsTab, getPreferredSettingsTab, loadInitialSystemSettings, loadGeneralSettings, submitGeneralSettings, initReportsTab, loadReportList, loadReportDetail, loadViewerSettings, submitViewerSettings, applySettingsTabAccessControl } from './settings_tab.js?rev=20260921-plugin-settings-account-sync-v6';
+import { switchSettingsTab, getPreferredSettingsTab, loadInitialSystemSettings, loadGeneralSettings, submitGeneralSettings, initReportsTab, loadReportList, loadReportDetail, loadViewerSettings, submitViewerSettings, applySettingsTabAccessControl } from './settings_tab.js?rev=20261122-github-update-role-v1';
 
 // 장르/태그 및 사이드바 제어 모듈
 import { initFloatingFilter, toggleFilterModal, refreshFilterCategory, setMetadataFilterState } from './genre_tag_filter.js?rev=20260926-filter-chip-click-stays-open-v1';
