@@ -1,7 +1,7 @@
 /* epub_loader.js – EPUB 챕터 비동기 로더, 이미지 사전디코딩 및 플레이스홀더 복구 엔진 */
 import { state } from '../state.js';
 import { rememberEpubImageSize } from './epub_image_layout.js';
-import { highlightEpubTocChapter } from './txt_toc.js?rev=20260922-reader-session-v45';
+import { highlightEpubTocChapter } from './txt_toc.js?rev=20261125-reading-note-delete-v1';
 import { applyAnnotationsToChunkElement } from './annotation_render.js';
 
 const epubChapterFetchInFlight = new Set();

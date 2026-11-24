@@ -1,6 +1,7 @@
 import { state } from '../state.js';
 import { viewerStorage } from './storage.js';
 import { getTxtPageMaxScroll, getTxtPageScrollLeft, setTxtPageScrollLeft, snapTxtPageScrollLeft } from './txt_page_utils.js?rev=20260922-reader-session-v45';
+import { deleteReadingNoteAnnotation } from './annotation_reading_notes.js';
 
 let overlayVisibilityListenerBound = false;
 let tocEntryRefs = [];
@@ -672,6 +673,8 @@ async function fetchAndRenderReadingNotes(panel) {
         return;
       }
       visible.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'viewer-note-card-row';
         const card = document.createElement('button');
         card.type = 'button';
         card.className = `viewer-note-card viewer-note-card--${item.kind}`;
@@ -700,7 +703,31 @@ async function fetchAndRenderReadingNotes(panel) {
             });
           }
         });
-        list.appendChild(card);
+        row.appendChild(card);
+
+        if (item.kind !== 'bookmark') {
+          const deleteButton = document.createElement('button');
+          deleteButton.type = 'button';
+          deleteButton.className = 'viewer-note-delete';
+          deleteButton.title = '형광펜/메모 삭제';
+          deleteButton.setAttribute('aria-label', '형광펜/메모 삭제');
+          deleteButton.innerHTML = '<i class="fa-solid fa-trash-can" aria-hidden="true"></i>';
+          deleteButton.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            deleteButton.disabled = true;
+            const deleted = await deleteReadingNoteAnnotation(item);
+            if (deleted) {
+              row.remove();
+              if (!list.querySelector('.viewer-note-card-row')) list.appendChild(_buildBookmarkEmptyState());
+            } else {
+              deleteButton.disabled = false;
+            }
+          });
+          row.appendChild(deleteButton);
+        }
+
+        list.appendChild(row);
       });
     };
     filters.addEventListener('click', (event) => {

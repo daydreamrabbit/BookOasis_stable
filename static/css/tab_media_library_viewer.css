@@ -2710,11 +2710,16 @@ input:checked + .toggle-switch-slider::before {
 .viewer-note-filters button { padding: 10px 3px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--viewer-panel-muted, #777); cursor: pointer; }
 .viewer-note-filters button.active { border-bottom-color: var(--viewer-theme-text, #333); color: var(--viewer-theme-text, #222); font-weight: 700; }
 .viewer-note-list { display: flex; flex-direction: column; gap: 8px; }
+.viewer-note-card-row { display: flex; min-width: 0; gap: 6px; align-items: stretch; }
 .viewer-note-card { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; width: 100%; padding: 12px; border: 1px solid var(--viewer-panel-border, #e1e1e1); border-radius: 7px; background: var(--viewer-panel-soft, #fff); color: var(--viewer-theme-text, #333); text-align: left; cursor: pointer; }
+.viewer-note-card-row > .viewer-note-card { flex: 1 1 auto; min-width: 0; }
 .viewer-note-card > i { margin-top: 2px; color: #e5b800; }
 .viewer-note-card > span { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .viewer-note-card strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .viewer-note-card small { color: var(--viewer-panel-muted, #999); }
+.viewer-note-delete { flex: 0 0 36px; width: 36px; min-height: 100%; padding: 0; border: 1px solid var(--viewer-panel-border, #e1e1e1); border-radius: 7px; background: var(--viewer-panel-soft, #fff); color: #d9534f; cursor: pointer; }
+.viewer-note-delete:hover, .viewer-note-delete:focus-visible { border-color: #d9534f; background: rgba(217, 83, 79, .10); }
+.viewer-note-delete:disabled { cursor: wait; opacity: .55; }
 
 .viewer-side-panel {
     position: fixed;

@@ -5,7 +5,7 @@ import { getTapZoneDirection } from './viewer_comic.js';
 import { dismissViewerChromeOnContentTap, isViewerTextPoint } from './viewer/input_controller.js?rev=20260927-tts-session-v8';
 import { nextComicPage, prevComicPage, setComicFitMode, toggleComicOverlay, markAsCompleted as markComicAsCompleted, getComicReadingDirection, initReadingDirection, toggleComicReadingDirection, toggleComicPageStep, comicJumpToFirstPage, comicJumpToLastPage, setTapZoneDirection, toggleTapZoneDirection, initTapZoneDirection, toggleComicSplitSpread, toggleSpreadShiftOffset, loadComicPage, initPageStep, resetSpreadShiftOffset } from './viewer_comic.js';
 import { prevTxtPage, nextTxtPage, applyTxtSettings, txtJumpToFirstPage, txtJumpToLastPage } from './viewer_txt.js?rev=20260927-tts-session-v8';
-import { openEpubTocPanel } from './viewer/txt_toc.js?rev=20260922-reader-session-v45';
+import { openEpubTocPanel } from './viewer/txt_toc.js?rev=20261125-reading-note-delete-v1';
 import { openInlineTts, openInlineTtsSettings } from './viewer/inline_tts.js';
 import { initViewerBookmarkController, toggleCurrentPageBookmark } from './viewer/bookmark_controller.js';
 import { closeViewerSidePanels, openViewerSearchPanel, openImageReadingNotesPanel } from './viewer/ridi_panels.js';

@@ -100,7 +100,7 @@ import {
   txtSliderInputAction,
   txtSliderChangeAction,
 } from './viewer/txt_navigation.js?rev=20260927-tts-session-v8';
-import { renderEpubTocPanel, jumpToTxtTocChapter, highlightEpubTocChapter, updateEpubTocPageNumbers } from './viewer/txt_toc.js?rev=20260922-reader-session-v45';
+import { renderEpubTocPanel, jumpToTxtTocChapter, highlightEpubTocChapter, updateEpubTocPageNumbers } from './viewer/txt_toc.js?rev=20261125-reading-note-delete-v1';
 import { loadAnnotationsForBook, getAnnotations, clearAnnotationState } from './viewer/annotation_state.js';
 import { applyAnnotationsToAllRenderedChunks } from './viewer/annotation_render.js';
 import { decodeAnchor } from './viewer/annotation_anchor.js';
