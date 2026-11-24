@@ -3,6 +3,7 @@
 
 import argparse
 import datetime
+import errno
 import fcntl
 import hashlib
 import json
@@ -59,6 +60,32 @@ def atomic_json(path, value):
             os.fsync(handle.fileno())
         os.chmod(temp_name, 0o640)
         os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def move_request_file(source, target):
+    """Move a queued request, including across a bind mount with another device id."""
+    source = pathlib.Path(source)
+    target = pathlib.Path(target)
+    try:
+        os.replace(source, target)
+        return
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            raise
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix='.bookoasis-request-', suffix='.tmp', dir=str(target.parent))
+    try:
+        with source.open('rb') as input_file, os.fdopen(fd, 'wb') as output_file:
+            shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        os.chmod(temp_name, 0o640)
+        os.replace(temp_name, target)
+        source.unlink()
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
@@ -220,7 +247,7 @@ class HostUpdater:
 
     def recover_interrupted_request(self):
         if self.processing_path.exists() and not self.request_path.exists():
-            os.replace(self.processing_path, self.request_path)
+            move_request_file(self.processing_path, self.request_path)
 
     def active_scans(self):
         code = (
@@ -507,7 +534,7 @@ for item in changes:
                 self.request_path.unlink(missing_ok=True)
                 raise UpdateError('업데이트 요청의 버전 형식이 올바르지 않습니다.')
 
-            os.replace(self.request_path, self.processing_path)
+            move_request_file(self.request_path, self.processing_path)
             stage = self.update_root / f'job-{request_id}'
             candidate_image = None
             old_image = None
