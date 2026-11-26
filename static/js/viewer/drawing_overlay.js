@@ -16,12 +16,8 @@ const DEFAULT_SETTINGS = Object.freeze({
 });
 
 const drawingsByPage = new Map();
-const dirtyPages = new Set();
 const surfaces = new Map();
-const saveTimers = new Map();
-const saveChains = new Map();
 let currentBookId = null;
-let drawingsLoaded = false;
 let drawingMode = false;
 let activeSurface = null;
 let mutationObserver = null;
@@ -29,9 +25,6 @@ let resizeObserver = null;
 let surfaceIntersectionObserver = null;
 let surfaceObserverRoot = null;
 let initialized = false;
-let loadSequence = 0;
-let drawingsLoadPromise = null;
-let drawingsLoadBookId = null;
 let drawingSettings = { ...DEFAULT_SETTINGS };
 
 function byId(id) {
@@ -40,12 +33,6 @@ function byId(id) {
 
 function isImageFormat(format = state.currentViewerFormat) {
   return IMAGE_FORMATS.has(String(format || '').toLowerCase());
-}
-
-function dbType() {
-  return ['general', 'adult'].includes(String(state.currentLibraryType || '').toLowerCase())
-    ? String(state.currentLibraryType).toLowerCase()
-    : 'general';
 }
 
 function showDrawingToast(message, type = 'error') {
@@ -251,9 +238,7 @@ function finishStroke(surface, pointerId, commit = true) {
   try { surface.canvas.releasePointerCapture(pointerId); } catch (_) { /* already released */ }
   if (commit && draft?.points?.length) {
     currentPageStrokes(surface.pageKey).push(draft);
-    dirtyPages.add(surface.pageKey);
     renderSurface(surface);
-    queueSave(surface.pageKey);
     activeSurface = surface;
     syncUndoButton();
   } else {
@@ -419,78 +404,12 @@ function clearSurfaces() {
   activeSurface = null;
 }
 
-function queueSave(pageKey) {
-  if (!currentBookId || !drawingsLoaded) return;
-  const bookId = currentBookId;
-  const targetDbType = dbType();
-  clearTimeout(saveTimers.get(pageKey));
-  saveTimers.set(pageKey, setTimeout(() => {
-    saveTimers.delete(pageKey);
-    const payload = {
-      page_key: pageKey,
-      strokes: drawingsByPage.get(pageKey) || [],
-    };
-    const previous = saveChains.get(pageKey) || Promise.resolve();
-    const next = previous.catch(() => {}).then(() => fetch(`/api/v1/books/${encodeURIComponent(bookId)}/drawings?db_type=${encodeURIComponent(targetDbType)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload),
-    })).then(async (response) => {
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || '그림 저장에 실패했습니다.');
-      }
-    }).catch((error) => {
-      showDrawingToast(error.message || '그림 저장에 실패했습니다.');
-    });
-    saveChains.set(pageKey, next);
-  }, 280));
-}
-
-async function loadDrawingsFromServer(bookId) {
-  const sequence = ++loadSequence;
-  drawingsLoaded = false;
-  drawingsByPage.clear();
-  const response = await fetch(`/api/v1/books/${encodeURIComponent(bookId)}/drawings?db_type=${encodeURIComponent(dbType())}`, {
-    credentials: 'same-origin',
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || '그림 데이터를 불러오지 못했습니다.');
-  }
-  const data = await response.json();
-  if (sequence !== loadSequence || String(currentBookId) !== String(bookId)) return;
-  (data.drawings || []).forEach((drawing) => {
-    if (drawing?.page_key && Array.isArray(drawing.strokes)) drawingsByPage.set(drawing.page_key, drawing.strokes);
-  });
-  drawingsLoaded = true;
-  syncSurfaces();
-}
-
-function loadDrawings(bookId) {
-  if (drawingsLoadPromise && String(drawingsLoadBookId) === String(bookId)) {
-    return drawingsLoadPromise;
-  }
-  drawingsLoadBookId = bookId;
-  const promise = loadDrawingsFromServer(bookId);
-  drawingsLoadPromise = promise;
-  return promise.finally(() => {
-    if (drawingsLoadPromise === promise) {
-      drawingsLoadPromise = null;
-      drawingsLoadBookId = null;
-    }
-  });
-}
-
 function undoCurrentSurface() {
   if (!activeSurface) return;
   const strokes = currentPageStrokes(activeSurface.pageKey);
   if (!strokes.length) return;
   strokes.pop();
-  dirtyPages.add(activeSurface.pageKey);
   renderSurface(activeSurface);
-  queueSave(activeSurface.pageKey);
   syncUndoButton();
 }
 
@@ -553,8 +472,10 @@ async function enterDrawingMode() {
   const button = byId('btn-viewer-drawing');
   if (button) button.disabled = true;
   try {
-    if (!drawingsLoaded) await loadDrawings(currentBookId);
     if (!currentBookId || !isImageFormat()) return;
+    // 그리기는 일회성 도구다. 모드에 들어갈 때 이전 세션의 흔적을 버린다.
+    drawingsByPage.clear();
+    clearSurfaces();
     setModeUi(true);
     syncSurfaces();
     ensureVisibleScrollSurfaces();
@@ -566,41 +487,19 @@ async function enterDrawingMode() {
 }
 
 function exitDrawingMode() {
-  const bookId = currentBookId;
-  const targetDbType = dbType();
-  saveTimers.forEach((timer) => clearTimeout(timer));
-  saveTimers.clear();
-  dirtyPages.forEach((pageKey) => {
-    if (bookId && drawingsLoaded) {
-      const payload = { page_key: pageKey, strokes: drawingsByPage.get(pageKey) || [] };
-      const previous = saveChains.get(pageKey) || Promise.resolve();
-      saveChains.set(pageKey, previous.catch(() => {}).then(() => fetch(`/api/v1/books/${encodeURIComponent(bookId)}/drawings?db_type=${encodeURIComponent(targetDbType)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(payload),
-      })).catch(() => {}));
-    }
-  });
   setModeUi(false);
   setEraser(false);
-  // 일반 뷰어에서는 투명 캔버스 자체를 제거해 그린 흔적이 보이지 않게 한다.
-  // 저장된 벡터 데이터는 유지하므로 다시 그리기 모드로 들어가면 복원할 수 있다.
+  // 그리기는 일회성이다. 종료 즉시 화면과 메모리의 벡터 데이터를 모두 버린다.
+  drawingsByPage.clear();
   clearSurfaces();
+  syncUndoButton();
 }
 
 function resetForBook() {
   if (drawingMode) setModeUi(false);
   clearSurfaces();
   currentBookId = null;
-  drawingsLoaded = false;
-  drawingsLoadPromise = null;
-  drawingsLoadBookId = null;
   drawingsByPage.clear();
-  dirtyPages.clear();
-  saveChains.clear();
-  saveTimers.forEach((timer) => clearTimeout(timer));
-  saveTimers.clear();
   const button = byId('btn-viewer-drawing');
   if (button) button.style.display = 'none';
 }
@@ -615,11 +514,6 @@ function onBookOpened(event) {
     button.style.display = '';
     button.disabled = false;
   }
-  // 페이지 이미지가 비동기로 커밋되므로 데이터는 백그라운드로 먼저 받아 둔다.
-  loadDrawings(currentBookId).catch((error) => {
-    drawingsLoaded = false;
-    showDrawingToast(error.message || '그림 데이터를 불러오지 못했습니다.');
-  });
   requestAnimationFrame(syncSurfaces);
 }
 
