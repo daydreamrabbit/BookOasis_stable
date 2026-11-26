@@ -565,6 +565,18 @@ _SCHEMA_SQL = """
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- 이미지 뷰어의 사용자별 페이지 그림 레이어. 원본 파일은 수정하지 않는다.
+    CREATE TABLE IF NOT EXISTS image_drawings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL REFERENCES books(id),
+        user_id INTEGER NOT NULL,
+        page_key TEXT NOT NULL,
+        strokes_json TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(book_id, user_id, page_key)
+    );
+
     CREATE TABLE IF NOT EXISTS epub_bookmarks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         book_id INTEGER REFERENCES books(id),
@@ -815,6 +827,7 @@ _INDEXES_SQL = """
     CREATE INDEX IF NOT EXISTS idx_collection_items_coll ON collection_items(collection_id);
     CREATE INDEX IF NOT EXISTS idx_plugin_load_events_plugin_time ON plugin_load_events(plugin_id, occurred_at DESC);
     CREATE INDEX IF NOT EXISTS idx_book_annotations_book_user ON book_annotations(book_id, user_id);
+    CREATE INDEX IF NOT EXISTS idx_image_drawings_book_user ON image_drawings(book_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_epub_bookmarks_book_user ON epub_bookmarks(book_id, user_id);
     """
 

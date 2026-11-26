@@ -1,4 +1,5 @@
 <script type="module" src="{{ static_asset_url('js/viewer/auto_scroll.js') }}"></script>
+<script type="module" src="{{ static_asset_url('js/viewer/drawing_overlay.js', sig='20261126-image-drawing-v1') }}"></script>
 <!-- 내장 미디어 통합 뷰어 모달 (뷰어는 전체화면이 필요하므로 유지) -->
 <div id="media-viewer-modal" class="viewer-modal">
     <!-- 전체화면 탈출용 플로팅 닫기 버튼 -->
@@ -18,6 +19,7 @@
             <button type="button" data-role="viewer-action" data-action="viewer-display-mode" data-value="scroll" data-viewer-display-mode="scroll" aria-label="세로 스크롤 보기" title="세로 스크롤 보기"><span class="viewer-mode-icon viewer-mode-icon--scroll"><i>↕</i></span></button>
         </div>
         <nav class="ridi-viewer-tools" aria-label="독서 도구">
+            <button type="button" id="btn-viewer-drawing" data-role="viewer-action" data-action="toggle-drawing-mode" aria-label="그리기 모드" title="그리기" style="display: none;"><i class="fa-solid fa-pen"></i><span>그리기</span></button>
             <button type="button" id="btn-viewer-settings" data-role="viewer-action" data-action="toggle-overlay" aria-label="보기 설정" title="보기 설정"><i class="fa-solid fa-font"></i><span>보기 설정</span></button>
             <button type="button" id="btn-viewer-more" data-role="viewer-action" data-action="toggle-viewer-tools" aria-label="독서 도구 더보기" title="더보기" aria-expanded="false" aria-controls="viewer-secondary-tools"><i class="fa-solid fa-ellipsis-vertical"></i><span>더보기</span></button>
             <div id="viewer-secondary-tools" class="viewer-secondary-tools" role="group" aria-label="추가 독서 도구">
@@ -43,6 +45,28 @@
             <div class="hotspot-zone left-zone" data-role="viewer-action" data-action="prev-page" data-i18n-title="viewer.prev_page" title="이전 페이지"><i class="fa-solid fa-chevron-left"></i></div>
             <div class="hotspot-zone center-zone" data-role="viewer-action" data-action="toggle-viewer-controls" title="도구 모음 표시/숨기기"></div>
             <div class="hotspot-zone right-zone" data-role="viewer-action" data-action="next-page" data-i18n-title="viewer.next_page" title="다음 페이지"><i class="fa-solid fa-chevron-right"></i></div>
+        </div>
+
+        <!-- 이미지 뷰어 전용 개인별 그리기 도구 -->
+        <div id="drawing-toolbar" class="drawing-toolbar" hidden aria-label="그리기 도구">
+            <div class="drawing-toolbar-panel">
+                <label class="drawing-control"><span>펜 종류</span><select id="drawing-pen-type"><option value="pen">펜</option><option value="highlighter">형광펜</option><option value="pencil">연필</option></select></label>
+                <div class="drawing-control drawing-color-control"><span>색상</span><div class="drawing-color-swatches" role="group" aria-label="그리기 색상">
+                    <button type="button" class="drawing-color-swatch" data-drawing-color="#ffffff" title="흰색" aria-label="흰색"></button>
+                    <button type="button" class="drawing-color-swatch is-active" data-drawing-color="#000000" title="검정" aria-label="검정"></button>
+                    <button type="button" class="drawing-color-swatch" data-drawing-color="#ef4444" title="빨강" aria-label="빨강"></button>
+                    <button type="button" class="drawing-color-swatch" data-drawing-color="#3b82f6" title="파랑" aria-label="파랑"></button>
+                    <button type="button" class="drawing-color-swatch" data-drawing-color="#facc15" title="노랑" aria-label="노랑"></button>
+                    <button type="button" class="drawing-color-swatch" data-drawing-color="#22c55e" title="초록" aria-label="초록"></button>
+                    <button type="button" id="drawing-custom-color-button" class="drawing-custom-color-button" title="사용자 지정 색상">사용자 지정</button>
+                    <input id="drawing-custom-color" type="color" value="#000000" aria-label="사용자 지정 색상" tabindex="-1">
+                </div></label>
+                <label class="drawing-control"><span>브러시</span><select id="drawing-brush-type"><option value="round">기본</option><option value="soft">부드러운 선</option><option value="square">각진 선</option></select></label>
+                <label class="drawing-control drawing-size-control"><span>크기 <output id="drawing-size-value">6</output></span><input id="drawing-size" type="range" min="1" max="64" step="1" value="6" aria-label="브러시 크기"></label>
+                <label class="drawing-control"><span>모양</span><select id="drawing-shape"><option value="freehand">자유선</option><option value="line">직선</option><option value="rect">사각형</option><option value="ellipse">원</option></select></label>
+                <button type="button" id="drawing-undo" class="drawing-toolbar-button" data-drawing-action="undo" title="현재 페이지에서 실행 취소" disabled><i class="fa-solid fa-rotate-left"></i><span>실행 취소</span></button>
+            </div>
+            <button type="button" id="drawing-toolbar-handle" class="drawing-toolbar-handle" title="그리기 도구 표시"><i class="fa-solid fa-chevron-up"></i><span>그리기 도구</span></button>
         </div>
 
         <!-- Kavita 스타일 플로팅 조작 오버레이 메뉴 (탭 형식 개편 & 푸른색 테마) -->

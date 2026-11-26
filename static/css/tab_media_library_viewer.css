@@ -2362,6 +2362,145 @@ input:checked + .toggle-switch-slider::before {
     #media-viewer-modal .viewer-title { display: none; }
 }
 
+/* ── 이미지 뷰어 개인별 그리기 레이어 ─────────────────────────────── */
+.drawing-canvas-layer {
+    position: absolute;
+    z-index: 10003;
+    display: block;
+    margin: 0;
+    padding: 0;
+    pointer-events: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+#media-viewer-modal.viewer-drawing-mode #common-viewer-hotspot,
+#media-viewer-modal.viewer-drawing-mode #comic-overlay-menu,
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-toolbar-bottom,
+#media-viewer-modal.viewer-drawing-mode .floating-close-btn {
+    display: none !important;
+}
+
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-toolbar-top > .ridi-viewer-back,
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-toolbar-top > .viewer-title,
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-mode-group,
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-toolbar-top > .viewer-controls,
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-tools > :not(#btn-viewer-drawing) {
+    display: none !important;
+}
+
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-toolbar-top {
+    justify-content: flex-end;
+}
+
+#media-viewer-modal.viewer-drawing-mode #btn-viewer-drawing {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 104px;
+    color: var(--app-accent, #36aeea);
+    border-color: color-mix(in srgb, var(--app-accent, #36aeea) 70%, transparent);
+}
+
+.drawing-toolbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10006;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+    color: var(--viewer-theme-text, #f5f5f5);
+    background: var(--viewer-panel-bg, rgba(25, 25, 25, .96));
+    border-top: 1px solid var(--viewer-panel-border, rgba(255,255,255,.14));
+    box-shadow: 0 -8px 24px rgba(0,0,0,.26);
+}
+.drawing-toolbar[hidden] { display: none !important; }
+.drawing-toolbar-panel {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    max-width: min(1180px, 100%);
+}
+.drawing-toolbar.is-collapsed .drawing-toolbar-panel { display: none; }
+.drawing-control {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 92px;
+    color: var(--viewer-theme-text, #f5f5f5);
+    font-size: 11px;
+    font-weight: 600;
+}
+.drawing-control select,
+.drawing-control input[type="range"] {
+    min-height: 32px;
+    box-sizing: border-box;
+    border: 1px solid var(--viewer-panel-border, rgba(255,255,255,.22));
+    border-radius: 6px;
+    background: var(--viewer-panel-soft, #292929);
+    color: inherit;
+    padding: 5px 8px;
+}
+.drawing-control input[type="range"] { width: 110px; padding: 0; accent-color: var(--app-accent, #36aeea); }
+.drawing-size-control { min-width: 116px; }
+.drawing-size-control > span { display: flex; justify-content: space-between; }
+.drawing-color-control { min-width: 222px; }
+.drawing-color-swatches { display: flex; align-items: center; gap: 5px; min-height: 32px; }
+.drawing-color-swatch {
+    width: 23px;
+    height: 23px;
+    flex: 0 0 auto;
+    padding: 0;
+    border: 2px solid rgba(255,255,255,.32);
+    border-radius: 50%;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+.drawing-color-swatch[data-drawing-color="#ffffff"] { background: #fff; }
+.drawing-color-swatch[data-drawing-color="#000000"] { background: #000; }
+.drawing-color-swatch[data-drawing-color="#ef4444"] { background: #ef4444; }
+.drawing-color-swatch[data-drawing-color="#3b82f6"] { background: #3b82f6; }
+.drawing-color-swatch[data-drawing-color="#facc15"] { background: #facc15; }
+.drawing-color-swatch[data-drawing-color="#22c55e"] { background: #22c55e; }
+.drawing-color-swatch.is-active { outline: 2px solid var(--app-accent, #36aeea); outline-offset: 2px; }
+.drawing-custom-color-button,
+.drawing-toolbar-button,
+.drawing-toolbar-handle {
+    min-height: 32px;
+    padding: 6px 9px;
+    border: 1px solid var(--viewer-panel-border, rgba(255,255,255,.22));
+    border-radius: 6px;
+    background: var(--viewer-panel-soft, #292929);
+    color: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.drawing-custom-color-button { font-size: 11px; }
+#drawing-custom-color { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.drawing-toolbar-button { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.drawing-toolbar-button:disabled { cursor: default; opacity: .45; }
+.drawing-toolbar-button:not(:disabled):hover,
+.drawing-custom-color-button:hover,
+.drawing-toolbar-handle:hover { border-color: var(--app-accent, #36aeea); color: var(--app-accent, #36aeea); }
+.drawing-toolbar-handle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+
+@media (max-width: 680px) {
+    .drawing-toolbar { padding-inline: 6px; }
+    .drawing-toolbar-panel { justify-content: flex-start; overflow-x: auto; flex-wrap: nowrap; max-width: 100%; padding: 2px 2px 4px; }
+    .drawing-control { min-width: 82px; }
+    .drawing-color-control { min-width: 216px; }
+    .drawing-toolbar-button { flex: 0 0 auto; }
+}
+
 /* 내장 TTS는 별도 페이지로 이동하지 않고 현재 텍스트 뷰어 위에 재생 도크만 표시한다. */
 #media-viewer-modal .viewer-tts-host {
     position: fixed;

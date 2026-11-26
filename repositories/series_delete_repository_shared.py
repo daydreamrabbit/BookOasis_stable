@@ -22,6 +22,16 @@ _BOOK_DEPENDENT_TABLES = (
 )
 
 
+def _delete_optional_book_table(cursor, table, where, params):
+    """새로운 사용자별 부가 데이터는 구버전 테스트/DB에 없어도 본 삭제를 막지 않는다."""
+    try:
+        cursor.execute(f'DELETE FROM {table} WHERE {where}', params)
+    except Exception as exc:
+        message = str(exc).lower()
+        if 'no such table' not in message and "doesn't exist" not in message and 'unknown table' not in message:
+            raise
+
+
 def _series_filter(placeholder):
     return (
         f"library_id = {placeholder} "
@@ -73,6 +83,12 @@ def delete_series_batch(db_type, targets, placeholder):
         for table in _BOOK_DEPENDENT_TABLES:
             cursor.execute(f'DELETE FROM {table} WHERE book_id IN '
                            f'(SELECT id FROM books WHERE {where})', params)
+        _delete_optional_book_table(
+            cursor,
+            'image_drawings',
+            f'book_id IN (SELECT id FROM books WHERE {where})',
+            params,
+        )
         folders = sorted(folders)
         for start in range(0, len(folders), 300):
             chunk = folders[start:start + 300]

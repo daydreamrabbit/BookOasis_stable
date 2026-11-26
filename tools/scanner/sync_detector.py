@@ -204,6 +204,12 @@ def handle_deleted_books(cursor, db_books, deleted_paths, target_paths, found_fi
             cursor.execute(f"DELETE FROM epub_bookmarks WHERE book_id IN ({placeholders})", params)
             cursor.execute(f"DELETE FROM collection_items WHERE book_id IN ({placeholders})", params)
             cursor.execute(f"DELETE FROM tts_progress WHERE book_id IN ({placeholders})", params)
+            try:
+                cursor.execute(f"DELETE FROM image_drawings WHERE book_id IN ({placeholders})", params)
+            except Exception as exc:
+                message = str(exc).lower()
+                if 'no such table' not in message and "doesn't exist" not in message and 'unknown table' not in message:
+                    raise
             cursor.execute(f"DELETE FROM books WHERE id IN ({placeholders})", params)
             
             # 커버 이미지 물리 파일 소거

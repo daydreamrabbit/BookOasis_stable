@@ -522,6 +522,7 @@ export function loadComicPage() {
       const img = document.createElement('img');
       img.className = 'comic-scroll-img';
       img.dataset.index = i;
+      img.dataset.drawingPageKey = `${i}:full`;
       img.dataset.src = FileLoader.getPageStreamUrl(i);
       img.alt = `Page ${i + 1}`;
       img.dataset.loaded = '0';
@@ -772,6 +773,12 @@ export function loadComicPage() {
       const imgEl = document.createElement('img');
       imgEl.className = `comic-page-img ${expectedLoads === 2 ? (index === 0 ? 'comic-page-img-left' : 'comic-page-img-right') : ''}`.trim();
       imgEl.dataset.index = pageIndex;
+      if (splitModeActive) {
+        const drawingPage = splitVirtualIndex(pageIndex);
+        imgEl.dataset.drawingPageKey = `${drawingPage.physical}:${drawingPage.side}`;
+      } else {
+        imgEl.dataset.drawingPageKey = `${pageIndex}:full`;
+      }
       imgEl.alt = `Page ${pageIndex + 1}`;
       imgEl.loading = 'eager';
       imgEl.style.opacity = '0';

@@ -115,6 +115,18 @@ function handleViewerKeydown(e) {
     return;
   }
 
+  // 이미지 그리기 모드에서는 키보드 페이지 넘김을 잠시 멈춘다.
+  // Escape는 그리기 모드만 종료하고 뷰어 자체는 닫지 않는다.
+  if (window.__viewerDrawingModeActive) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      window.toggleDrawingMode?.();
+    } else if (!e.target?.closest?.('button')) {
+      e.preventDefault();
+    }
+    return;
+  }
+
   // 커스텀 매핑 키 (기본값 + localStorage 커스텀 지정키)
   const customNextKeys = (localStorage.getItem('custom_key_next') || 'ArrowRight,Space,PageDown,VolumeDown,ChannelDown,AudioVolumeDown').split(',').map(k => k.trim().toLowerCase());
   const customPrevKeys = (localStorage.getItem('custom_key_prev') || 'ArrowLeft,PageUp,VolumeUp,ChannelUp,AudioVolumeUp').split(',').map(k => k.trim().toLowerCase());
@@ -326,6 +338,10 @@ export function initWheelListener() {
       (e) => {
       const viewerModal = document.getElementById('media-viewer-modal');
       if (!viewerModal || viewerModal.style.display !== 'flex') return;
+      if (window.__viewerDrawingModeActive && e.target?.closest?.('.drawing-canvas-layer')) {
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
 
       const isComic = document.getElementById('comic-viewer-container').style.display !== 'none';
       if (e.ctrlKey || e.target.closest?.('.viewer-side-panel, .ridi-view-settings, #comic-overlay-menu, .viewer-controls')) return;
@@ -410,6 +426,12 @@ export function syncHotspotPointerEvents() {
     return;
   }
 
+  if (window.__viewerDrawingModeActive) {
+    hotspot.style.display = 'none';
+    hotspot.style.pointerEvents = 'none';
+    return;
+  }
+
   // 형광펜 모드(annotation_ui.js)가 이전 세션(TXT/EPUB)에서 페이지 넘김 핫스팟을
   // 일시적으로 pointer-events:none으로 풀어둔 채 남아있을 수 있으므로, 어떤 포맷이든
   // 뷰어가 새로 열릴 때마다 항상 기본값(auto)으로 되돌린다.
@@ -449,6 +471,8 @@ export function syncHotspotPointerEvents() {
     console.log('[syncHotspotPointerEvents] 핫스팟 활성화(flex) 적용됨.');
   }
 }
+
+document.addEventListener('viewer-drawing-mode-changed', () => syncHotspotPointerEvents());
 
 export function initViewerClickToggle() {
   const viewerBody = document.getElementById('viewer-body-container');
@@ -516,6 +540,7 @@ export function initViewerClickToggle() {
   document.addEventListener(
     'touchstart',
     (e) => {
+      if (window.__viewerDrawingModeActive && e.target?.closest?.('.drawing-canvas-layer')) return;
       if (e.touches.length === 1) {
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
@@ -575,6 +600,7 @@ export function initViewerClickToggle() {
   document.addEventListener(
     'touchmove',
     (e) => {
+      if (window.__viewerDrawingModeActive && e.target?.closest?.('.drawing-canvas-layer')) return;
       if (!isPanning || !panImg || e.touches.length !== 1) return;
       panMovedDuringGesture = true;
       const deltaX = e.touches[0].clientX - panStartClientX;
@@ -590,6 +616,7 @@ export function initViewerClickToggle() {
   document.addEventListener(
     'touchmove',
     (e) => {
+      if (window.__viewerDrawingModeActive && e.target?.closest?.('.drawing-canvas-layer')) return;
       if (e.touches.length > 1) {
         isMultiTouch = true;
         cancelLongPressPan();
@@ -613,6 +640,7 @@ export function initViewerClickToggle() {
   document.addEventListener(
     'touchend',
     (e) => {
+      if (window.__viewerDrawingModeActive && e.target?.closest?.('.drawing-canvas-layer')) return;
       if (longPressTimer) {
         clearTimeout(longPressTimer);
         longPressTimer = null;
@@ -814,6 +842,7 @@ export function initViewerClickToggle() {
   );
 
   viewerBody.addEventListener('mousedown', (e) => {
+    if (window.__viewerDrawingModeActive && e.target?.closest?.('.drawing-canvas-layer')) return;
     if (e.button !== 0) return;
     if (e.target.closest?.('input, textarea, select, button, a, [contenteditable="true"], .viewer-side-panel')) return;
     mouseStartX = e.clientX;
@@ -828,6 +857,7 @@ export function initViewerClickToggle() {
     }
   });
   viewerBody.addEventListener('mousemove', (e) => {
+    if (window.__viewerDrawingModeActive && e.target?.closest?.('.drawing-canvas-layer')) return;
     if (!(e.buttons & 1)) {
       mouseStartX = null;
       mouseMoved = false;
@@ -851,6 +881,7 @@ export function initViewerClickToggle() {
   });
 
   viewerBody.addEventListener('click', (e) => {
+    if (window.__viewerDrawingModeActive && e.target?.closest?.('.drawing-canvas-layer')) return;
     if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
     if (e.pointerType === 'touch') return;
     if (Date.now() - lastTouchEndTime < 500) return;

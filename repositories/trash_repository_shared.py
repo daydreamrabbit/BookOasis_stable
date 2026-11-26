@@ -110,6 +110,12 @@ def hard_delete_books_transaction(db_type, book_ids, target_covers, placeholder)
         cursor.execute(f"DELETE FROM epub_bookmarks WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
         cursor.execute(f"DELETE FROM collection_items WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
         cursor.execute(f"DELETE FROM tts_progress WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
+        try:
+            cursor.execute(f"DELETE FROM image_drawings WHERE book_id IN ({confirmed_placeholders})", confirmed_ids)
+        except Exception as exc:
+            message = str(exc).lower()
+            if 'no such table' not in message and "doesn't exist" not in message and 'unknown table' not in message:
+                raise
         cursor.execute(f"DELETE FROM books WHERE id IN ({confirmed_placeholders})", confirmed_ids)
 
         # 커버 참조 카운트를 건별 SELECT 반복 대신 단일 GROUP BY 조회로 일괄 확인 (트랜잭션 점유 시간 단축)

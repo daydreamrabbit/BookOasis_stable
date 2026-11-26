@@ -344,6 +344,12 @@ class CategoryRepository:
             cursor.execute("DELETE FROM user_reading_log WHERE book_id IN (SELECT id FROM books WHERE library_id = ?)", (library_id,))
             cursor.execute("DELETE FROM user_favorites WHERE book_id IN (SELECT id FROM books WHERE library_id = ?)", (library_id,))
             cursor.execute("DELETE FROM tts_progress WHERE book_id IN (SELECT id FROM books WHERE library_id = ?)", (library_id,))
+            try:
+                cursor.execute("DELETE FROM image_drawings WHERE book_id IN (SELECT id FROM books WHERE library_id = ?)", (library_id,))
+            except Exception as exc:
+                message = str(exc).lower()
+                if 'no such table' not in message and "doesn't exist" not in message and 'unknown table' not in message:
+                    raise
             cursor.execute("DELETE FROM books WHERE library_id = ?", (library_id,))
             
             # 3. 라이브러리 레코드 및 스캔 캐시(scanner_progress, folder_mtimes) 소거
@@ -431,6 +437,7 @@ class CategoryRepository:
             new_lib_id = _dynamic_insert(cursor_dst, 'libraries', new_lib_data, overrides={'name': new_lib_name})
 
             book_id_map = {}
+            drawings_preserved = True
             for book in books_data:
                 old_book_id = book["id"]
                 # 2. 목적지 DB에 도서 삽입 (books의 모든 컬럼 자동 이관)
@@ -463,6 +470,19 @@ class CategoryRepository:
                 for row in cursor_src.fetchall():
                     _dynamic_insert(cursor_dst, 'tts_progress', dict(row), overrides={'book_id': new_book_id})
 
+                # 이미지 그리기 레이어도 도서 ID 매핑을 따라 이관한다. 구버전 DB에는
+                # 테이블이 없을 수 있으므로 해당 경우에만 건너뛴다.
+                try:
+                    cursor_src.execute("SELECT * FROM image_drawings WHERE book_id = ?", (old_book_id,))
+                    for row in cursor_src.fetchall():
+                        _dynamic_insert(cursor_dst, 'image_drawings', dict(row), overrides={'book_id': new_book_id})
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if 'no such table' not in message and "doesn't exist" not in message and 'unknown table' not in message:
+                        raise
+                    # 목적지 DB에 아직 마이그레이션되지 않은 경우 원본을 지우지 않는다.
+                    drawings_preserved = False
+
             # 6. 사용자별 카테고리 권한(user_category_permissions) 복제
             cursor_src.execute("SELECT * FROM user_category_permissions WHERE library_id = ?", (library_id,))
             for row in cursor_src.fetchall():
@@ -475,6 +495,13 @@ class CategoryRepository:
                 cursor_src.execute("DELETE FROM user_reading_log WHERE book_id = ?", (old_book_id,))
                 cursor_src.execute("DELETE FROM user_favorites WHERE book_id = ?", (old_book_id,))
                 cursor_src.execute("DELETE FROM tts_progress WHERE book_id = ?", (old_book_id,))
+                if drawings_preserved:
+                    try:
+                        cursor_src.execute("DELETE FROM image_drawings WHERE book_id = ?", (old_book_id,))
+                    except Exception as exc:
+                        message = str(exc).lower()
+                        if 'no such table' not in message and "doesn't exist" not in message and 'unknown table' not in message:
+                            raise
 
             cursor_src.execute("DELETE FROM books WHERE library_id = ?", (library_id,))
             cursor_src.execute("DELETE FROM user_category_permissions WHERE library_id = ?", (library_id,))

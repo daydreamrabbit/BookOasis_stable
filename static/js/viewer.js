@@ -800,6 +800,7 @@ function initMediaViewerDelegation() {
     if (action === 'toggle-reader-theme') return toggleReaderTheme();
     if (action === 'comic-fit') return setComicFitMode(value || 'height');
     if (action === 'toggle-fullscreen') return toggleFullscreenViewer();
+    if (action === 'toggle-drawing-mode') return window.toggleDrawingMode?.();
     if (action === 'prev-page') return prevPage();
     if (action === 'next-page') return nextPage();
     if (action === 'toggle-overlay') return toggleComicOverlay();

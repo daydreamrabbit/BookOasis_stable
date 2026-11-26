@@ -19,6 +19,7 @@ if DBMS in ("mariadb", "mysql"):
         collection_repository,
         db_tuning_repository,
         gdrive_book_copy_repository,
+        image_drawing_repository,
         kosync_repository,
         mcp_pending_changes_repository,
         metadata_repository,
@@ -48,6 +49,7 @@ else:
         collection_repository,
         db_tuning_repository,
         gdrive_book_copy_repository,
+        image_drawing_repository,
         kosync_repository,
         mcp_pending_changes_repository,
         metadata_repository,
@@ -77,6 +79,7 @@ sys.modules['repositories.category_repository'] = category_repository
 sys.modules['repositories.collection_repository'] = collection_repository
 sys.modules['repositories.db_tuning_repository'] = db_tuning_repository
 sys.modules['repositories.gdrive_book_copy_repository'] = gdrive_book_copy_repository
+sys.modules['repositories.image_drawing_repository'] = image_drawing_repository
 sys.modules['repositories.kosync_repository'] = kosync_repository
 sys.modules['repositories.mcp_pending_changes_repository'] = mcp_pending_changes_repository
 sys.modules['repositories.metadata_repository'] = metadata_repository
@@ -105,6 +108,7 @@ CategoryRepository = category_repository.CategoryRepository
 CollectionRepository = collection_repository.CollectionRepository
 DbTuningRepository = db_tuning_repository.DbTuningRepository
 GdriveBookCopyRepository = gdrive_book_copy_repository.GdriveBookCopyRepository
+ImageDrawingRepository = image_drawing_repository.ImageDrawingRepository
 McpPendingChangesRepository = mcp_pending_changes_repository.McpPendingChangesRepository
 MetadataRepository = metadata_repository.MetadataRepository
 OpdsRepository = opds_repository.OpdsRepository
