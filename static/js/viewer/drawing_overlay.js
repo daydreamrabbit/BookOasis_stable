@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   shape: 'freehand',
   size: 6,
   color: DEFAULT_COLOR,
+  eraser: false,
 });
 
 const drawingsByPage = new Map();
@@ -77,6 +78,15 @@ function setToolbarCollapsed(collapsed) {
     const icon = handle.querySelector('i');
     if (icon) icon.className = collapsed ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down';
   }
+}
+
+function setEraser(active) {
+  drawingSettings.eraser = Boolean(active);
+  const button = byId('drawing-eraser');
+  if (!button) return;
+  button.classList.toggle('is-active', drawingSettings.eraser);
+  button.setAttribute('aria-pressed', String(drawingSettings.eraser));
+  button.title = drawingSettings.eraser ? '지우개 모드 해제' : '지우개 모드';
 }
 
 function syncUndoButton() {
@@ -152,7 +162,8 @@ function renderShape(ctx, stroke, width, height) {
   const end = canvasPoint(points[points.length - 1], width, height);
   const size = Number(stroke.size) || DEFAULT_SETTINGS.size;
   ctx.save();
-  ctx.globalAlpha = colorAlpha(stroke.pen_type);
+  ctx.globalCompositeOperation = stroke.eraser ? 'destination-out' : 'source-over';
+  ctx.globalAlpha = stroke.eraser ? 1 : colorAlpha(stroke.pen_type);
   ctx.strokeStyle = stroke.color || DEFAULT_COLOR;
   ctx.lineWidth = size;
   ctx.lineCap = stroke.brush_type === 'square' ? 'butt' : 'round';
@@ -181,7 +192,8 @@ function renderFreehand(ctx, stroke, width, height) {
   const outline = getStroke(inputPoints, getStrokeOptions(stroke));
   if (!outline?.length) return;
   ctx.save();
-  ctx.globalAlpha = colorAlpha(stroke.pen_type);
+  ctx.globalCompositeOperation = stroke.eraser ? 'destination-out' : 'source-over';
+  ctx.globalAlpha = stroke.eraser ? 1 : colorAlpha(stroke.pen_type);
   ctx.fillStyle = stroke.color || DEFAULT_COLOR;
   ctx.beginPath();
   outline.forEach((point, index) => {
@@ -265,6 +277,7 @@ function bindSurfacePointerEvents(surface) {
       shape: drawingSettings.shape,
       color: drawingSettings.color,
       size: Number(drawingSettings.size),
+      eraser: drawingSettings.eraser,
       points: [normalizePoint(event, canvas)],
     };
     activeSurface = surface;
@@ -348,6 +361,12 @@ function ensureSurfaceObserver(wrapper) {
 }
 
 function syncSurfaces() {
+  // 일반 뷰어에서는 그리기 캔버스를 유지하지 않는다. 캔버스 제거를
+  // MutationObserver가 감지해 다시 만드는 경로도 여기서 차단한다.
+  if (!drawingMode) {
+    if (surfaces.size) clearSurfaces();
+    return;
+  }
   const wrapper = document.querySelector('#comic-viewer-container .comic-image-wrapper');
   if (!wrapper) return;
   const scrollMode = wrapper.classList.contains('scroll-mode');
@@ -496,6 +515,10 @@ function bindToolbar() {
     event.preventDefault();
     undoCurrentSurface();
   });
+  byId('drawing-eraser')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    setEraser(!drawingSettings.eraser);
+  });
   document.querySelectorAll('.drawing-color-swatch').forEach((button) => {
     button.addEventListener('click', () => setColor(button.dataset.drawingColor));
   });
@@ -514,7 +537,7 @@ function bindToolbar() {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopImmediatePropagation();
-      setModeUi(false);
+      exitDrawingMode();
       return;
     }
     if (event.target?.matches?.('input, select, textarea, button')) return;
@@ -560,6 +583,10 @@ function exitDrawingMode() {
     }
   });
   setModeUi(false);
+  setEraser(false);
+  // 일반 뷰어에서는 투명 캔버스 자체를 제거해 그린 흔적이 보이지 않게 한다.
+  // 저장된 벡터 데이터는 유지하므로 다시 그리기 모드로 들어가면 복원할 수 있다.
+  clearSurfaces();
 }
 
 function resetForBook() {

@@ -3061,3 +3061,42 @@ input:checked + .toggle-switch-slider::before {
     object-fit: contain;
 }
 #media-viewer-modal .comic-image-wrapper.scroll-mode.fit-height { overflow-x: auto; }
+
+/* 그리기 모드에서도 종료 버튼은 일반 모드의 독서 도구 자리(오른쪽)에 고정한다.
+   모바일 규칙의 flex-start가 버튼을 헤더 왼쪽으로 밀지 않도록 마지막에 덮어쓴다. */
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-toolbar-top {
+    display: grid !important;
+    justify-content: normal;
+}
+#media-viewer-modal.viewer-drawing-mode .ridi-viewer-tools {
+    display: flex !important;
+    grid-area: 1 / 4;
+    justify-self: end;
+    align-self: stretch;
+    margin-left: 0;
+    width: auto;
+    max-width: none;
+    overflow: visible;
+    justify-content: flex-end !important;
+}
+#media-viewer-modal.viewer-drawing-mode #btn-viewer-drawing {
+    position: static !important;
+    margin: 0;
+    flex-shrink: 0;
+}
+.drawing-toolbar-button.is-active {
+    border-color: var(--app-accent, #36aeea);
+    color: var(--app-accent, #36aeea);
+    background: color-mix(in srgb, var(--app-accent, #36aeea) 16%, var(--viewer-panel-soft, #292929));
+}
+@media (max-width: 1200px) {
+    #media-viewer-modal.viewer-drawing-mode .ridi-viewer-tools { grid-area: 1 / 4; }
+}
+@media (max-width: 620px) {
+    #media-viewer-modal.viewer-drawing-mode .ridi-viewer-tools {
+        grid-area: 1 / 3;
+        width: auto;
+        max-width: 100%;
+        justify-content: flex-end !important;
+    }
+}

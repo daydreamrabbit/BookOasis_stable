@@ -1,5 +1,5 @@
 <script type="module" src="{{ static_asset_url('js/viewer/auto_scroll.js') }}"></script>
-<script type="module" src="{{ static_asset_url('js/viewer/drawing_overlay.js', sig='20261126-image-drawing-v1') }}"></script>
+<script type="module" src="{{ static_asset_url('js/viewer/drawing_overlay.js', sig='20261127-image-drawing-v3') }}"></script>
 <!-- 내장 미디어 통합 뷰어 모달 (뷰어는 전체화면이 필요하므로 유지) -->
 <div id="media-viewer-modal" class="viewer-modal">
     <!-- 전체화면 탈출용 플로팅 닫기 버튼 -->
@@ -62,6 +62,7 @@
                     <input id="drawing-custom-color" type="color" value="#000000" aria-label="사용자 지정 색상" tabindex="-1">
                 </div></div>
                 <label class="drawing-control"><span>브러시</span><select id="drawing-brush-type"><option value="round">기본</option><option value="soft">부드러운 선</option><option value="square">각진 선</option></select></label>
+                <button type="button" id="drawing-eraser" class="drawing-toolbar-button" data-drawing-action="eraser" aria-pressed="false" title="지우개 모드"><i class="fa-solid fa-eraser"></i><span>지우개</span></button>
                 <label class="drawing-control drawing-size-control"><span>크기 <output id="drawing-size-value">6</output></span><input id="drawing-size" type="range" min="1" max="64" step="1" value="6" aria-label="브러시 크기"></label>
                 <label class="drawing-control"><span>모양</span><select id="drawing-shape"><option value="freehand">자유선</option><option value="line">직선</option><option value="rect">사각형</option><option value="ellipse">원</option></select></label>
                 <button type="button" id="drawing-undo" class="drawing-toolbar-button" data-drawing-action="undo" title="현재 페이지에서 실행 취소" disabled><i class="fa-solid fa-rotate-left"></i><span>실행 취소</span></button>

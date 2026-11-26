@@ -47,6 +47,7 @@ def _validate_strokes(strokes):
             raise ValueError("브러시 크기가 올바르지 않습니다.")
         if size < 1 or size > 128:
             raise ValueError("브러시 크기가 올바르지 않습니다.")
+        eraser = bool(stroke.get("eraser", False))
 
         points = stroke.get("points")
         if not isinstance(points, list) or not points or len(points) > MAX_POINTS_PER_STROKE:
@@ -64,6 +65,7 @@ def _validate_strokes(strokes):
             "shape": shape,
             "color": color,
             "size": round(size, 2),
+            "eraser": eraser,
             "points": normalized_points,
         })
 
